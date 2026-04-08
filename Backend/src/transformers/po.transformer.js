@@ -150,7 +150,6 @@ export const poTransformer = {
 
         return { count: uniqueItems.size };
       }
-<<<<<<< HEAD
             
       case "SHOW_PO_MEASURES": {
         const fields = Array.isArray(filters?.fields) ? filters.fields : null;
@@ -176,15 +175,6 @@ export const poTransformer = {
 
         return {
           measures: items.map((x) => {
-=======
-
-     case "SHOW_PO_MEASURES": {
-        const fields = Array.isArray(filters?.fields) ? filters.fields : null;
-        const want = (k) => !fields || fields.includes(k);
-
-        return {
-          measures: details.items.map((x) => {
->>>>>>> origin/dev
             const out = {
               po_item: x?.item?.po_item,
               material: x?.item?.material,
