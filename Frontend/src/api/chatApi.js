@@ -46,6 +46,7 @@ export async function sendChatMessage(message, opts = {}) {
   let msg = null;
   const intent = String(data?.intent || "").toUpperCase();
 
+<<<<<<< HEAD
   // ✅ Helper: convert snake_case to Title Case (item_code -> Item Code)
   const formatFieldName = (fieldName) => {
     return String(fieldName || "")
@@ -66,6 +67,8 @@ export async function sendChatMessage(message, opts = {}) {
       .join("\n");
   };
 
+=======
+>>>>>>> origin/dev
   // ✅ 0) SHOW_PO: always show the list, not the count summary
   if (intent === "SHOW_PO") {
     if (Array.isArray(data?.data?.lines) && data.data.lines.length > 0) {
@@ -152,10 +155,19 @@ export async function sendChatMessage(message, opts = {}) {
       msg = items
         .map((row, i) => {
           const it = row?.item || {};
+<<<<<<< HEAD
           const itemLines = Object.entries(it)
             .map(([key, value]) => `${formatFieldName(key)}: ${value || "N/A"}`)
             .join("\n");
           return `${i + 1}. ${itemLines}`;
+=======
+          return `${i + 1}. PO Item: ${it.po_item || "N/A"}
+Material: ${it.material || "N/A"}
+Text: ${it.short_text || "N/A"}
+Plant: ${it.plant || "N/A"}
+Storage: ${it.storage_location || "N/A"}
+Mat Group: ${it.mat_group || "N/A"}`;
+>>>>>>> origin/dev
         })
         .join("\n\n");
     } else {
@@ -165,6 +177,7 @@ export async function sendChatMessage(message, opts = {}) {
           const qty = row?.quantity || {};
           const pr = row?.pricing || {};
           const del = row?.delivery || {};
+<<<<<<< HEAD
 
           const lines = [
             `Item ${i + 1}`,
@@ -175,6 +188,18 @@ export async function sendChatMessage(message, opts = {}) {
           ];
 
           return lines.join("\n");
+=======
+          return `
+Item ${i + 1}
+Material: ${it.material || "N/A"}
+PO Item: ${it.po_item || "N/A"}
+Plant: ${it.plant || "N/A"}
+Storage: ${it.storage_location || "N/A"}
+Qty: ${qty.ordered ?? "N/A"} ${qty.unit || ""}
+Price: ${pr.net_price ?? "N/A"} ${pr.currency || ""}
+Delivery: ${del.delivery_date || "N/A"}
+          `.trim();
+>>>>>>> origin/dev
         })
         .join("\n----------------\n");
     }
@@ -183,6 +208,7 @@ export async function sendChatMessage(message, opts = {}) {
   // DELIVERY
   else if (data?.data?.delivery) {
     msg = data.data.delivery
+<<<<<<< HEAD
       .map((d, i) => {
         const lines = Object.entries(d || {})
           .map(([key, value]) => `${formatFieldName(key)}: ${value || "N/A"}`)
@@ -190,23 +216,36 @@ export async function sendChatMessage(message, opts = {}) {
         return `Delivery ${i + 1}\n${lines}`;
       })
       .join("\n\n");
+=======
+      .map((d, i) => `Delivery ${i + 1}: Date ${d.delivery_date || "N/A"}`)
+      .join("\n");
+>>>>>>> origin/dev
   }
 
   // PRICING
   else if (data?.data?.pricing) {
     msg = data.data.pricing
       .map((p) => {
+<<<<<<< HEAD
         const lines = Object.entries(p || {})
           .map(([key, value]) => `${formatFieldName(key)}: ${value || "N/A"}`)
           .join("\n");
         return lines;
       })
       .join("\n\n");
+=======
+        const poItem = p.po_item || "N/A";
+        const displayItem = String(poItem).replace(/^0+/, "") || poItem;
+        return `Item ${displayItem}: Price ${p.net_price ?? "N/A"} ${p.currency || ""}`;
+      })
+      .join("\n");
+>>>>>>> origin/dev
   }
 
   // ACCOUNTING
   else if (data?.data?.accounting) {
     msg = data.data.accounting
+<<<<<<< HEAD
       .map((a, i) => {
         const lines = Object.entries(a || {})
           .map(([key, value]) => `${formatFieldName(key)}: ${value || "N/A"}`)
@@ -228,6 +267,23 @@ export async function sendChatMessage(message, opts = {}) {
     if (summaryText) lines.push("=== Summary ===\n" + summaryText);
 
     msg = lines.join("\n\n");
+=======
+      .map((a, i) => `Item ${i + 1}: Cost Center ${a.cost_center || "N/A"}`)
+      .join("\n");
+  }
+
+  // PO HEADER
+  else if (data?.data?.po_header) {
+    const d = data.data;
+    msg = `
+PO: ${d.po_header.po_no}
+Company: ${d.po_header.company_code}
+Created By: ${d.po_header.created_by}
+Vendor: ${d.vendor?.vendor_id}
+Currency: ${d.po_header.currency}
+Items: ${d.summary?.item_count}
+    `.trim();
+>>>>>>> origin/dev
   }
 
   // backend error fields

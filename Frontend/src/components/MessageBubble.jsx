@@ -16,6 +16,7 @@ function Avatar({ role }) {
   );
 }
 
+<<<<<<< HEAD
 // 🔥 NEW: normalize text to handle single-line multi-item issue
 function formatText(text = "") {
   const t = String(text || "").trim();
@@ -37,6 +38,9 @@ export default function MessageBubble({
   suggestions,
   onSuggestionClick, // ✅ FIX: use prop instead of window event
 }) {
+=======
+export default function MessageBubble({ role, text, suggestions }) {
+>>>>>>> origin/dev
   const isUser = role === "user";
 
   // ✅ USER MESSAGE
@@ -51,6 +55,7 @@ export default function MessageBubble({
     );
   }
 
+<<<<<<< HEAD
   // 🔥 Normalize text before anything
   const formattedText = formatText(text);
 
@@ -58,6 +63,12 @@ export default function MessageBubble({
   let table = null;
   try {
     table = replyToTable(formattedText);
+=======
+  // ✅ BOT MESSAGE (table)
+  let table = null;
+  try {
+    table = replyToTable(text);
+>>>>>>> origin/dev
   } catch (e) {
     console.error("Table parse error:", e);
   }
@@ -73,17 +84,33 @@ export default function MessageBubble({
           <ReplyTable columns={table.columns} rows={table.rows} />
         ) : (
           <div className="whitespace-pre-wrap break-words text-sm">
+<<<<<<< HEAD
             {formattedText}
           </div>
         )}
 
         {/* ✅ SUGGESTIONS */}
+=======
+            {text}
+          </div>
+        )}
+
+        {/* ✅ 🔥 SUGGESTIONS BUTTONS */}
+>>>>>>> origin/dev
         {suggestions && suggestions.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-3">
             {suggestions.map((s, i) => (
               <button
                 key={i}
+<<<<<<< HEAD
                 onClick={() => onSuggestionClick?.(s)} // ✅ FIXED
+=======
+                onClick={() =>
+                  window.dispatchEvent(
+                    new CustomEvent("sendMessage", { detail: s })
+                  )
+                }
+>>>>>>> origin/dev
                 className="px-3 py-1 text-sm bg-white border border-green-400 text-green-800 rounded-lg hover:bg-green-200 transition"
               >
                 {s}
@@ -91,6 +118,10 @@ export default function MessageBubble({
             ))}
           </div>
         )}
+<<<<<<< HEAD
+=======
+
+>>>>>>> origin/dev
       </div>
     </div>
   );

@@ -28,6 +28,7 @@ function parseKeyValue(text) {
   return null;
 }
 
+<<<<<<< HEAD
 // ✅ HELPER FUNCTION: normalize field names
 function normalizeFieldName(fieldName) {
   return String(fieldName || "")
@@ -35,20 +36,30 @@ function normalizeFieldName(fieldName) {
     .trim();
 }
 
+=======
+>>>>>>> origin/dev
 function parsePipeTable(text) {
   try {
     const lines = splitNonEmptyLines(text);
     const pipeLines = lines.filter((l) => l.includes("|"));
 
+<<<<<<< HEAD
     if (pipeLines.length < 1) return null;
 
     const firstLine = pipeLines[0];
+=======
+    if (pipeLines.length < 2) return null;
+
+    const firstLine = pipeLines[0];
+
+>>>>>>> origin/dev
     const isDataRow = /^\d+\)\s*PO/.test(firstLine);
 
     let header;
     let dataLines;
 
     if (isDataRow) {
+<<<<<<< HEAD
       // ✅ DYNAMIC: Extract header from first data line
       // Format: "1) PO 4500001933 | CC: 1710 | Date: 2026-01-21 | By: S4H_MM_DEM | Vendor: N/A | Cur: N/A | Status: 9"
       
@@ -121,12 +132,39 @@ function parsePipeTable(text) {
       return row;
     });
 
+=======
+      header = ["PO Number", "Purchase Date", "Created By", "Vendor", "Currency", "Status"];
+      dataLines = pipeLines;
+    } else {
+      header = firstLine.split("|").map((x) => x.trim()).filter(Boolean);
+      dataLines = pipeLines.slice(1);
+    }
+
+    if (!header || header.length < 2) return null;
+
+    const rows = dataLines.map((line) => {
+  const cells = line.split("|").map((x) => x.trim());
+
+  return {
+    "PO Number": cells[0]?.replace(/^\d+\)\s*PO\s*/, "") || "",
+    "Purchase Date": cells[1]?.replace("Date:", "").trim() || "",
+    "Created By": cells[2]?.replace("By:", "").trim() || "",
+    "Vendor": cells[3]?.replace("Vendor:", "").trim() || "",
+    "Currency": cells[4]?.replace("Cur:", "").trim() || "",
+    "Status": cells[5]?.replace("Status:", "").trim() || "",
+  };
+});
+>>>>>>> origin/dev
     return { columns: header, rows };
   } catch (e) {
     console.error("parsePipeTable error:", e);
     return null;
   }
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> origin/dev
 function parseBullets(text) {
   const lines = splitNonEmptyLines(text);
   const bullets = lines
@@ -147,6 +185,7 @@ function parseBullets(text) {
   return null;
 }
 
+<<<<<<< HEAD
 function parseMeasuresLines(text) {
   const lines = splitNonEmptyLines(text);
   const rows = [];
@@ -194,6 +233,9 @@ function parseMeasuresLines(text) {
 }
 
 // ✅ FINAL EXPORT FUNCTION
+=======
+// ✅ FINAL FUNCTION
+>>>>>>> origin/dev
 export function replyToTable(replyText) {
   const text = String(replyText ?? "");
 
@@ -202,14 +244,18 @@ export function replyToTable(replyText) {
     return null;
   }
 
+<<<<<<< HEAD
   // ✅ Measures table (must be before generic fallback)
   const measures = parseMeasuresLines(text);
   if (measures) return measures;
 
+=======
+>>>>>>> origin/dev
   // Prefer real tables first
   const pipe = parsePipeTable(text);
   if (pipe) return pipe;
 
+<<<<<<< HEAD
   // 🔥 FIX: detect SAP multi-item structured response
 const isSAPItemBlock =
   text.includes("Po Item") &&
@@ -223,6 +269,8 @@ if (isSAPItemBlock) {
   };
 }
 
+=======
+>>>>>>> origin/dev
   // Key-value format
   const kv = parseKeyValue(text);
   if (kv) return kv;
@@ -231,6 +279,7 @@ if (isSAPItemBlock) {
   const bullets = parseBullets(text);
   if (bullets) return bullets;
 
+<<<<<<< HEAD
   // Fallback: multi-line -> simple rows
   const lines = splitNonEmptyLines(text);
 
@@ -248,3 +297,19 @@ if (isSAPItemBlock) {
 }
 
 //manas code
+=======
+  // Fallback
+const lines = splitNonEmptyLines(text);
+
+if (lines.length > 1) {
+  return {
+    columns: [],   
+    rows: lines.map((l) => ({ text: l })),
+  };
+}
+
+return {
+  columns: [],
+  rows: [{ text: text.trim() || "-" }],
+};}
+>>>>>>> origin/dev
