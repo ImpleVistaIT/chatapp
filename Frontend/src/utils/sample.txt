@@ -1,0 +1,143 @@
+function splitNonEmptyLines(text = "") {
+  return String(text)
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
+// ✅ NEW INLINE PARSER (FIX)
+function parseInlineWeights(text) {
+  const lines = splitNonEmptyLines(text);
+  const rows = [];
+
+  for (const line of lines) {
+    if (!line.toLowerCase().includes("gross weight")) continue;
+
+    const clean = line.replace(/→/g, "").replace(/\|/g, " ");
+
+    const gross = clean.match(/gross\s*weight[:\s]*([\d.]+)/i)?.[1] || "";
+    const net = clean.match(/net\s*weight[:\s]*([\d.]+)/i)?.[1] || "";
+    const volume = clean.match(/volume[:\s]*([\d.]+)/i)?.[1] || "";
+
+    rows.push({
+      "Gross weight": gross,
+      "Net weight": net,
+      "Volume": volume,
+    });
+  }
+
+  if (rows.length > 0) {
+    return {
+      columns: ["Gross weight", "Net weight", "Volume"],
+      rows,
+    };
+  }
+
+  return null;
+}
+
+function parseKeyValue(text) {
+  const lines = splitNonEmptyLines(text);
+  const rows = [];
+
+  for (const line of lines) {
+    const idx = line.indexOf(":");
+    if (idx === -1) continue;
+
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+
+    if (key && value) rows.push({ Field: key, Value: value });
+  }
+
+  if (rows.length >= 2) {
+    return { columns: ["Field", "Value"], rows };
+  }
+
+  return null;
+}
+
+function parsePipeTable(text) {
+  try {
+    const lines = splitNonEmptyLines(text);
+    const pipeLines = lines.filter((l) => l.includes("|"));
+
+    if (pipeLines.length < 2) return null;
+
+    const header = pipeLines[0].split("|").map((x) => x.trim()).filter(Boolean);
+    const dataLines = pipeLines.slice(1);
+
+    const rows = dataLines.map((line) => {
+      const cells = line.split("|").map((x) => x.trim());
+
+      return {
+        "PO Number": cells[0] || "",
+        "Purchase Date": cells[1] || "",
+        "Created By": cells[2] || "",
+        "Vendor": cells[3] || "",
+        "Currency": cells[4] || "",
+        "Status": cells[5] || "",
+      };
+    });
+
+    return { columns: header, rows };
+  } catch {
+    return null;
+  }
+}
+
+function parseBullets(text) {
+  const lines = splitNonEmptyLines(text);
+
+  const bullets = lines
+    .filter((l) => l.startsWith("-") || l.startsWith("•"))
+    .map((l) => l.replace(/^[-•]\s*/, "").trim());
+
+  if (bullets.length >= 2) {
+    return {
+      columns: ["Item"],
+      rows: bullets.map((b) => ({ Item: b })),
+    };
+  }
+
+  return null;
+}
+
+// ✅ FINAL MAIN FUNCTION
+export function replyToTable(replyText) {
+  const text = String(replyText ?? "");
+
+  if (text.includes("PO Item:")) return null;
+
+  // ✅ FIRST: Inline weights (your failing case)
+  const inline = parseInlineWeights(text);
+  if (inline) return inline;
+
+  // ✅ THEN: Pipe table
+  const pipe = parsePipeTable(text);
+  if (pipe) return pipe;
+
+  // ✅ THEN: Key-value
+  const kv = parseKeyValue(text);
+  if (kv) return kv;
+
+  // ✅ THEN: Bullets
+  const bullets = parseBullets(text);
+  if (bullets) return bullets;
+
+  // ✅ FALLBACK
+  const lines = splitNonEmptyLines(text);
+
+  if (lines.length > 1) {
+    return {
+      columns: [],
+      rows: lines.map((l) => ({ text: l })),
+    };
+  }
+
+  return {
+    columns: [],
+    rows: [{ text: text.trim() || "-" }],
+  };
+}
