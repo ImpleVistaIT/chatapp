@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { sendChatMessage } from "../api/chatApi";
 import { useSpeechToText } from "../hooks/useSpeechToText";
 
-// ✅ NEW: split UI into 2 components
 import Sidebar from "./Sidebar";
 import ChatWindow from "./ChatWindow";
 
@@ -35,7 +34,13 @@ function generateTitle(text) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-export default function Chat() {
+export default function Chat({ onLogout }) {
+  // ✅ show the login username in sidebar profile
+  const userName = String(localStorage.getItem("user") || "").trim();
+
+  // ✅ connect/disconnect state (disconnect will logout & show login screen)
+  const [isConnected, setIsConnected] = useState(true);
+
   const [conversations, setConversations] = useState([
     {
       id: "default",
@@ -60,30 +65,23 @@ export default function Chat() {
   const [loading, setLoading] = useState(false);
   const [showScrollDown, setShowScrollDown] = useState(false);
 
-  // rename chat title
   const [editingChatId, setEditingChatId] = useState(null);
   const [editingTitle, setEditingTitle] = useState("");
 
-  // sidebar UI state
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [menuOpenId, setMenuOpenId] = useState(null);
 
-  // inline edit user message
   const [editingIndex, setEditingIndex] = useState(null);
   const [editingText, setEditingText] = useState("");
 
-  // copy feedback
   const [copiedAtIndex, setCopiedAtIndex] = useState(null);
 
-  // abort controller
   const abortRef = useRef(null);
 
-  // refs
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
-  // voice refs
   const baseRef = useRef("");
   const interimRef = useRef("");
 
@@ -224,6 +222,8 @@ export default function Chat() {
   }
 
   async function onSend({ overrideText, fromEdit = false } = {}) {
+    if (!isConnected) return;
+
     const text = String(overrideText ?? input).trim();
     if (!text || loading) return;
 
@@ -233,7 +233,6 @@ export default function Chat() {
     if (!fromEdit) {
       updateActiveMessages((m) => [...m, { role: "user", text }]);
 
-      // auto update title if default
       setConversations((prev) =>
         prev.map((c) => {
           if (c.id !== activeId) return c;
@@ -246,7 +245,6 @@ export default function Chat() {
     }
 
     setInput("");
-    console.log("inputRef:", inputRef.current);
     setTimeout(() => inputRef.current?.blur(), 50);
     setLoading(true);
 
@@ -303,6 +301,8 @@ export default function Chat() {
 
   const { supported, listening, start, stop } = useSpeechToText({
     onText: (text, meta) => {
+      if (!isConnected) return;
+
       const t = String(text || "").trim();
       if (!t) return;
 
@@ -330,6 +330,8 @@ export default function Chat() {
       return;
     }
 
+    if (!isConnected) return;
+
     if (listening) {
       stop();
       interimRef.current = "";
@@ -352,12 +354,21 @@ export default function Chat() {
     setTimeout(() => setCopiedAtIndex(null), 1200);
   }
 
-  // ✅ Keep scroll-down logic in Chat.jsx (logic stays here)
   function onMessagesScroll(e) {
     const el = e.target;
     const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     setShowScrollDown(!isNearBottom);
   }
+
+  // ✅ Connect/Disconnect behavior:
+  // - Disconnect logs out (shows login screen)
+  // - Connect does nothing for auth (login screen comes from App.jsx)
+  const handleConnect = () => setIsConnected(true);
+
+  const handleDisconnect = () => {
+    setIsConnected(false);
+    onLogout?.(); // ✅ show login screen
+  };
 
   return (
     <div className="fixed inset-0 bg-[#f7f7f8] text-zinc-800">
@@ -380,11 +391,11 @@ export default function Chat() {
           onNewChat={onNewChat}
           setActiveId={setActiveId}
           handleDelete={handleDelete}
+          userName={userName}
+          // ✅ logout removed from sidebar UI; no need to pass onLogout
         />
 
         <ChatWindow
-          // state
-          loading={loading}
           input={input}
           listening={listening}
           supported={supported}
@@ -393,14 +404,12 @@ export default function Chat() {
           editingIndex={editingIndex}
           editingText={editingText}
           copiedAtIndex={copiedAtIndex}
-          // refs
+          isConnected={isConnected}
           bottomRef={bottomRef}
           inputRef={inputRef}
-          // handlers
           setSidebarOpen={setSidebarOpen}
           setInput={setInput}
           onSend={onSend}
-          onStop={onStop}
           onKeyDown={onKeyDown}
           onMicClick={onMicClick}
           onCopyAssistant={onCopyAssistant}
@@ -409,6 +418,8 @@ export default function Chat() {
           applyEditLocal={applyEditLocal}
           setEditingText={setEditingText}
           onMessagesScroll={onMessagesScroll}
+          onConnect={handleConnect}
+          onDisconnect={handleDisconnect}
         />
       </div>
     </div>

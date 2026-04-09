@@ -34,12 +34,7 @@ export default function ReplyTable({ columns, rows }) {
                   showBorder ? "border-t border-green-300" : "border-0"
                 }`}
               >
-                {/* ❌ REMOVED: Numbering column */}
-                {/* !isFallback && isMultiRow && (
-                  <td className="px-2 py-2 sm:px-3 text-green-700 w-6 sm:w-8 border-0">
-                    {idx + 1}
-                  </td>
-                ) */}
+
 
                 {/* ✅ DATA */}
                 {!isFallback ? (

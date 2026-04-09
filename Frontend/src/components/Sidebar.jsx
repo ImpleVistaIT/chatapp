@@ -33,6 +33,12 @@ export default function Sidebar({
   onNewChat,
   setActiveId,
   handleDelete,
+
+  // ✅ user profile name (from login)
+  userName, // <-- pass this from Chat.jsx (from localStorage or state)
+
+  // ✅ logout callback (optional; if you will move logout to ChatWindow, you can omit this)
+  onLogout,
 }) {
   return (
     <>
@@ -58,10 +64,11 @@ export default function Sidebar({
       >
         {/* HEADER */}
         <div className="p-2 flex items-center justify-between border-gray-200">
-          {/* LEFT SIDE */}
           <div
             className={`flex w-full ${
-              collapsed ? "flex-col items-center gap-2" : "flex-row items-center justify-between"
+              collapsed
+                ? "flex-col items-center gap-2"
+                : "flex-row items-center justify-between"
             }`}
           >
             {/* LOGO */}
@@ -78,7 +85,11 @@ export default function Sidebar({
               onClick={() => setCollapsed((v) => !v)}
               className="hidden md:flex p-4 rounded-lg hover:bg-gray-200"
             >
-              <img src={collapsed ? sidebaropen : sidebarclose} className="w-5 h-5" />
+              <img
+                src={collapsed ? sidebaropen : sidebarclose}
+                className="w-5 h-5"
+                alt="toggle"
+              />
             </button>
           </div>
 
@@ -87,7 +98,7 @@ export default function Sidebar({
             onClick={() => setSidebarOpen(false)}
             className="md:hidden rounded-xl px-3 py-3 border border-gray-300 hover:bg-gray-200"
           >
-            <img src={close} className="w-4 h-4" />
+            <img src={close} className="w-4 h-4" alt="close" />
           </button>
         </div>
 
@@ -101,23 +112,24 @@ export default function Sidebar({
         {/* CONTENT */}
         <div className="flex-1 overflow-auto px-2 pb-3">
           {collapsed ? (
-            // COLLAPSED MODE (icons only)
             <div className="flex flex-col items-center gap-3 mt-3">
-              <button onClick={onNewChat} className="p-2 rounded-lg hover:bg-gray-200">
-                <img src={newChatIcon} className="w-5 h-5" />
+              <button
+                onClick={onNewChat}
+                className="p-2 rounded-lg hover:bg-gray-200"
+              >
+                <img src={newChatIcon} className="w-5 h-5" alt="new chat" />
               </button>
 
               <button className="p-2 rounded-lg hover:bg-gray-200">
-                <img src={searchIcon} className="w-5 h-5" />
+                <img src={searchIcon} className="w-5 h-5" alt="search" />
               </button>
             </div>
           ) : (
-            // EXPANDED MODE (normal button)
             <button
               onClick={onNewChat}
               className="w-full flex items-center gap-2 rounded-xl px-3 py-3 mb-2 text-zinc-800 hover:bg-gray-200 transition"
             >
-              <img src={chatIcon} className="w-5 h-5" />
+              <img src={chatIcon} className="w-5 h-5" alt="new chat" />
               New chat
             </button>
           )}
@@ -136,7 +148,6 @@ export default function Sidebar({
                       : "hover:bg-blue-100 text-zinc-800"
                   )}
                 >
-                  {/* CHAT TITLE */}
                   {editingChatId === c.id ? (
                     <input
                       value={editingTitle}
@@ -158,15 +169,16 @@ export default function Sidebar({
                     </button>
                   )}
 
-                  {/* 3 DOT BUTTON */}
                   <button
-                    onClick={() => setMenuOpenId(menuOpenId === c.id ? null : c.id)}
+                    onClick={() =>
+                      setMenuOpenId(menuOpenId === c.id ? null : c.id)
+                    }
                     className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-300"
+                    aria-label="Conversation menu"
                   >
                     ⋮
                   </button>
 
-                  {/* DROPDOWN */}
                   {menuOpenId === c.id && (
                     <div className="absolute right-2 top-10 w-32 bg-white border border-gray-200 rounded-lg shadow-md z-50">
                       <button
@@ -191,19 +203,48 @@ export default function Sidebar({
               ))}
         </div>
 
-        {/* FOOTER */}
+        {/* FOOTER (NO LOGOUT HERE; username only) */}
         <div className="p-3 border-t border-gray-200">
           {collapsed ? (
-            <div className="flex justify-center">
-              <img src={userImg} alt="user" className="w-8 h-8 rounded-full object-cover" />
+            <div className="flex flex-col items-center gap-2">
+              <img
+                src={userImg}
+                alt="user"
+                className="w-8 h-8 rounded-full object-cover"
+              />
+              {/* show initial / short name */}
+              <div className="text-[10px] font-semibold text-zinc-700 truncate max-w-[60px]">
+                {userName || "User"}
+              </div>
             </div>
           ) : (
-            <div className="flex items-center gap-3">
-              <img src={userImg} alt="user" className="w-9 h-9 rounded-full object-cover" />
-              <div className="flex flex-col">
-                <span className="text-sm font-semibold text-zinc-800">User</span>
-                <span className="text-xs text-zinc-500">Chatbot v1.0</span>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <img
+                  src={userImg}
+                  alt="user"
+                  className="w-9 h-9 rounded-full object-cover"
+                />
+
+                <div className="flex flex-col min-w-0">
+                  <span className="text-sm font-semibold text-zinc-800 truncate">
+                    {userName || "User"}
+                  </span>
+                  <span className="text-xs text-zinc-500">Chatbot v1.0</span>
+                </div>
               </div>
+
+              {/* If you truly want logout only in ChatWindow, keep this removed.
+                  If you still want an optional logout in sidebar, uncomment below. */}
+              {/* {onLogout && (
+                <button
+                  onClick={onLogout}
+                  className="text-xs text-red-500 hover:underline"
+                  type="button"
+                >
+                  Logout
+                </button>
+              )} */}
             </div>
           )}
         </div>
