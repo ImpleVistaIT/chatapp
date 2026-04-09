@@ -82,6 +82,25 @@ export const poTransformer = {
         };
       }
 
+      case "SHOW_PO_QUANTITIES": {
+        const items = (details.items || []).map((x) => ({
+          po_item: x?.item?.po_item ?? null,
+          menge: x?.quantity?.ordered ?? null,      // MENGE
+          unit: x?.quantity?.unit ?? null,
+        }));
+
+        const nums = items
+          .map((r) => (typeof r.menge === "number" ? r.menge : null))
+          .filter((v) => v != null);
+
+        const total = nums.reduce((a, b) => a + b, 0);
+
+        return {
+          quantities: items,
+          total_menge: nums.length ? total : null,
+        };
+      }
+
       case "SHOW_PO_ITEM_DETAILS": {
         const poItem = filters?.poItem ? String(filters.poItem) : null;
         if (!poItem) return { error: "poItem is required" };

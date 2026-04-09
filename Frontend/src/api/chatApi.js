@@ -143,6 +143,27 @@ export async function sendChatMessage(message, opts = {}) {
     };
   }
 
+  else if (intent === "SHOW_PO_QUANTITIES" && Array.isArray(data?.data?.quantities)) {
+    const qs = data.data.quantities;
+    const poNo = data?.data?.po_number || data?.routed?.id || "";
+
+    // Build a real table text (columns)
+    const header = `PO Item | Scheduled Qty (MENGE) | Unit`;
+    const rows = qs.map((r) => {
+      const item = String(r.po_item ?? "N/A").replace(/^0+/, "") || r.po_item;
+      const qty = r.menge ?? "N/A";
+      const unit = r.unit ? String(r.unit).toUpperCase() : "N/A";
+      return `${item} | ${qty} | ${unit}`;
+    });
+
+    // Total row
+    const unitOne = qs.find((x) => x.unit)?.unit ? String(qs.find((x) => x.unit)?.unit).toUpperCase() : "";
+    const total = Number.isFinite(Number(data?.data?.total_menge)) ? Number(data.data.total_menge) : "";
+    rows.push(`TOTAL | ${total} | ${unitOne || "N/A"}`);
+
+    msg = `Scheduled Qty (MENGE) for PO ${poNo}\n${header}\n${rows.join("\n")}`;
+  }
+
   // ITEMS
   else if (data?.data?.items) {
     const items = data.data.items;

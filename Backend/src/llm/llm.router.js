@@ -556,7 +556,13 @@ function routeByRules(message) {
     return { confident: true, route: { entity: "PO", intent: "DELIVERY_INFO", id } };
   }
 
-  
+  if (
+    id &&
+    /\b(menge|qty|quantity|scheduled\s*(qty|quantity)|schdeuled\s*(qty|quantity)|schedule(d)?\s*(qty|quantity)|schedule\s*line\s*(qty|quantity)|delivery\s*schedule(d)?\s*(qty|quantity)|order\s*(qty|quantity)|po\s*(qty|quantity))\b/.test(m)
+  ) {
+    return { confident: true, route: { entity: "PO", intent: "SHOW_PO_QUANTITIES", id } };
+  }
+    
 
   return {
     confident: false,
