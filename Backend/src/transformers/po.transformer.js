@@ -83,11 +83,20 @@ export const poTransformer = {
       }
 
       case "SHOW_PO_QUANTITIES": {
-        const items = (details.items || []).map((x) => ({
+        const poItem = filters?.poItem ? String(filters.poItem).trim() : null;
+
+        let items = (details.items || []).map((x) => ({
           po_item: x?.item?.po_item ?? null,
-          menge: x?.quantity?.ordered ?? null,      // MENGE
+          menge: x?.quantity?.ordered ?? null,
           unit: x?.quantity?.unit ?? null,
         }));
+
+        if (poItem) {
+          items = items.filter((r) => String(r.po_item || "").trim() === poItem);
+          if (items.length === 0) {
+            return { error: `PO item ${poItem} not found in PO ${id}` };
+          }
+        }
 
         const nums = items
           .map((r) => (typeof r.menge === "number" ? r.menge : null))
@@ -96,6 +105,7 @@ export const poTransformer = {
         const total = nums.reduce((a, b) => a + b, 0);
 
         return {
+          po_number: id,
           quantities: items,
           total_menge: nums.length ? total : null,
         };

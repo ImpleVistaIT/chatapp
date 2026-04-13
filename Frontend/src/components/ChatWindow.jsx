@@ -1,6 +1,6 @@
 import MessageBubble from "./MessageBubble";
 import menuIcon from "../assets/hamberger.png";
-import { FiMic, FiMicOff, FiSend, FiSquare, FiEdit2, FiCopy, FiCheck } from "react-icons/fi";
+import { FiMic, FiMicOff, FiSend, FiEdit2, FiCopy, FiCheck } from "react-icons/fi";
 
 function classNames(...x) {
   return x.filter(Boolean).join(" ");
@@ -12,7 +12,6 @@ function formatTime(d = new Date()) {
 
 export default function ChatWindow({
   // state
-  loading,
   input,
   listening,
   supported,
@@ -22,6 +21,9 @@ export default function ChatWindow({
   editingText,
   copiedAtIndex,
 
+  // ✅ connection
+  isConnected,
+
   // refs
   bottomRef,
   inputRef,
@@ -30,7 +32,6 @@ export default function ChatWindow({
   setSidebarOpen,
   setInput,
   onSend,
-  onStop,
   onKeyDown,
   onMicClick,
   onCopyAssistant,
@@ -39,7 +40,11 @@ export default function ChatWindow({
   applyEditLocal,
   setEditingText,
 
-  // ✅ NEW: passed from Chat.jsx (keeps logic in Chat.jsx)
+  // ✅ disconnect + open sap login
+  onDisconnect,
+  onOpenSapLogin,
+
+  // scroll handler
   onMessagesScroll,
 }) {
   return (
@@ -50,32 +55,43 @@ export default function ChatWindow({
           <button
             onClick={() => setSidebarOpen((v) => !v)}
             className="p-2 rounded-lg hover:bg-gray-200 md:hidden"
+            type="button"
           >
-            <img src={menuIcon} className="w-6 h-6" />
+            <img src={menuIcon} className="w-6 h-6" alt="menu" />
           </button>
 
           <div>
             <div className="text-sm font-semibold">SAP Assistant</div>
             <div className="text-xs text-zinc-500">
-              {loading ? "Thinking…" : "Online"} • {formatTime()}
+              {isConnected ? "Connected" : "Disconnected"} • {formatTime()}
             </div>
           </div>
         </div>
 
-        <span
-          className={classNames(
-            "inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold",
-            loading ? "bg-amber-500/15 text-amber-300" : "bg-emerald-500/15 text-emerald-300"
-          )}
-        >
-          {loading ? "Busy" : "Ready"}
-        </span>
+        {/* ✅ Disconnect OR Go to SAP Login */}
+        {isConnected ? (
+          <button
+            type="button"
+            onClick={onDisconnect}
+            className="rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+          >
+            Disconnect
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onOpenSapLogin}
+            className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+          >
+            Connect
+          </button>
+        )}
       </header>
 
       {/* MESSAGES */}
       <section
         className="flex-1 overflow-y-auto px-4 py-6 pt-4 pb-28 overscroll-contain"
-        onScroll={onMessagesScroll}  // ✅ FIX: use Chat.jsx logic
+        onScroll={onMessagesScroll}
       >
         <div className="mx-auto max-w-4xl space-y-4">
           {activeConv?.messages?.map((m, idx) => {
@@ -130,6 +146,8 @@ export default function ChatWindow({
                           if (newText) onSend({ overrideText: newText, fromEdit: true });
                         }}
                         className="rounded-xl px-3 py-2 text-sm font-semibold text-white bg-green-600"
+                        disabled={!isConnected}
+                        title={!isConnected ? "Connect to send" : "Save & resend"}
                       >
                         Save & resend
                       </button>
@@ -144,7 +162,10 @@ export default function ChatWindow({
                       role={m.role}
                       text={m.text}
                       suggestions={m.suggestions}
-                      onSuggestionClick={(text) => onSend({ overrideText: text })}
+                      onSuggestionClick={(text) => {
+                        if (!isConnected) return;
+                        onSend({ overrideText: text });
+                      }}
                     />
                     <button
                       type="button"
@@ -157,7 +178,9 @@ export default function ChatWindow({
                       title="Copy response"
                     >
                       {copiedAtIndex === idx ? <FiCheck /> : <FiCopy />}
-                      <span className="hidden sm:inline">{copiedAtIndex === idx ? "Copied" : "Copy"}</span>
+                      <span className="hidden sm:inline">
+                        {copiedAtIndex === idx ? "Copied" : "Copy"}
+                      </span>
                     </button>
                   </div>
                 )}
@@ -165,7 +188,6 @@ export default function ChatWindow({
             );
           })}
 
-          {loading && <MessageBubble role="assistant" text="Executing..." />}
           <div ref={bottomRef} />
         </div>
       </section>
@@ -174,8 +196,16 @@ export default function ChatWindow({
         <button
           onClick={() => bottomRef.current?.scrollIntoView({ behavior: "smooth" })}
           className="fixed bottom-20 right-6 w-10 h-10 flex items-center justify-center rounded-full bg-white/90 backdrop-blur border border-gray-300 shadow-lg hover:bg-white hover:scale-105 transition-all duration-200 z-50"
+          type="button"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-5 h-5 text-gray-700"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
             <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
           </svg>
         </button>
@@ -189,13 +219,21 @@ export default function ChatWindow({
               <button
                 type="button"
                 onClick={onMicClick}
+                disabled={!isConnected}
                 className={classNames(
                   "rounded-xl px-3 py-2 border transition flex items-center justify-center",
                   listening
                     ? "bg-rose-600 text-white border-rose-500 hover:bg-rose-700"
-                    : "bg-white text-zinc-700 border-gray-300 hover:bg-gray-200"
+                    : "bg-white text-zinc-700 border-gray-300 hover:bg-gray-200",
+                  !isConnected && "opacity-50 cursor-not-allowed"
                 )}
-                title={listening ? "Stop voice input" : "Start voice input"}
+                title={
+                  isConnected
+                    ? listening
+                      ? "Stop voice input"
+                      : "Start voice input"
+                    : "Connect to use mic"
+                }
               >
                 {listening ? <FiMicOff className="text-lg" /> : <FiMic className="text-lg" />}
               </button>
@@ -206,31 +244,21 @@ export default function ChatWindow({
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={onKeyDown}
                 rows={2}
-                placeholder="Type or speak…"
-                className="flex-1 resize-none rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-zinc-800 placeholder:text-zinc-500 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-400/30"
+                placeholder={isConnected ? "Type or speak…" : "Click Connect to start chatting…"}
+                disabled={!isConnected}
+                className="flex-1 resize-none rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-zinc-800 placeholder:text-zinc-500 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-400/30 disabled:bg-gray-100 disabled:text-gray-400"
               />
 
-              {loading ? (
-                <button
-                  type="button"
-                  onClick={onStop}
-                  className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 flex items-center gap-2"
-                  title="Stop generating"
-                >
-                  <FiSquare className="text-lg" />
-                  <span className="hidden sm:inline">Stop</span>
-                </button>
-              ) : (
-                <button
-                  onClick={() => onSend()}
-                  disabled={!input.trim()}
-                  className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center gap-2"
-                  title="Send"
-                >
-                  <FiSend className="text-lg" />
-                  <span className="hidden sm:inline">Send</span>
-                </button>
-              )}
+              <button
+                onClick={() => onSend()}
+                disabled={!isConnected || !input.trim()}
+                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center gap-2"
+                title="Send"
+                type="button"
+              >
+                <FiSend className="text-lg" />
+                <span className="hidden sm:inline">Send</span>
+              </button>
             </div>
 
             {!supported && (

@@ -41,6 +41,8 @@ const ALLOWED_INTENTS = [
   "SHOW_PO_MEASURES",
   "SHOW_PO_ITEM_DETAILS",
   "SHOW_PO_PR_ONLY",
+  //GL Acc No created by MANAS
+  "SHOW_PO_GL_ACCOUNT",
 ];
 
 // Don’t allow huge pasted text to go to the router LLM
@@ -79,6 +81,16 @@ function rangeLast7DaysUTC() {
   const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const from = addDaysUTC(to, -6);
   return { docDateFrom: isoUTCDateOnly(from), docDateTo: isoUTCDateOnly(to) };
+}
+
+function extractPoItemFromQuantityQuestion(message) {
+  const m = String(message || "").toLowerCase();
+
+  // match: "item 00005", "po item 5", "line item 10", "item: 00005"
+  const match = m.match(/\b(po\s*item|item|line\s*item|line)\s*[:#\-()]?\s*(\d{1,5})\b/i);
+  if (!match?.[2]) return null;
+
+  return String(match[2]).padStart(5, "0");
 }
 
 function fallbackRouteFromText(msg) {
@@ -232,6 +244,23 @@ function routeByRules(message) {
       route: { entity: "PO", intent: "SHOW_PO_PRICING", id, filters: pricingFilters },
     };
   }
+// ✅ G/L account (GL account) associated with a PO MANAS
+if (
+  id &&
+  /\b(gl\s*account|g\/l\s*account|g\.?l\.?\s*account|general\s*ledger\s*account|glactno)\b/.test(m)
+) {
+  const poItem = extractPoItemNumber(message); // optional if user says "item 00010"
+  return {
+    confident: true,
+    route: {
+      entity: "PO",
+      intent: "SHOW_PO_GL_ACCOUNT",
+      id,
+      filters: poItem ? { poItem } : null,
+    },
+  };
+}
+
   if (id && /\b(pricing\s*procedure|procedure)\b/.test(m)) {
     return { confident: true, route: { entity:"PO", intent:"SHOW_PO_PRICING_PROCEDURE", id, filters:null } };
   }
@@ -555,15 +584,25 @@ function routeByRules(message) {
   if (id && /\b(delivery|deliver|delivery\s*date)\b/.test(m)) {
     return { confident: true, route: { entity: "PO", intent: "DELIVERY_INFO", id } };
   }
-
+  // ✅ QUANTITIES / Scheduled Qty (MENGE) with optional PO item filter
   if (
     id &&
-    /\b(menge|qty|quantity|scheduled\s*(qty|quantity)|schdeuled\s*(qty|quantity)|schedule(d)?\s*(qty|quantity)|schedule\s*line\s*(qty|quantity)|delivery\s*schedule(d)?\s*(qty|quantity)|order\s*(qty|quantity)|po\s*(qty|quantity))\b/.test(m)
+    /\b(menge|qty|quantity|scheduled\s*(qty|quantity)|schdeuled\s*(qty|quantity)|schedule(d)?\s*(qty|quantity))\b/.test(m)
   ) {
-    return { confident: true, route: { entity: "PO", intent: "SHOW_PO_QUANTITIES", id } };
-  }
-    
+    const poItem = extractPoItemFromQuantityQuestion(message);
 
+    console.log("[router] QUANTITIES poItem extracted =", poItem); // ✅ debug
+
+    return {
+      confident: true,
+      route: {
+        entity: "PO",
+        intent: "SHOW_PO_QUANTITIES",
+        id,
+        filters: poItem ? { poItem } : null,
+      },
+    };
+  }
   return {
     confident: false,
     route: { entity: "PO", intent: "SHOW_PO", id: null, filters },
@@ -772,7 +811,7 @@ Return ONLY JSON.
 Schema:
 {
   "entity":"PO|PR|VENDOR",
-  "intent":"SHOW_PO|SHOW_PO_DETAILS|SHOW_PO_ITEMS|SHOW_PO_STATUS|SHOW_PO_PRICING|SHOW_PO_DELIVERY|SHOW_PO_VENDOR|SHOW_PO_COMPANY_CODE|SHOW_PO_DOC_TYPE|SHOW_PO_CURRENCY|SHOW_PO_EXCHANGE_RATE|SHOW_PO_PURCH_ORG|SHOW_PO_PURCH_GROUP|SHOW_PO_DOC_CATEGORY|SHOW_PO_SUPPLIER|SHOW_PO_PAYMENT_TERMS|SHOW_PO_DISCOUNT_DAYS|CREATED_BY|CREATED_DATE|PRICE_INFO|DELIVERY_INFO|VENDOR_INFO|SHOW_PO_MATERIALS|SHOW_PO_PLANTS|SHOW_PO_STORAGE_LOCATIONS|SHOW_PO_MATERIAL_GROUPS|SHOW_PO_QUANTITIES|SHOW_PO_ORDER_PRICE_UNITS|COUNT_PO|SHOW_PO_MEASURES|SHOW_PO_PR_ONLY",
+  "intent":"SHOW_PO|SHOW_PO_DETAILS|SHOW_PO_ITEMS|SHOW_PO_STATUS|SHOW_PO_PRICING|SHOW_PO_DELIVERY|SHOW_PO_VENDOR|SHOW_PO_COMPANY_CODE|SHOW_PO_DOC_TYPE|SHOW_PO_CURRENCY|SHOW_PO_EXCHANGE_RATE|SHOW_PO_PURCH_ORG|SHOW_PO_PURCH_GROUP|SHOW_PO_DOC_CATEGORY|SHOW_PO_SUPPLIER|SHOW_PO_PAYMENT_TERMS|SHOW_PO_DISCOUNT_DAYS|CREATED_BY|CREATED_DATE|PRICE_INFO|DELIVERY_INFO|VENDOR_INFO|SHOW_PO_MATERIALS|SHOW_PO_PLANTS|SHOW_PO_STORAGE_LOCATIONS|SHOW_PO_MATERIAL_GROUPS|SHOW_PO_QUANTITIES|SHOW_PO_ORDER_PRICE_UNITS|COUNT_PO|SHOW_PO_MEASURES|SHOW_PO_PR_ONLY|SHOW_PO_GL_ACCOUNT",
   "id":"string or null",
   "filters":{...} or null
 }

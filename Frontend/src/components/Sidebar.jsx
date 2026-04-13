@@ -33,7 +33,29 @@ export default function Sidebar({
   onNewChat,
   setActiveId,
   handleDelete,
+
+  // ✅ user profile name (from login)
+  userName,
+
+  // ✅ logout callback (optional)
+  onLogout,
+
+  // ✅ open SAP login screen (Add new system)
+  onAddNewSystem,
 }) {
+  // Optional: show connected system summary from localStorage
+  const systemSummary = (() => {
+    try {
+      const s = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
+      if (!s) return "No system connected";
+      return s.type === "existing"
+        ? `Connected: ${s.ip} (${s.username})`
+        : `Connected: ${s.description} (${s.systemId})`;
+    } catch {
+      return "No system connected";
+    }
+  })();
+
   return (
     <>
       {/* Mobile overlay */}
@@ -58,10 +80,11 @@ export default function Sidebar({
       >
         {/* HEADER */}
         <div className="p-2 flex items-center justify-between border-gray-200">
-          {/* LEFT SIDE */}
           <div
             className={`flex w-full ${
-              collapsed ? "flex-col items-center gap-2" : "flex-row items-center justify-between"
+              collapsed
+                ? "flex-col items-center gap-2"
+                : "flex-row items-center justify-between"
             }`}
           >
             {/* LOGO */}
@@ -77,8 +100,13 @@ export default function Sidebar({
             <button
               onClick={() => setCollapsed((v) => !v)}
               className="hidden md:flex p-4 rounded-lg hover:bg-gray-200"
+              type="button"
             >
-              <img src={collapsed ? sidebaropen : sidebarclose} className="w-5 h-5" />
+              <img
+                src={collapsed ? sidebaropen : sidebarclose}
+                className="w-5 h-5"
+                alt="toggle"
+              />
             </button>
           </div>
 
@@ -86,8 +114,9 @@ export default function Sidebar({
           <button
             onClick={() => setSidebarOpen(false)}
             className="md:hidden rounded-xl px-3 py-3 border border-gray-300 hover:bg-gray-200"
+            type="button"
           >
-            <img src={close} className="w-4 h-4" />
+            <img src={close} className="w-4 h-4" alt="close" />
           </button>
         </div>
 
@@ -98,26 +127,40 @@ export default function Sidebar({
           </div>
         )}
 
-        {/* CONTENT */}
+        {/* CONTENT (Chat history) */}
         <div className="flex-1 overflow-auto px-2 pb-3">
           {collapsed ? (
-            // COLLAPSED MODE (icons only)
             <div className="flex flex-col items-center gap-3 mt-3">
-              <button onClick={onNewChat} className="p-2 rounded-lg hover:bg-gray-200">
-                <img src={newChatIcon} className="w-5 h-5" />
+              <button
+                onClick={onNewChat}
+                className="p-2 rounded-lg hover:bg-gray-200"
+                type="button"
+              >
+                <img src={newChatIcon} className="w-5 h-5" alt="new chat" />
               </button>
 
-              <button className="p-2 rounded-lg hover:bg-gray-200">
-                <img src={searchIcon} className="w-5 h-5" />
+              <button className="p-2 rounded-lg hover:bg-gray-200" type="button">
+                <img src={searchIcon} className="w-5 h-5" alt="search" />
+              </button>
+
+              {/* ✅ Add system shortcut (collapsed) */}
+              <button
+                className="p-2 rounded-lg hover:bg-gray-200"
+                type="button"
+                onClick={() => onAddNewSystem?.()}
+                title="Add new system"
+                aria-label="Add new system"
+              >
+                <span className="text-lg font-bold leading-none">+</span>
               </button>
             </div>
           ) : (
-            // EXPANDED MODE (normal button)
             <button
               onClick={onNewChat}
               className="w-full flex items-center gap-2 rounded-xl px-3 py-3 mb-2 text-zinc-800 hover:bg-gray-200 transition"
+              type="button"
             >
-              <img src={chatIcon} className="w-5 h-5" />
+              <img src={chatIcon} className="w-5 h-5" alt="new chat" />
               New chat
             </button>
           )}
@@ -136,7 +179,6 @@ export default function Sidebar({
                       : "hover:bg-blue-100 text-zinc-800"
                   )}
                 >
-                  {/* CHAT TITLE */}
                   {editingChatId === c.id ? (
                     <input
                       value={editingTitle}
@@ -153,20 +195,23 @@ export default function Sidebar({
                     <button
                       onClick={() => setActiveId(c.id)}
                       className="w-full flex-1 text-left text-sm truncate px-2 py-2 rounded transition-colors duration-200 hover:bg-blue-100 hover:text-blue-700"
+                      type="button"
                     >
                       {c.title}
                     </button>
                   )}
 
-                  {/* 3 DOT BUTTON */}
                   <button
-                    onClick={() => setMenuOpenId(menuOpenId === c.id ? null : c.id)}
+                    onClick={() =>
+                      setMenuOpenId(menuOpenId === c.id ? null : c.id)
+                    }
                     className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-300"
+                    aria-label="Conversation menu"
+                    type="button"
                   >
                     ⋮
                   </button>
 
-                  {/* DROPDOWN */}
                   {menuOpenId === c.id && (
                     <div className="absolute right-2 top-10 w-32 bg-white border border-gray-200 rounded-lg shadow-md z-50">
                       <button
@@ -176,12 +221,14 @@ export default function Sidebar({
                           setMenuOpenId(null);
                         }}
                         className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                        type="button"
                       >
                         Rename
                       </button>
                       <button
                         onClick={() => handleDelete(c.id)}
                         className="w-full text-left px-3 py-2 text-sm text-red-500 hover:bg-gray-100"
+                        type="button"
                       >
                         Delete
                       </button>
@@ -191,19 +238,92 @@ export default function Sidebar({
               ))}
         </div>
 
-        {/* FOOTER */}
+        {/* ✅ ADD SYSTEM + MODULES (below chat history) */}
+        {!collapsed && (
+          <div className="px-2 pb-3">
+            {/* Add System Section */}
+            <div className="mt-2 rounded-xl border border-gray-200 bg-white p-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold tracking-wide text-zinc-600">
+                  Systems
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onAddNewSystem?.()}
+                  className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 transition"
+                >
+                  + Add new system
+                </button>
+              </div>
+
+              <div className="mt-2 text-xs text-zinc-500">{systemSummary}</div>
+            </div>
+
+            {/* Modules Section */}
+            <div className="mt-3 rounded-xl border border-gray-200 bg-white p-3">
+              <div className="text-xs font-semibold tracking-wide text-zinc-600">
+                Modules
+              </div>
+
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-gray-50"
+                >
+                  PO
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-gray-50"
+                >
+                  SO
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* FOOTER (NO LOGOUT HERE; username only) */}
         <div className="p-3 border-t border-gray-200">
           {collapsed ? (
-            <div className="flex justify-center">
-              <img src={userImg} alt="user" className="w-8 h-8 rounded-full object-cover" />
+            <div className="flex flex-col items-center gap-2">
+              <img
+                src={userImg}
+                alt="user"
+                className="w-8 h-8 rounded-full object-cover"
+              />
+              <div className="text-[10px] font-semibold text-zinc-700 truncate max-w-[60px]">
+                {userName || "User"}
+              </div>
             </div>
           ) : (
-            <div className="flex items-center gap-3">
-              <img src={userImg} alt="user" className="w-9 h-9 rounded-full object-cover" />
-              <div className="flex flex-col">
-                <span className="text-sm font-semibold text-zinc-800">User</span>
-                <span className="text-xs text-zinc-500">Chatbot v1.0</span>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <img
+                  src={userImg}
+                  alt="user"
+                  className="w-9 h-9 rounded-full object-cover"
+                />
+
+                <div className="flex flex-col min-w-0">
+                  <span className="text-sm font-semibold text-zinc-800 truncate">
+                    {userName || "User"}
+                  </span>
+                  <span className="text-xs text-zinc-500">Chatbot v1.0</span>
+                </div>
               </div>
+
+              {/* optional logout (kept commented, same as your original) */}
+              {/* {onLogout && (
+                <button
+                  onClick={onLogout}
+                  className="text-xs text-red-500 hover:underline"
+                  type="button"
+                >
+                  Logout
+                </button>
+              )} */}
             </div>
           )}
         </div>

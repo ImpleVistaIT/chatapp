@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { sendChatMessage } from "../api/chatApi";
 import { useSpeechToText } from "../hooks/useSpeechToText";
 
-// ✅ NEW: split UI into 2 components
 import Sidebar from "./Sidebar";
 import ChatWindow from "./ChatWindow";
+import SapLogin from "../pages/saplogin";
 
 async function copyToClipboard(text) {
   const t = String(text ?? "");
@@ -36,6 +36,19 @@ function generateTitle(text) {
 }
 
 export default function Chat() {
+  // ✅ app login removed => use a safe default name
+  const userName = "User";
+
+  // ✅ SAP connection view (chat vs saplogin)
+  const [sapView, setSapView] = useState("saplogin"); // "chat" | "saplogin"
+  const [isConnected, setIsConnected] = useState(false);
+
+  useEffect(() => {
+    const sapConnected = localStorage.getItem("sapConnected") === "true";
+    setIsConnected(sapConnected);
+    setSapView(sapConnected ? "chat" : "saplogin");
+  }, []);
+
   const [conversations, setConversations] = useState([
     {
       id: "default",
@@ -60,30 +73,23 @@ export default function Chat() {
   const [loading, setLoading] = useState(false);
   const [showScrollDown, setShowScrollDown] = useState(false);
 
-  // rename chat title
   const [editingChatId, setEditingChatId] = useState(null);
   const [editingTitle, setEditingTitle] = useState("");
 
-  // sidebar UI state
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [menuOpenId, setMenuOpenId] = useState(null);
 
-  // inline edit user message
   const [editingIndex, setEditingIndex] = useState(null);
   const [editingText, setEditingText] = useState("");
 
-  // copy feedback
   const [copiedAtIndex, setCopiedAtIndex] = useState(null);
 
-  // abort controller
   const abortRef = useRef(null);
 
-  // refs
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
-  // voice refs
   const baseRef = useRef("");
   const interimRef = useRef("");
 
@@ -224,6 +230,8 @@ export default function Chat() {
   }
 
   async function onSend({ overrideText, fromEdit = false } = {}) {
+    if (!isConnected) return;
+
     const text = String(overrideText ?? input).trim();
     if (!text || loading) return;
 
@@ -233,7 +241,6 @@ export default function Chat() {
     if (!fromEdit) {
       updateActiveMessages((m) => [...m, { role: "user", text }]);
 
-      // auto update title if default
       setConversations((prev) =>
         prev.map((c) => {
           if (c.id !== activeId) return c;
@@ -246,7 +253,6 @@ export default function Chat() {
     }
 
     setInput("");
-    console.log("inputRef:", inputRef.current);
     setTimeout(() => inputRef.current?.blur(), 50);
     setLoading(true);
 
@@ -279,10 +285,6 @@ export default function Chat() {
     }
   }
 
-  function onStop() {
-    if (abortRef.current) abortRef.current.abort();
-  }
-
   function onKeyDown(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -303,6 +305,8 @@ export default function Chat() {
 
   const { supported, listening, start, stop } = useSpeechToText({
     onText: (text, meta) => {
+      if (!isConnected) return;
+
       const t = String(text || "").trim();
       if (!t) return;
 
@@ -330,6 +334,8 @@ export default function Chat() {
       return;
     }
 
+    if (!isConnected) return;
+
     if (listening) {
       stop();
       interimRef.current = "";
@@ -352,65 +358,84 @@ export default function Chat() {
     setTimeout(() => setCopiedAtIndex(null), 1200);
   }
 
-  // ✅ Keep scroll-down logic in Chat.jsx (logic stays here)
   function onMessagesScroll(e) {
     const el = e.target;
     const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     setShowScrollDown(!isNearBottom);
   }
 
+  // ✅ SAP connect/disconnect
+  const handleConnectedFromSapLogin = () => {
+    setIsConnected(true);
+    localStorage.setItem("sapConnected", "true");
+    setSapView("chat");
+  };
+
+  const handleDisconnect = () => {
+    setIsConnected(false);
+    localStorage.setItem("sapConnected", "false");
+    localStorage.removeItem("sapActiveSystem");
+    setSapView("saplogin");
+  };
+
+  const openSapLogin = () => setSapView("saplogin");
+
   return (
     <div className="fixed inset-0 bg-[#f7f7f8] text-zinc-800">
-      <div className="flex h-full overflow-hidden">
-        <Sidebar
-          sidebarOpen={sidebarOpen}
-          collapsed={collapsed}
-          activeId={activeId}
-          conversations={conversations}
-          editingChatId={editingChatId}
-          editingTitle={editingTitle}
-          menuOpenId={menuOpenId}
-          setSidebarOpen={setSidebarOpen}
-          setCollapsed={setCollapsed}
-          setMenuOpenId={setMenuOpenId}
-          setEditingChatId={setEditingChatId}
-          setEditingTitle={setEditingTitle}
-          saveRename={saveRename}
-          cancelRename={cancelRename}
-          onNewChat={onNewChat}
-          setActiveId={setActiveId}
-          handleDelete={handleDelete}
-        />
+      {sapView === "saplogin" ? (
+        <SapLogin onConnected={handleConnectedFromSapLogin} />
+      ) : (
+        <div className="flex h-full overflow-hidden">
+          <Sidebar
+            sidebarOpen={sidebarOpen}
+            collapsed={collapsed}
+            activeId={activeId}
+            conversations={conversations}
+            editingChatId={editingChatId}
+            editingTitle={editingTitle}
+            menuOpenId={menuOpenId}
+            setSidebarOpen={setSidebarOpen}
+            setCollapsed={setCollapsed}
+            setMenuOpenId={setMenuOpenId}
+            setEditingChatId={setEditingChatId}
+            setEditingTitle={setEditingTitle}
+            saveRename={saveRename}
+            cancelRename={cancelRename}
+            onNewChat={onNewChat}
+            setActiveId={setActiveId}
+            handleDelete={handleDelete}
+            userName={userName}
+            onAddNewSystem={openSapLogin}
+          />
 
-        <ChatWindow
-          // state
-          loading={loading}
-          input={input}
-          listening={listening}
-          supported={supported}
-          showScrollDown={showScrollDown}
-          activeConv={activeConv}
-          editingIndex={editingIndex}
-          editingText={editingText}
-          copiedAtIndex={copiedAtIndex}
-          // refs
-          bottomRef={bottomRef}
-          inputRef={inputRef}
-          // handlers
-          setSidebarOpen={setSidebarOpen}
-          setInput={setInput}
-          onSend={onSend}
-          onStop={onStop}
-          onKeyDown={onKeyDown}
-          onMicClick={onMicClick}
-          onCopyAssistant={onCopyAssistant}
-          startEditMessage={startEditMessage}
-          cancelEdit={cancelEdit}
-          applyEditLocal={applyEditLocal}
-          setEditingText={setEditingText}
-          onMessagesScroll={onMessagesScroll}
-        />
-      </div>
+          <ChatWindow
+            input={input}
+            listening={listening}
+            supported={supported}
+            showScrollDown={showScrollDown}
+            activeConv={activeConv}
+            editingIndex={editingIndex}
+            editingText={editingText}
+            copiedAtIndex={copiedAtIndex}
+            isConnected={isConnected}
+            bottomRef={bottomRef}
+            inputRef={inputRef}
+            setSidebarOpen={setSidebarOpen}
+            setInput={setInput}
+            onSend={onSend}
+            onKeyDown={onKeyDown}
+            onMicClick={onMicClick}
+            onCopyAssistant={onCopyAssistant}
+            startEditMessage={startEditMessage}
+            cancelEdit={cancelEdit}
+            applyEditLocal={applyEditLocal}
+            setEditingText={setEditingText}
+            onMessagesScroll={onMessagesScroll}
+            onDisconnect={handleDisconnect}
+            onOpenSapLogin={openSapLogin}
+          />
+        </div>
+      )}
     </div>
   );
 }
