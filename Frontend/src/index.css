@@ -1,14 +1,65 @@
+/* name=src/index.css (or your global tailwind css) */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-html, body, #root {
-height: 100%;
-overflow: hidden !important;
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden !important;
+  }
+
+  body,
+  * {
+    font-family: "Inter", sans-serif !important;
+  }
 }
 
-body, * {
-font-family: 'Inter', sans-serif !important;
+/* ─────────────────────────────────────────────
+   Default scrollbar (Sidebar + Chat)
+   ───────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
 }
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #d1d5db; /* gray-300 */
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #9ca3af; /* gray-400 */
+}
+
+/* Fade top & bottom effect */
+.sidebar-scroll {
+  mask-image: linear-gradient(to bottom, transparent, black 10%, black 90%, transparent);
+}
+
+/* ─────────────────────────────────────────────
+   Hide scrollbar utility (keep scrolling)
+   Use: className="scrollbar-none"
+   ───────────────────────────────────────────── */
+.scrollbar-none {
+  -ms-overflow-style: none; /* IE/Edge */
+  scrollbar-width: none; /* Firefox */
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
+/* Optional: hide scrollbar only on small screens
+   Use: className="scrollbar-hide-sm"
+*/
+@media (max-width: 640px) {
+  .scrollbar-hide-sm {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide-sm::-webkit-scrollbar {
+    display: none;
+  }
 }

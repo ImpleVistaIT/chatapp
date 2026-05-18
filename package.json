@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "jsonwebtoken": "^9.0.3",
+    "react-hot-toast": "^2.6.0",
+    "react-toastify": "^11.0.5"
+  }
+}

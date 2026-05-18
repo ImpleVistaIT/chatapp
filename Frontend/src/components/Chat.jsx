@@ -1,892 +1,826 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { sendChatMessage } from "../api/chatApi";
-import MessageBubble from "./MessageBubble";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSpeechToText } from "../hooks/useSpeechToText";
-import logoFull from "../assets/ImplevistaLogo.png";
-import logoSmall from "../assets/Vlogo.png";
-import chat from "../assets/new-chat.png";
-import sidebaropen from "../assets/sidebar.png";
-import sidebarclose from "../assets/sidebar-close.png";
-import newChatIcon from "../assets/new-chat.png"; // collapsed icon
-import searchIcon from "../assets/search.png";
-import userImg from "../assets/user.png";
-import menuIcon from "../assets/hamberger.png";
-import close from "../assets/close.png";
-import { FiArrowDown } from "react-icons/fi";
+import { sendChatMessageStream } from "../api/chatApiStream";
 
-import {
-FiMic,
-FiMicOff,
-FiSend,
-FiPlus,
-FiMenu,
-FiX,
-FiEdit2,
-FiCopy,
-FiSquare,
-FiCheck,
-} from "react-icons/fi";
-
-function classNames(...x) {
-return x.filter(Boolean).join(" ");
-}
-
-function formatTime(d = new Date()) {
-return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
+import Sidebar from "./Sidebar";
+import ChatWindow from "./ChatWindow";
+import SapLogin from "../pages/saplogin";
+import { authFetch } from "../api/authFetch";
+import SolmanCreateCrForm from "./SolmanCreateCrForm";
 
 async function copyToClipboard(text) {
-const t = String(text ?? "");
-if (!t) return false;
+  const t = String(text ?? "");
+  if (!t) return false;
 
-try {
-await navigator.clipboard.writeText(t);
-return true;
-} catch {
-try {
-const ta = document.createElement("textarea");
-ta.value = t;
-document.body.appendChild(ta);
-ta.select();
-document.execCommand("copy");
-document.body.removeChild(ta);
-return true;
-} catch {
-return false;
+  try {
+    await navigator.clipboard.writeText(t);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = t;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
-}
-}
+
 function generateTitle(text) {
-if (!text) return "New chat";
-
-let clean = text.trim();
-const words = clean.split(" ").slice(0, 6).join(" ");
-
-return words.charAt(0).toUpperCase() + words.slice(1);
+  if (!text) return "New chat";
+  const clean = text.trim();
+  const words = clean.split(" ").slice(0, 6).join(" ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-export default function Chat() {
-const [conversations, setConversations] = useState([
-{
-id: "default",
-title: "SAP MM Chat",
-messages: [
-{
-role: "assistant",
-text: "Hi, Welcome to ImpleVista AI. How may I assist you?",
-suggestions: [
-  "Show latest purchase orders",
-  "Show PO created in January 2026",
-  "Show details of PO 4500001933",
-],
-},
-], updatedAt: Date.now(),
-},
-]);
-const [activeId, setActiveId] = useState("default");
-const [input, setInput] = useState("");
-const [loading, setLoading] = useState(false);
-const [showScrollDown, setShowScrollDown] = useState(false);
-const [editingChatId, setEditingChatId] = useState(null);
-const [editingTitle, setEditingTitle] = useState("");
-
-// ✅ Mobile sidebar toggle
-const [sidebarOpen, setSidebarOpen] = useState(false);
-
-// Sidebar Closing
-const [collapsed, setCollapsed] = useState(false);
-const [menuOpenId, setMenuOpenId] = useState(null);
-
-// ✅ Inline edit for a user message (ChatGPT-style)
-const [editingIndex, setEditingIndex] = useState(null);
-const [editingText, setEditingText] = useState("");
-
-// ✅ Copy feedback
-const [copiedAtIndex, setCopiedAtIndex] = useState(null);
-
-// ✅ Stop generating (AbortController)
-const abortRef = useRef(null);
-
-const bottomRef = useRef(null);
-const inputRef = useRef(null);
-
-// Voice state
-const baseRef = useRef("");
-const interimRef = useRef("");
-
-const activeConv = useMemo(
-() => conversations.find((c) => c.id === activeId),
-[conversations, activeId]
-);
-
-useEffect(() => {
-if (window.innerWidth > 768) {
-inputRef.current?.focus();
-}
-}, [activeId]);
-
-useEffect(() => {
-const scrollToBottom = () => {
-const el = bottomRef.current;
-if (!el) return;
-
-const container = el.closest("section");
-if (!container) return;
-
-container.scrollTo({
-top: container.scrollHeight,
-behavior: "auto",
-});
-};
-
-const t1 = setTimeout(scrollToBottom, 150);
-const t2 = setTimeout(scrollToBottom, 400);
-
-return () => {
-clearTimeout(t1);
-clearTimeout(t2);
-};
-}, [activeConv?.messages?.length, loading]);
-
-useEffect(() => {
-setSidebarOpen(false);
-}, [activeId]);
-
-function focusInput() {
-setTimeout(() => inputRef.current?.focus(), 0);
+function isMongoId(v) {
+  return /^[a-f0-9]{24}$/i.test(String(v || ""));
 }
 
-function updateActiveMessages(updater) {
-setConversations((prev) =>
-prev.map((c) => {
-if (c.id !== activeId) return c;
-const messages = typeof updater === "function" ? updater(c.messages) : updater;
-return { ...c, messages, updatedAt: Date.now() };
-})
-);
+function normalizeSystemId(sid) {
+  return String(sid || "").trim().toUpperCase();
 }
 
-function handleRename(id) {
-const newName = prompt("Enter new chat name:");
-if (!newName) return;
-
-setConversations((prev) =>
-prev.map((c) =>
-c.id === id ? { ...c, title: newName } : c
-)
-);
-
-setMenuOpenId(null);
-}
-function handleDelete(id) {
-setConversations((prev) => prev.filter((c) => c.id !== id));
-
-if (id === activeId && conversations.length > 1) {
-const next = conversations.find((c) => c.id !== id);
-if (next) setActiveId(next.id);
-}
-
-setMenuOpenId(null);
-}
-function saveRename(id) {
-if (!editingTitle.trim()) return cancelRename();
-
-setConversations((prev) =>
-prev.map((c) =>
-c.id === id ? { ...c, title: editingTitle } : c
-)
-);
-
-setEditingChatId(null);
-setEditingTitle("");
-}
-function cancelRename() {
-setEditingChatId(null);
-setEditingTitle("");
-}
-
-function onNewChat() {
-const id = `c_${Date.now()}`;
-
-setConversations((prev) => [
-{
-id,
-title: "New chat",
-messages: [
-{
-  role: "assistant",
-  text: "Hi, Welcome to ImpleVista AI. How may I assist you?",
-  suggestions: [
-    "Show latest purchase orders",
-    "Show PO created in January 2026",
-    "Show details of PO 4500001933",
-  ],
-},
-],
-updatedAt: Date.now(),
-},
-...prev,
-]);
-
-setActiveId(id);
-setInput("");
-baseRef.current = "";
-interimRef.current = "";
-setEditingIndex(null);
-setEditingText("");
-focusInput();
-}
-function startEditMessage(idx) {
-const m = activeConv?.messages?.[idx];
-if (!m || m.role !== "user") return;
-
-setEditingIndex(idx);
-setEditingText(m.text || "");
-}
-
-function cancelEdit() {
-setEditingIndex(null);
-setEditingText("");
-focusInput();
-}
-
-// Replace the edited user message and (optionally) remove assistant messages after it.
-function applyEditLocal({ removeFollowingAssistant = true } = {}) {
-const newText = editingText.trim();
-if (editingIndex == null || !newText) return null;
-
-updateActiveMessages((msgs) => {
-const copy = [...msgs];
-copy[editingIndex] = { ...copy[editingIndex], text: newText };
-
-if (removeFollowingAssistant) {
-// remove everything after edited message (like ChatGPT re-run behavior)
-return copy.slice(0, editingIndex + 1);
-}
-
-return copy;
-});
-
-setEditingIndex(null);
-setEditingText("");
-return newText;
-}
-
-async function onSend({ overrideText, fromEdit = false } = {}) {
-const text = String(overrideText ?? input).trim();
-if (!text || loading) return;
-
-baseRef.current = "";
-interimRef.current = "";
-
-if (!fromEdit) {
-updateActiveMessages((m) => [...m, { role: "user", text }]);
-
-// ✅ AUTO TITLE UPDATE
-setConversations((prev) =>
-prev.map((c) => {
-if (c.id !== activeId) return c;
-
-// only update if default title
-if (c.title === "New chat" || c.title === "SAP MM Chat") {
+function normalizeActiveSession(v) {
+  if (!v || !v.systemId || !v.sapUser) return null;
   return {
-    ...c,
-    title: generateTitle(text),
+    systemId: normalizeSystemId(v.systemId),
+    sapUser: String(v.sapUser).trim(),
+    firstName: String(v.firstName || "").trim(),
+    fullName: String(v.fullName || "").trim(),
   };
 }
 
-return c;
-})
-);
-}
-setInput("");
-setTimeout(() => {
-inputRef.current?.blur();
-}, 50);
-setLoading(true);
+export default function Chat() {
+  const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
 
-const controller = new AbortController();
-abortRef.current = controller;
-try {
-// send conversationId so backend can store context per conversation
-const data = await sendChatMessage(text, {
-signal: controller.signal,
-conversationId: activeId,
-});
+  const userName = (() => {
+    try {
+      const system = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
+      return system?.username || "User";
+    } catch {
+      return "User";
+    }
+  })();
 
-updateActiveMessages((m) => [
-...m,
-{
-role: "assistant",
-text: data.reply ?? "",
-suggestions: data.suggestions, // ✅ correct
-},
-]);
+  const [sapView, setSapView] = useState(() => {
+    try {
+      const force = localStorage.getItem("forceSapLogin") === "1";
+      if (force) return "saplogin";
+    } catch {}
+    return "chat";
+  });
 
-} catch (e) {
-if (e?.name === "AbortError") {
-updateActiveMessages((m) => [
-...m,
-{ role: "assistant", text: "Stopped generating." },
-]);
-} else {
-updateActiveMessages((m) => [
-...m,
-{ role: "assistant", text: `Error: ${e.message}` },
-]);
-}
+  const [selectedSystem, setSelectedSystem] = useState(null);
+  const [statusText, setStatusText] = useState("");
+  const [showSolmanCrForm, setShowSolmanCrForm] = useState(false);
 
-} finally {
-setLoading(false);
-abortRef.current = null;
-}
-}
+  const [activeSession, setActiveSession] = useState(() => {
+    try {
+      return normalizeActiveSession(JSON.parse(localStorage.getItem("sapActiveSession") || "null"));
+    } catch {
+      return null;
+    }
+  });
 
-useEffect(() => {
-const handler = (e) => {
-onSend({ overrideText: e.detail });
-};
+  useEffect(() => {
+    function syncActiveSessionFromStorage() {
+      try {
+        setActiveSession(normalizeActiveSession(JSON.parse(localStorage.getItem("sapActiveSession") || "null")));
+      } catch {
+        setActiveSession(null);
+      }
+    }
 
-window.addEventListener("sendMessage", handler);
+    function onStorage(e) {
+      if (e.key === "sapActiveSession") syncActiveSessionFromStorage();
+    }
 
-return () => {
-window.removeEventListener("sendMessage", handler);
-};
-}, []);
+    function onSapSessionChanged() {
+      syncActiveSessionFromStorage();
+    }
 
-function onStop() {
-if (abortRef.current) abortRef.current.abort();
-}
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("sapActiveSessionChanged", onSapSessionChanged);
 
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("sapActiveSessionChanged", onSapSessionChanged);
+    };
+  }, []);
 
-function onKeyDown(e) {
-if (e.key === "Enter" && !e.shiftKey) {
-e.preventDefault();
+  useEffect(() => {
+    if (activeSession) {
+      localStorage.setItem("sapActiveSession", JSON.stringify(activeSession));
+    } else {
+      localStorage.removeItem("sapActiveSession");
+    }
+  }, [activeSession]);
 
-if (editingIndex != null) {
-// Apply edit and re-run
-const newText = applyEditLocal({ removeFollowingAssistant: true });
-if (newText) onSend({ overrideText: newText, fromEdit: true });
-} else {
-onSend();
-}
-}
+  const isConnected = Boolean(activeSession?.systemId && activeSession?.sapUser);
 
-if (e.key === "Escape" && editingIndex != null) {
-e.preventDefault();
-cancelEdit();
-}
-}
+  const [systems, setSystems] = useState([]);
+  const [tiles, setTiles] = useState([]);
+  const [tilesLoaded, setTilesLoaded] = useState(false);
 
-const { supported, listening, start, stop } = useSpeechToText({
-onText: (text, meta) => {
-const t = String(text || "").trim();
-if (!t) return;
+  const loadSystems = useCallback(async () => {
+    try {
+      const res = await authFetch(`${apiBase}/sap/systems`, { method: "GET" });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || payload?.ok !== true) return;
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      setSystems(items);
+    } catch {}
+  }, [apiBase]);
 
-const base = baseRef.current.trim();
+  const loadTiles = useCallback(async () => {
+    setTilesLoaded(false);
+    try {
+      const res = await authFetch(`${apiBase}/sap/tiles`, { method: "GET" });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || payload?.ok !== true) return;
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      setTiles(items);
+    } catch {} finally {
+      setTilesLoaded(true);
+    }
+  }, [apiBase]);
 
-if (meta?.interim) {
-interimRef.current = t;
-setInput(base ? `${base} ${t}` : t);
-} else {
-interimRef.current = "";
-setInput(base ? `${base} ${t}` : t);
-}
+  useEffect(() => {
+    function onChatSessionsChanged() {}
+    window.addEventListener("chatSessionsChanged", onChatSessionsChanged);
+    return () => window.removeEventListener("chatSessionsChanged", onChatSessionsChanged);
+  }, []);
 
-focusInput();
-},
-onError: () => {
-interimRef.current = "";
-focusInput();
-},
-});
+  useEffect(() => {
+    let force = false;
+    try {
+      force = localStorage.getItem("forceSapLogin") === "1";
+    } catch {}
+    if (!force) setSapView("chat");
 
-function onMicClick() {
-if (!supported) {
-alert("Speech recognition not supported in this browser (try Chrome / Edge).");
-return;
-}
+    loadSystems();
+    loadTiles();
+  }, [loadSystems, loadTiles]);
 
-if (listening) {
-stop();
-interimRef.current = "";
-focusInput();
-return;
-}
+  useEffect(() => {
+    if (!tilesLoaded) return;
 
-baseRef.current = input.trim();
-interimRef.current = "";
+    let force = false;
+    try {
+      force = localStorage.getItem("forceSapLogin") === "1";
+    } catch {}
 
-start();
-focusInput();
-}
+    if (force) {
+      if (sapView !== "saplogin") setSapView("saplogin");
+      return;
+    }
 
-async function onCopyAssistant(idx, text) {
-const ok = await copyToClipboard(text);
-if (!ok) return;
+    if (sapView !== "saplogin") setSapView("chat");
+  }, [tilesLoaded, tiles, sapView]);
 
-setCopiedAtIndex(idx);
-setTimeout(() => setCopiedAtIndex(null), 1200);
-}
+  const [conversations, setConversations] = useState(() => [
+    {
+      id: "draft",
+      title: "New chat",
+      messages: [
+        {
+          role: "assistant",
+          text: "Hi, Welcome to ImpleVista AI. How may I assist you?",
+          suggestions: [
+            "Show latest purchase orders",
+            "Show PO created in January 2026",
+            "Show details of PO 4500001933",
+          ],
+        },
+      ],
+      updatedAt: Date.now(),
+    },
+  ]);
 
-return (
+  const [activeId, setActiveId] = useState(() => {
+    const saved = localStorage.getItem("chatSessionId");
+    return isMongoId(saved) ? saved : "draft";
+  });
 
-<div className="fixed inset-0 bg-[#f7f7f8] text-zinc-800">
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [showScrollDown, setShowScrollDown] = useState(false);
 
-<div className="flex h-full overflow-hidden">
+  const [editingChatId, setEditingChatId] = useState(null);
+  const [editingTitle, setEditingTitle] = useState("");
 
-{/* Mobile overlay */}
-{sidebarOpen && (
-<button
-  type="button"
-  aria-label="Close sidebar overlay"
-  onClick={() => setSidebarOpen(false)}
-  className="fixed inset-0 z-40 bg-black/30 md:hidden"
-/>
-)}
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [menuOpenId, setMenuOpenId] = useState(null);
 
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [editingText, setEditingText] = useState("");
 
+  const [copiedAtIndex, setCopiedAtIndex] = useState(null);
 
+  const abortRef = useRef(null);
+  const onStop = useCallback(() => {
+    try {
+      abortRef.current?.abort();
+    } catch {}
+  }, []);
 
-{/* Sidebar */}
-<aside
-className={classNames(
-  "z-50 flex flex-col border-r border-gray-200 bg-[#f3f4f6]",
-  "fixed inset-y-0 left-0 md:static",
-  "transform transition-all duration-300 ease-in-out",
-  sidebarOpen ? "translate-x-0" : "-translate-x-full",
-  "md:translate-x-0",
-  collapsed ? "w-20" : "w-72"
-)}
->
+  const sendingRef = useRef(false);
+  const bottomRef = useRef(null);
+  const inputRef = useRef(null);
 
-{/* HEADER */}
-<div className="p-2 flex items-center justify-between  border-gray-200">
+  const baseRef = useRef("");
+  const interimRef = useRef("");
+  const cursorRef = useRef(null);
 
-  {/* LEFT SIDE */}
-  <div
-    className={`flex w-full ${collapsed
-      ? "flex-col items-center gap-2"
-      : "flex-row items-center justify-between"
-      }`}
-  >
-    {/* LOGO */}
-    <img
-      src={collapsed ? logoSmall : logoFull}
-      alt="logo"
-      className={`object-contain transition-all duration-300 ${collapsed ? "h-8 w-8" : "h-12 w-auto"
-        }`}
-    />
+  const summaryConvIdsRef = useRef(new Set());
 
-    {/* TOGGLE BUTTON */}
-    <button
-      onClick={() => setCollapsed((v) => !v)}
-      className="hidden md:flex p-4 rounded-lg hover:bg-gray-200"
-    >
-      <img
-        src={collapsed ? sidebaropen : sidebarclose}
-        className="w-5 h-5"
-      />
-    </button>
-  </div>
+  const activeConv = useMemo(() => {
+    const found = conversations.find((c) => c.id === activeId);
+    if (found) return found;
 
-  {/* MOBILE CLOSE */}
-  <button
-    onClick={() => setSidebarOpen(false)}
-    className="md:hidden rounded-xl px-3 py-3 border border-gray-300 hover:bg-gray-200"
-  >
-    <img src={close} className="w-4 h-4" />
-  </button>
-</div>
+    if (isMongoId(activeId)) {
+      return { id: activeId, title: "New chat", messages: [], updatedAt: Date.now() };
+    }
 
-{/* TITLE */}
-{!collapsed && (
-  <div className="px-3 pb-3 mt-3 text-xs font-semibold tracking-wide text-zinc-500">
-    Your chats
-  </div>
-)}
+    return conversations[0] || null;
+  }, [conversations, activeId]);
 
-{/* CONTENT */}
-<div className="flex-1 overflow-auto px-2 pb-3">
+  useEffect(() => {
+    if (!isMongoId(activeId)) return;
 
-  {collapsed ? (
-    // 🔹 COLLAPSED MODE (icons only)
-    <div className="flex flex-col items-center gap-3 mt-3">
+    const exists = conversations.some((c) => c.id === activeId);
+    if (exists) return;
 
-      {/* NEW CHAT ICON */}
-      <button
-        onClick={onNewChat}
-        className="p-2 rounded-lg hover:bg-gray-200"
-      >
-        <img src={newChatIcon} className="w-5 h-5" />
-      </button>
+    setConversations((prev) => [{ id: activeId, title: "New chat", messages: [], updatedAt: Date.now() }, ...prev]);
+  }, [activeId, conversations]);
 
-      {/* SEARCH ICON */}
-      <button className="p-2 rounded-lg hover:bg-gray-200">
-        <img src={searchIcon} className="w-5 h-5" />
-      </button>
+  useEffect(() => {
+    if (isMongoId(activeId)) {
+      localStorage.setItem("chatSessionId", activeId);
+    } else {
+      localStorage.removeItem("chatSessionId");
+    }
 
-    </div>
-  ) : (
-    // 🔹 EXPANDED MODE (normal button)
-    <button
-      onClick={onNewChat}
-      className="w-full flex items-center gap-2 rounded-xl px-3 py-3 mb-2 text-zinc-800 hover:bg-gray-200 transition"
-    >
-      <img src={chat} className="w-5 h-5" />
-      New chat
-    </button>
-  )}
+    if (activeId === "draft") {
+      cursorRef.current = null;
+    }
+  }, [activeId]);
 
+  useEffect(() => {
+    if (window.innerWidth > 768) inputRef.current?.focus();
+  }, [activeId]);
 
-  {!collapsed && (
-    conversations
-      .slice()
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .map((c) => (
-        <div
-          key={c.id}
-          className={classNames(
-            "relative group flex items-center justify-between rounded-lg px-3 py-2 mb-1",
-            c.id === activeId
-              ? "bg-blue-100 text-blue-700"
-              : "hover:bg-blue-100 text-zinc-800"
-          )}
-        >
-          {/* CHAT TITLE */}
-          {editingChatId === c.id ? (
-            <input
-              value={editingTitle}
-              autoFocus
-              onChange={(e) => setEditingTitle(e.target.value)}
-              onBlur={() => saveRename(c.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") saveRename(c.id);
-                if (e.key === "Escape") cancelRename();
-              }}
-              className="flex-1 text-sm px-2 py-1 rounded border border-gray-300 outline-none"
-            />
-          ) : (
-            <button
-              onClick={() => setActiveId(c.id)}
-              className="w-full flex-1 text-left text-sm truncate px-2 py-2 rounded transition-colors duration-200 hover:bg-blue-100 hover:text-blue-700"
-            >
-              {c.title}
-            </button>
-          )}
+  useEffect(() => {
+    const scrollToBottom = () => {
+      const el = bottomRef.current;
+      if (!el) return;
 
-          {/* 3 DOT BUTTON */}
-          <button
-            onClick={() =>
-              setMenuOpenId(menuOpenId === c.id ? null : c.id)
+      const container = el.closest("section");
+      if (!container) return;
+
+      container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
+    };
+
+    const t1 = setTimeout(scrollToBottom, 150);
+    const t2 = setTimeout(scrollToBottom, 400);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [activeConv?.messages?.length, loading, showSolmanCrForm]);
+
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [activeId]);
+
+  function focusInput() {
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }
+
+  function updateActiveMessages(updater) {
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.id !== activeId) return c;
+        const messages = typeof updater === "function" ? updater(c.messages) : updater;
+        return { ...c, messages, updatedAt: Date.now() };
+      })
+    );
+  }
+
+  function handleDelete(id) {
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+    if (id === activeId) setActiveId("draft");
+    setMenuOpenId(null);
+  }
+
+  function saveRename(id) {
+    if (!editingTitle.trim()) return cancelRename();
+    setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title: editingTitle } : c)));
+    setEditingChatId(null);
+    setEditingTitle("");
+  }
+
+  function cancelRename() {
+    setEditingChatId(null);
+    setEditingTitle("");
+  }
+
+  function onNewChat() {
+    setActiveId("draft");
+    cursorRef.current = null;
+    setShowSolmanCrForm(false);
+
+    setConversations((prev) => {
+      const withoutDraft = prev.filter((c) => c.id !== "draft");
+      return [
+        {
+          id: "draft",
+          title: "New chat",
+          messages: [
+            {
+              role: "assistant",
+              text: "Hi, Welcome to ImpleVista AI. How may I assist you?",
+              suggestions: [
+                "Show latest purchase orders",
+                "Show PO created in January 2026",
+                "Show details of PO 4500001933",
+              ],
+            },
+          ],
+          updatedAt: Date.now(),
+        },
+        ...withoutDraft,
+      ];
+    });
+
+    setInput("");
+    baseRef.current = "";
+    interimRef.current = "";
+    setEditingIndex(null);
+    setEditingText("");
+    focusInput();
+  }
+
+  function startEditMessage(idx) {
+    const m = activeConv?.messages?.[idx];
+    if (!m || m.role !== "user") return;
+    setEditingIndex(idx);
+    setEditingText(m.text || "");
+  }
+
+  function cancelEdit() {
+    setEditingIndex(null);
+    setEditingText("");
+    focusInput();
+  }
+
+  function applyEditLocal({ removeFollowingAssistant = true } = {}) {
+    const newText = editingText.trim();
+    if (editingIndex == null || !newText) return null;
+
+    updateActiveMessages((msgs) => {
+      const copy = [...msgs];
+      copy[editingIndex] = { ...copy[editingIndex], text: newText };
+      if (removeFollowingAssistant) return copy.slice(0, editingIndex + 1);
+      return copy;
+    });
+
+    setEditingIndex(null);
+    setEditingText("");
+    return newText;
+  }
+
+  const ensureSessionExistsLocally = useCallback((sessionId, firstUserText) => {
+    if (!isMongoId(sessionId)) return;
+
+    const title = generateTitle(firstUserText || "");
+
+    setConversations((prev) => {
+      if (prev.some((c) => String(c.id) === String(sessionId))) return prev;
+
+      const hasDraft = prev.some((c) => c.id === "draft");
+      if (hasDraft) {
+        return prev.map((c) => (c.id === "draft" ? { ...c, id: sessionId, title, updatedAt: Date.now() } : c));
+      }
+
+      return [{ id: sessionId, title, messages: [], updatedAt: Date.now() }, ...prev];
+    });
+  }, []);
+
+  async function onSend({ overrideText, fromEdit = false } = {}) {
+    if (!isConnected) return;
+
+    const text = String(overrideText ?? input).trim();
+    if (!text || loading) return;
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+
+    const normalizedText = text.toLowerCase();
+
+    if (
+      normalizedText.includes("create change request") ||
+      normalizedText.includes("create solman cr") ||
+      normalizedText.includes("raise change request")
+    ) {
+      baseRef.current = "";
+      interimRef.current = "";
+
+      if (!fromEdit) {
+        updateActiveMessages((m) => [...m, { role: "user", text }]);
+
+        setConversations((prev) =>
+          prev.map((c) => {
+            if (c.id !== activeId) return c;
+            if (c.title === "New chat" || c.title === "SAP MM Chat") {
+              return { ...c, title: generateTitle(text) };
             }
-            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-300"
-          >
-            ⋮
-          </button>
+            return c;
+          })
+        );
+      }
 
-          {/* DROPDOWN */}
-          {menuOpenId === c.id && (
-            <div className="absolute right-2 top-10 w-32 bg-white border border-gray-200 rounded-lg shadow-md z-50">
-              <button
-                onClick={() => {
-                  setEditingChatId(c.id);
-                  setEditingTitle(c.title);
-                  setMenuOpenId(null);
-                }} className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
-              >
-                Rename
-              </button>
-              <button
-                onClick={() => handleDelete(c.id)}
-                className="w-full text-left px-3 py-2 text-sm text-red-500 hover:bg-gray-100"
-              >
-                Delete
-              </button>
-            </div>
-          )}
-        </div>
-      ))
-  )}
-</div>
+      updateActiveMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          text: "Sure — please fill the required SolMan change request details.",
+        },
+      ]);
 
-{/* FOOTER */}
-<div className="p-3 border-t border-gray-200">
-  {collapsed ? (
-    // 🔹 COLLAPSED → only profile image
-    <div className="flex justify-center">
-      <img
-        src={userImg}
-        alt="user"
-        className="w-8 h-8 rounded-full object-cover"
-      />
-    </div>
-  ) : (
-    // 🔹 EXPANDED → user details
-    <div className="flex items-center gap-3">
-      {/* USER IMAGE */}
-      <img
-        src={userImg}
-        alt="user"
-        className="w-9 h-9 rounded-full object-cover"
-      />
+      setInput("");
+      setShowSolmanCrForm(true);
+      sendingRef.current = false;
+      return;
+    }
 
-      {/* USER INFO */}
-      <div className="flex flex-col">
-        <span className="text-sm font-semibold text-zinc-800">
-          User
-        </span>
-        <span className="text-xs text-zinc-500">
-          Chatbot v1.0
-        </span>
-      </div>
-    </div>
-  )}
-</div>
-</aside>
+    baseRef.current = "";
+    interimRef.current = "";
 
-{/* MAIN */}
-<main className="flex-1 flex flex-col overflow-hidden bg-white">
+    if (!fromEdit) {
+      updateActiveMessages((m) => [...m, { role: "user", text }]);
 
-{/* HEADER */}
-<header className="flex items-center justify-between bg-white border-b border-gray-200 px-4 py-3">
-  <div className="flex items-center gap-3">
-
-    {/* MOBILE MENU */}
-    <button
-      onClick={() => setSidebarOpen((v) => !v)}
-      className="p-2 rounded-lg hover:bg-gray-200 md:hidden"
-    >
-      <img src={menuIcon} className="w-6 h-6" />
-    </button>
-
-    <div>
-      <div className="text-sm font-semibold">SAP Assistant</div>
-      <div className="text-xs text-zinc-500">
-        {loading ? "Thinking…" : "Online"} • {formatTime()}
-      </div>
-    </div>
-  </div>
-
-  <span
-    className={classNames(
-      "inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold",
-      loading
-        ? "bg-amber-500/15 text-amber-300"
-        : "bg-emerald-500/15 text-emerald-300"
-    )}
-  >
-    {loading ? "Busy" : "Ready"}
-  </span>
-</header>
-
-{/* Messages */}
-
-<section
-  className="flex-1 overflow-y-auto px-4 py-6 pt-4 pb-28 overscroll-contain"
-  onScroll={(e) => {
-    const el = e.target;
-    const isNearBottom =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-
-    setShowScrollDown(!isNearBottom);
-  }}
->
-  <div className="mx-auto max-w-4xl space-y-4">
-    {activeConv?.messages?.map((m, idx) => {
-      const isUser = m.role === "user";
-      const isAssistant = m.role === "assistant";
-      const isEditing = editingIndex === idx;
-
-      return (
-        <div key={idx} className="group">
-          {/* User message: show edit button (ChatGPT style) */}
-          {isUser && !isEditing && (
-            <div className="relative">
-              <MessageBubble role={m.role} text={m.text} />
-
-              <button
-                type="button"
-                onClick={() => startEditMessage(idx)}
-                className="absolute -top-2 right-0 hidden group-hover:flex items-center gap-2 rounded-xl bg-gray-100 px-3 py-1 text-xs text-black"
-                title="Edit message"
-              >
-                <FiEdit2 />
-                <span className="hidden sm:inline">Edit</span>
-              </button>
-            </div>
-          )}
-
-          {/* User message: edit mode inline */}
-          {isUser && isEditing && (
-            <div className="rounded-2xl  bg-gray-100 p-3">
-              <div className="mb-2 text-xs text-blue-600">
-                Editing message to save & resend,or else click cancel.
-              </div>
-
-              <textarea
-                value={editingText}
-                onChange={(e) => setEditingText(e.target.value)}
-                rows={3}
-                className="w-full resize-none rounded-xl border border-zinc-800 bg-white px-3 py-2 text-sm text-black outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20"
-              />
-
-              <div className="mt-2 flex gap-2 justify-end">
-                <button
-                  type="button"
-                  onClick={cancelEdit}
-                  className="rounded-xl border border-zinc-800 px-3 py-2 text-sm text-white bg-black"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const newText = applyEditLocal({ removeFollowingAssistant: true });
-                    if (newText) onSend({ overrideText: newText, fromEdit: true });
-                  }}
-                  className="rounded-xl bg-amber-500 px-3 py-2 text-sm font-semibold text-white bg-green-600"
-                >
-                  Save & resend
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Assistant message: copy button */}
-          {isAssistant && (
-            <div className="relative">
-              <MessageBubble
-                role={m.role}
-                text={m.text}
-                suggestions={m.suggestions}   // ✅ ADD THIS
-              />
-              <button
-                type="button"
-                onClick={() => onCopyAssistant(idx, m.text)}
-                className={`absolute -top-6 left-10 hidden group-hover:flex items-center gap-2 rounded-xl px-3 py-1 text-xs font-medium transition ${copiedAtIndex === idx
-                  ? "bg-gray-300 text-zinc-800"
-                  : "bg-gray-100 text-zinc-700 hover:bg-gray-200"
-                  }`}
-                title="Copy response"
-              >
-                {copiedAtIndex === idx ? <FiCheck /> : <FiCopy />}
-                <span className="hidden sm:inline">
-                  {copiedAtIndex === idx ? "Copied" : "Copy"}
-                </span>
-              </button>
-            </div>
-          )}
-        </div>
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== activeId) return c;
+          if (c.title === "New chat" || c.title === "SAP MM Chat") return { ...c, title: generateTitle(text) };
+          return c;
+        })
       );
-    })}
+    }
 
-    {loading && <MessageBubble role="assistant" text="Executing..." />}
+    setInput("");
+    setTimeout(() => inputRef.current?.blur(), 50);
+    setLoading(true);
 
-    <div ref={bottomRef} />
-  </div>
-</section>
-{showScrollDown && (
-      <button
-        onClick={() =>
-          bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const isNextQuery = /\b(next|more|another|load|show\s+more)\b/i.test(text);
+      if (!isNextQuery) cursorRef.current = null;
+
+      const sessionIdToSend = isMongoId(activeId) ? activeId : null;
+
+      summaryConvIdsRef.current = new Set([String(activeId)]);
+      setStatusText("Interpreting your query...");
+
+      let streamedPayload = null;
+
+      await sendChatMessageStream(text, {
+        apiBase,
+        systemId: activeSession.systemId,
+        sapUser: activeSession?.sapUser ? activeSession.sapUser : null,
+        sessionId: sessionIdToSend,
+        cursor: isNextQuery ? cursorRef.current : null,
+        signal: controller.signal,
+
+        onPhase: ({ message }) => {
+          if (message) setStatusText(message);
+        },
+
+        onReply: (payload) => {
+          streamedPayload = payload;
+        },
+      });
+
+      const data = streamedPayload;
+      if (!data) throw new Error("No reply received from stream");
+
+      updateActiveMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          text: data.reply ?? "",
+          suggestions: data.suggestions,
+          summary: data.summary || "",
+          summaryStatus: data.summary ? "done" : "pending",
+        },
+      ]);
+
+      cursorRef.current = data?.cursor || null;
+
+      if (data?.sessionId && isMongoId(data.sessionId)) {
+        const newSessionId = data.sessionId;
+
+        summaryConvIdsRef.current.add(String(newSessionId));
+
+        if (activeId === "draft") {
+          ensureSessionExistsLocally(newSessionId, text);
+
+          const newTitle = generateTitle(text);
+          authFetch(`${apiBase}/chat/sessions/${newSessionId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: newTitle }),
+          }).catch(() => {});
         }
-        className="
-          fixed bottom-20 right-6
-          w-10 h-10
-          flex items-center justify-center
-          rounded-full
-          bg-white/90 backdrop-blur
-          border border-gray-300
-          shadow-lg
-          hover:bg-white hover:scale-105
-          transition-all duration-200
-          z-50
-        "
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          className="w-5 h-5 text-gray-700"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-    )}
 
-{/* Composer */}
-<footer className="sticky bottom-0 bg-white px-4 py-3 border-t border-gray-200">
-  <div className="mx-auto max-w-4xl">
-    <div className="rounded-2xl border border-gray-300 bg-gray-100 p-3">
-      <div className="flex items-end gap-2">
-        <button
-          type="button"
-          onClick={onMicClick}
-          className={classNames(
-            "rounded-xl px-3 py-2 border transition flex items-center justify-center",
-            listening
-              ? "bg-rose-600 text-white border-rose-500 hover:bg-rose-700"
-              : "bg-white text-zinc-700 border-gray-300 hover:bg-gray-200"
-          )}
-          title={listening ? "Stop voice input" : "Start voice input"}
-        >
-          {listening ? <FiMicOff className="text-lg" /> : <FiMic className="text-lg" />}
-        </button>
+        setActiveId(newSessionId);
+        window.dispatchEvent(new Event("chatSessionsChanged"));
+      }
+    } catch (e) {
+      if (e?.name === "AbortError") {
+        updateActiveMessages((m) => [...m, { role: "assistant", text: "Stopped generating." }]);
+      } else {
+        updateActiveMessages((m) => [...m, { role: "assistant", text: `Error: ${e.message}` }]);
+      }
+    } finally {
+      setLoading(false);
+      sendingRef.current = false;
+      abortRef.current = null;
+      setStatusText("");
+    }
+  }
 
-        <textarea
-          ref={inputRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          rows={2}
-          placeholder='Type or speak…'
-          className="flex-1 resize-none rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-zinc-800 placeholder:text-zinc-500 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-400/30"
+  function onKeyDown(e) {
+    if (editingIndex != null) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const newText = applyEditLocal({ removeFollowingAssistant: true });
+        if (newText) onSend({ overrideText: newText, fromEdit: true });
+        return;
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelEdit();
+        return;
+      }
+    }
+  }
+
+  const { supported, listening, start, stop } = useSpeechToText({
+    onText: (text, meta) => {
+      if (!isConnected) return;
+      const t = String(text || "").trim();
+      if (!t) return;
+
+      const base = baseRef.current.trim();
+
+      if (meta?.interim) {
+        interimRef.current = t;
+        setInput(base ? `${base} ${t}` : t);
+      } else {
+        interimRef.current = "";
+        setInput(base ? `${base} ${t}` : t);
+      }
+
+      focusInput();
+    },
+    onError: () => {
+      interimRef.current = "";
+      focusInput();
+    },
+  });
+
+  function onMicClick() {
+    if (!supported) {
+      alert("Speech recognition not supported in this browser (try Chrome / Edge).");
+      return;
+    }
+
+    if (!isConnected) return;
+
+    if (listening) {
+      stop();
+      interimRef.current = "";
+      focusInput();
+      return;
+    }
+
+    baseRef.current = input.trim();
+    interimRef.current = "";
+
+    start();
+    focusInput();
+  }
+
+  async function onCopyAssistant(idx, text) {
+    const ok = await copyToClipboard(text);
+    if (!ok) return;
+
+    setCopiedAtIndex(idx);
+    setTimeout(() => setCopiedAtIndex(null), 1200);
+  }
+
+  function onMessagesScroll(e) {
+    const el = e.target;
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+    setShowScrollDown(!isNearBottom);
+  }
+
+  const handleConnectedFromSapLogin = async (payload) => {
+    try {
+      localStorage.removeItem("forceSapLogin");
+    } catch {}
+
+    await loadTiles();
+    await loadSystems();
+
+    const sid = normalizeSystemId(payload?.systemId || payload?.system?.systemId);
+    const sapUser = String(payload?.sapUser || payload?.system?.sapUser || "").trim();
+
+    if (sid && sapUser) {
+      const next = normalizeActiveSession({
+        systemId: sid,
+        sapUser,
+        firstName: payload?.firstName,
+        fullName: payload?.fullName,
+      });
+
+      setActiveSession(next);
+      localStorage.setItem("sapActiveSession", JSON.stringify(next));
+      window.dispatchEvent(new Event("sapActiveSessionChanged"));
+    }
+
+    setSapView("chat");
+    setSelectedSystem(null);
+  };
+
+  const handleDisconnect = async () => {
+    setActiveSession(null);
+    localStorage.removeItem("sapActiveSession");
+    window.dispatchEvent(new Event("sapActiveSessionChanged"));
+    setShowSolmanCrForm(false);
+
+    authFetch(`${apiBase}/sap/disconnect`, { method: "POST" }).catch(() => {});
+  };
+
+  const openSapLogin = (system = null) => {
+    try {
+      localStorage.removeItem("forceSapLogin");
+    } catch {}
+
+    setSelectedSystem(system);
+    setSapView("saplogin");
+    setShowSolmanCrForm(false);
+  };
+
+  const handleSystemSelect = useCallback(
+    (system) => {
+      setSelectedSystem(system);
+
+      try {
+        const prev = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
+        const payload = {
+          systemId: system?.systemId ? normalizeSystemId(system.systemId) : null,
+          name: system?.name || "",
+          username: prev?.username || "User",
+          sapUser: system?.sapUser || prev?.sapUser || null,
+        };
+
+        if (payload.systemId) {
+          localStorage.setItem("sapActiveSystem", JSON.stringify(payload));
+        }
+      } catch {}
+
+      localStorage.removeItem("chatSessionId");
+      setActiveId("draft");
+      onNewChat();
+    },
+    [onNewChat]
+  );
+
+  const solmanCreateCrForm = showSolmanCrForm ? (
+    <div className="px-4 pb-4">
+      <SolmanCreateCrForm
+        systemId={activeSession?.systemId || "HSM"}
+        sapUser={activeSession?.sapUser || ""}
+        onCancel={() => setShowSolmanCrForm(false)}
+        onSuccess={(data) => {
+          setShowSolmanCrForm(false);
+          updateActiveMessages((m) => [
+            ...m,
+            {
+              role: "assistant",
+              text: `CR ${data.changeRequestId} created successfully. Status: ${data.status}`,
+            },
+          ]);
+        }}
+      />
+    </div>
+  ) : null;
+
+  return (
+    <div className="fixed inset-0 bg-[#f7f7f8] text-zinc-800">
+      {sapView === "saplogin" ? (
+        <SapLogin
+          onConnected={handleConnectedFromSapLogin}
+          selectedSystem={selectedSystem}
+          onBack={() => {
+            let force = false;
+            try {
+              force = localStorage.getItem("forceSapLogin") === "1";
+            } catch {}
+            if (force) return;
+
+            setSapView("chat");
+            setSelectedSystem(null);
+          }}
         />
+      ) : (
+        <div className="flex h-full overflow-hidden">
+          <Sidebar
+            sidebarOpen={sidebarOpen}
+            collapsed={collapsed}
+            activeId={activeId}
+            conversations={conversations}
+            editingChatId={editingChatId}
+            editingTitle={editingTitle}
+            menuOpenId={menuOpenId}
+            setSidebarOpen={setSidebarOpen}
+            setCollapsed={setCollapsed}
+            setMenuOpenId={setMenuOpenId}
+            setEditingChatId={setEditingChatId}
+            setEditingTitle={setEditingTitle}
+            saveRename={saveRename}
+            cancelRename={cancelRename}
+            onNewChat={onNewChat}
+            setActiveId={setActiveId}
+            handleDelete={handleDelete}
+            userName={userName}
+            onAddNewSystem={() => openSapLogin(null)}
+            systems={systems}
+            onOpenSapLogin={openSapLogin}
+            onSystemsChanged={async () => {
+              await loadSystems();
+              await loadTiles();
+            }}
+            activeSession={activeSession}
+          />
 
-        {/* Stop button appears in composer like ChatGPT */}
-        {loading ? (
-          <button
-            type="button"
-            onClick={onStop}
-            className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 flex items-center gap-2"
-            title="Stop generating"
-          >
-            <FiSquare className="text-lg" />
-            <span className="hidden sm:inline">Stop</span>
-          </button>
-        ) : (
-          <button
-            onClick={() => onSend()}
-            disabled={!input.trim()}
-            className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center gap-2" title="Send"
-          >
-            <FiSend className="text-lg" />
-            <span className="hidden sm:inline">Send</span>
-          </button>
-        )}
-      </div>
-
-      {/* <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 px-1 text-xs text-zinc-600">
-        <span>Enter to send</span>
-        <span>•</span>
-        <span>Shift+Enter for newline</span>
-        <span>•</span>
-        <span>Esc cancels edit</span>
-      </div> */}
-
-      {!supported && (
-        <div className="mt-2 px-1 text-xs text-amber-300">
-          Voice input not supported in this browser. Try Chrome / Edge.
+          <ChatWindow
+            loading={loading}
+            input={input}
+            listening={listening}
+            supported={supported}
+            showScrollDown={showScrollDown}
+            activeConv={activeConv}
+            editingIndex={editingIndex}
+            editingText={editingText}
+            statusText={statusText}
+            copiedAtIndex={copiedAtIndex}
+            bottomRef={bottomRef}
+            inputRef={inputRef}
+            setSidebarOpen={setSidebarOpen}
+            setInput={setInput}
+            onSend={onSend}
+            onStop={onStop}
+            onKeyDown={onKeyDown}
+            onMicClick={onMicClick}
+            onCopyAssistant={onCopyAssistant}
+            startEditMessage={startEditMessage}
+            cancelEdit={cancelEdit}
+            applyEditLocal={applyEditLocal}
+            setEditingText={setEditingText}
+            onMessagesScroll={onMessagesScroll}
+            onDisconnect={handleDisconnect}
+            userName={userName}
+            onOpenSapLogin={openSapLogin}
+            systems={systems}
+            onSystemSelect={handleSystemSelect}
+            setConversations={setConversations}
+            activeSession={activeSession}
+            setActiveSession={setActiveSession}
+            setActiveId={setActiveId}
+            onConnected={async () => {
+              await loadTiles();
+              await loadSystems();
+            }}
+            tiles={tiles}
+            showSolmanCrForm={showSolmanCrForm}
+            setShowSolmanCrForm={setShowSolmanCrForm}
+            solmanCreateCrForm={solmanCreateCrForm}
+          />
         </div>
       )}
     </div>
-  </div>
-</footer>
-</main>
-</div>
-</div>
-);
+  );
 }

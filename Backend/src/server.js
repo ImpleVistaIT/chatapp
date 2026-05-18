@@ -1,52 +1,36 @@
-import express from "express";
-import cors from "cors";
 import dotenv from "dotenv";
-
-import { chatRoutes } from "./routes/chat.routes.js";
-import { errorHandler } from "./middleware/errorHandler.js";
+import { app } from "./app.js";
+import { connectMongo } from "./db/mongo.js";
 
 dotenv.config();
 
-const app = express();
-
-// --- Middleware ---
-app.use(
-  cors({
-    // Allow your Vite dev server origins (local + LAN)
-    origin: [
-      "http://localhost:5173",
-      "http://192.168.1.110:5173",
-      // optional: if you access Vite via hostname
-      // "http://your-server-hostname:5173",
-    ],
-    credentials: true,
-  })
-);
-
-app.use(express.json({ limit: "2mb" }));
-
-// --- Health ---
-app.get("/health", (req, res) => {
-  res.json({ ok: true, service: "sap-chat", ts: new Date().toISOString() });
-});
-
-// --- Chat endpoint ---
-app.use("/chat", chatRoutes);
-
-// --- 404 ---
-app.use((req, res) => {
-  res.status(404).json({ ok: false, error: "Not found" });
-});
-
-// --- Error handler ---
-app.use(errorHandler);
+/**
+ * Disable SSL validation ONLY in development
+ */
+if (process.env.NODE_ENV !== "production") {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
 
 const port = Number(process.env.PORT || 3000);
-
-// IMPORTANT: listen on all interfaces so other machines can reach it via 192.168.1.110
 const host = process.env.HOST || "0.0.0.0";
 
-app.listen(port, host, () => {
-  console.log(`✅ SAP Chat backend running at http://${host}:${port}`);
-  console.log(`✅ Health check: http://192.168.1.110:${port}/health`);
+async function start() {
+  await connectMongo();
+
+  app.listen(port, host, () => {
+    console.log("======================================");
+    console.log("🚀 SAP CHAT BACKEND STARTED");
+    console.log(`🌐 URL: http://localhost:${port}`);
+    console.log(
+      process.env.NODE_ENV !== "production"
+        ? "⚠️  SSL CHECK DISABLED (DEV MODE)"
+        : "✅ Running in PRODUCTION mode"
+    );
+    console.log("======================================");
+  });
+}
+
+start().catch((err) => {
+  console.error("❌ Failed to start server:", err);
+  process.exit(1);
 });
