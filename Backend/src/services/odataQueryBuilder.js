@@ -62,10 +62,6 @@ export function sanitizeODataQuery(query = {}, { maxTop = 200 } = {}) {
     qs.set(key, String(raw));
   }
 
-  if (!qs.has("$format")) {
-    qs.set("$format", "json");
-  }
-
   return qs.toString();
 }
 

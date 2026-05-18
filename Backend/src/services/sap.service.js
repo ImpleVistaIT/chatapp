@@ -1,5 +1,6 @@
 import axios from "axios";
 import https from "node:https";
+import { parseStringPromise } from "xml2js";
 
 // -----------------------
 // SAP Date Normalization
@@ -8,9 +9,15 @@ function parseSapDate(value) {
   if (typeof value !== "string") return value;
 
   const match = /\/Date\((\d+)\)\//.exec(value);
-  if (!match) return value;
+  if (match) {
+    return new Date(Number(match[1])).toISOString().split("T")[0];
+  }
 
-  return new Date(Number(match[1])).toISOString().split("T")[0];
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value)) {
+    return value.split("T")[0];
+  }
+
+  return value;
 }
 
 function normalizeSapData(data) {
@@ -77,6 +84,46 @@ function safePreview(x, max = 300) {
 }
 
 // -----------------------
+// XML -> SAP-like JSON
+// -----------------------
+function extractText(v) {
+  if (Array.isArray(v)) return extractText(v[0]);
+  if (v && typeof v === "object" && "_" in v) return v._;
+  if (typeof v === "string") return v;
+  return v;
+}
+
+async function parseSapXml(xmlText) {
+  const parsed = await parseStringPromise(xmlText, {
+    explicitArray: false,
+    mergeAttrs: true,
+    trim: true,
+  });
+
+  const feed = parsed?.feed;
+  if (!feed) {
+    throw new Error("SAP XML response does not contain feed");
+  }
+
+  let entries = feed.entry || [];
+  if (!Array.isArray(entries)) entries = [entries];
+
+  const results = entries.map((entry) => {
+    const props = entry?.content?.["m:properties"] || {};
+    const row = {};
+
+    for (const [key, value] of Object.entries(props)) {
+      const cleanKey = key.includes(":") ? key.split(":")[1] : key;
+      row[cleanKey] = extractText(value);
+    }
+
+    return row;
+  });
+
+  return { d: { results } };
+}
+
+// -----------------------
 // MAIN FUNCTION
 // -----------------------
 export async function fetchFromSap({ system, service, relativePath }, authOverride) {
@@ -92,7 +139,9 @@ export async function fetchFromSap({ system, service, relativePath }, authOverri
   try {
     const res = await axios.get(url, {
       httpsAgent: makeHttpsAgent(),
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json, application/atom+xml, application/xml, text/xml",
+      },
       auth: { username, password },
       timeout: 30000,
       validateStatus: () => true,
@@ -112,10 +161,20 @@ export async function fetchFromSap({ system, service, relativePath }, authOverri
     }
 
     let parsed;
-    try {
-      parsed = JSON.parse(res.data);
-    } catch {
-      throw new Error(`SAP returned non-JSON response: ${String(res.data).slice(0, 800)}`);
+    const body = String(res.data || "").trim();
+    const contentType = String(res.headers?.["content-type"] || "").toLowerCase();
+
+    if (contentType.includes("json") || body.startsWith("{") || body.startsWith("[")) {
+      parsed = JSON.parse(body);
+    } else if (
+      contentType.includes("xml") ||
+      body.startsWith("<feed") ||
+      body.startsWith("<?xml") ||
+      body.startsWith("<")
+    ) {
+      parsed = await parseSapXml(body);
+    } else {
+      throw new Error(`SAP returned unsupported response format: ${body.slice(0, 800)}`);
     }
 
     const normalized = normalizeSapData(parsed);
