@@ -10,14 +10,36 @@ function isKeyValueLine(line) {
   return /.+:\s+.+/.test(line);
 }
 
+// ✅ split key/value tokens from ONE-LINE pipe responses into separate "lines"
+function splitKeyValueTokens(text = "") {
+  return String(text)
+    .replace(/\r/g, "")
+    .split("|")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+// ✅ HELPER FUNCTION: normalize field names
+function normalizeFieldName(fieldName) {
+  return String(fieldName || "")
+    .replace(/^by$/i, "Created By")
+    .trim();
+}
+
 function parseKeyValue(text) {
-  const lines = splitNonEmptyLines(text);
+  // ✅ support both newline key/value AND one-line pipe key/value
+  const rawLines = splitNonEmptyLines(text);
+  const lines =
+    rawLines.length === 1 && rawLines[0].includes("|")
+      ? splitKeyValueTokens(rawLines[0])
+      : rawLines;
+
   const rows = [];
 
   for (const line of lines) {
     const idx = line.indexOf(":");
     if (idx === -1) continue;
-    const key = line.slice(0, idx).trim();
+    const key = normalizeFieldName(line.slice(0, idx).trim());
     const value = line.slice(idx + 1).trim();
     if (key && value) rows.push({ Field: key, Value: value });
   }
@@ -28,19 +50,16 @@ function parseKeyValue(text) {
   return null;
 }
 
-// ✅ HELPER FUNCTION: normalize field names
-function normalizeFieldName(fieldName) {
-  return String(fieldName || "")
-    .replace(/^by$/i, "Created By")    // Replace "by" with "Created By"
-    .trim();
-}
-
 function parsePipeTable(text) {
   try {
     const lines = splitNonEmptyLines(text);
     const pipeLines = lines.filter((l) => l.includes("|"));
 
     if (pipeLines.length < 1) return null;
+
+    // ✅ IMPORTANT: If it's ONLY ONE LINE with pipes, DON'T render horizontal table.
+    // We want that case to be handled as vertical KV.
+    if (pipeLines.length === 1) return null;
 
     const firstLine = pipeLines[0];
     const isDataRow = /^\d+\)\s*PO/.test(firstLine);
@@ -49,19 +68,14 @@ function parsePipeTable(text) {
     let dataLines;
 
     if (isDataRow) {
-      // ✅ DYNAMIC: Extract header from first data line
-      // Format: "1) PO 4500001933 | CC: 1710 | Date: 2026-01-21 | By: S4H_MM_DEM | Vendor: N/A | Cur: N/A | Status: 9"
-      
       const firstCells = firstLine.split("|").map((x) => x.trim());
       header = [];
 
-      // First cell: "1) PO 4500001933" -> "SL.No" and "PO Numbers added"
-      if (/^\d+\)\s*PO/.test(firstCells[0])) {  
+      if (/^\d+\)\s*PO/.test(firstCells[0])) {
         header.push("SL.No");
         header.push("PO Number");
       }
 
-      // Remaining cells: extract key from "Key: value" format
       for (let i = 1; i < firstCells.length; i++) {
         const cell = firstCells[i];
         const colonIdx = cell.indexOf(":");
@@ -75,7 +89,6 @@ function parsePipeTable(text) {
 
       dataLines = pipeLines;
     } else {
-      // For non-PO tables: use first line as header
       header = firstLine
         .split("|")
         .map((x) => x.trim())
@@ -90,24 +103,21 @@ function parsePipeTable(text) {
       const cells = line.split("|").map((x) => x.trim());
       const row = {};
 
-      // First cell: extract serial number AND PO number from "1) PO 4500001933"
       if (isDataRow) {
         const slMatch = cells[0]?.match(/^(\d+)\)/);
         const poMatch = cells[0]?.match(/^\d+\)\s*PO\s*(\d+)/);
-        
-        row[header[0]] = slMatch ? slMatch[1] : (rowIndex + 1).toString();  // SL.No
-        row[header[1]] = poMatch ? poMatch[1] : "";  // PO Number
+
+        row[header[0]] = slMatch ? slMatch[1] : (rowIndex + 1).toString();
+        row[header[1]] = poMatch ? poMatch[1] : "";
       } else {
         row[header[0]] = cells[0] || "";
       }
 
-      // Remaining cells: extract value after colon
-      // Start from index 2 because we now have 2 columns from first cell
       for (let i = 1; i < cells.length; i++) {
         const cell = cells[i];
         const colonIdx = cell.indexOf(":");
-        const headerIndex = isDataRow ? i + 1 : i;  // Adjust for extra PO Number column
-        
+        const headerIndex = isDataRow ? i + 1 : i;
+
         if (headerIndex < header.length) {
           if (colonIdx > -1) {
             const value = cell.slice(colonIdx + 1).trim();
@@ -127,6 +137,7 @@ function parsePipeTable(text) {
     return null;
   }
 }
+
 function parseBullets(text) {
   const lines = splitNonEmptyLines(text);
   const bullets = lines
@@ -196,6 +207,12 @@ function parseMeasuresLines(text) {
 // ✅ FINAL EXPORT FUNCTION
 export function replyToTable(replyText) {
   const text = String(replyText ?? "");
+  const lines = splitNonEmptyLines(text);
+
+  // ✅ if completely empty, don't show table / green box
+  if (!text.trim()) {
+    return null;
+  }
 
   // ✅ IMPORTANT FIX: DO NOT convert PO ITEMS to table
   if (text.includes("PO Item:")) {
@@ -206,45 +223,86 @@ export function replyToTable(replyText) {
   const measures = parseMeasuresLines(text);
   if (measures) return measures;
 
-  // Prefer real tables first
+  // ✅ FORCE VERTICAL for ONE-LINE pipe key/value
+  // Example:
+  // CC: 1710 | Date: 2026-01-21 | By: USER1 | Status: 9
+  const isSingleLinePipe =
+    lines.length === 1 && lines[0].includes("|");
+
+  if (isSingleLinePipe) {
+    const parts = splitKeyValueTokens(lines[0]);
+    const kvParts = parts.filter(isKeyValueLine);
+
+    if (kvParts.length >= 2) {
+      const rows = kvParts
+        .map((p) => {
+          const idx = p.indexOf(":");
+          const key = normalizeFieldName(
+            p.slice(0, idx).trim()
+          );
+
+          const value =
+            p.slice(idx + 1).trim() || "-";
+
+          return key
+            ? { Field: key, Value: value }
+            : null;
+        })
+        .filter(Boolean);
+
+      if (rows.length >= 2) {
+        return {
+          columns: ["Field", "Value"],
+          rows,
+        };
+      }
+    }
+  }
+
+  // ✅ Prefer real tables (multi-line)
   const pipe = parsePipeTable(text);
   if (pipe) return pipe;
 
-  // 🔥 FIX: detect SAP multi-item structured response
-const isSAPItemBlock =
-  text.includes("Po Item") &&
-  text.includes("Material") &&
-  text.includes("Item");
+  // 🔥 SAP multi-item structured response
+  const isSAPItemBlock =
+    text.includes("Po Item") &&
+    text.includes("Material") &&
+    text.includes("Item");
 
-if (isSAPItemBlock) {
-  return {
-    columns: [],
-    rows: splitNonEmptyLines(text).map((l) => ({ text: l })),
-  };
-}
-
-  // Key-value format
-  const kv = parseKeyValue(text);
-  if (kv) return kv;
-
-  // Bullets
-  const bullets = parseBullets(text);
-  if (bullets) return bullets;
-
-  // Fallback: multi-line -> simple rows
-  const lines = splitNonEmptyLines(text);
-
-  if (lines.length > 1) {
+  if (isSAPItemBlock) {
     return {
       columns: [],
-      rows: lines.map((l) => ({ text: l })),
+      rows: splitNonEmptyLines(text).map((l) => ({
+        text: l,
+      })),
     };
   }
 
+  // ✅ Key-value format (newline OR fallback)
+  const kv = parseKeyValue(text);
+  if (kv) return kv;
+
+  // ✅ Bullets
+  const bullets = parseBullets(text);
+  if (bullets) return bullets;
+
+  // ✅ Multi-line plain text
+  if (lines.length > 1) {
+    return {
+      columns: [],
+      rows: lines.map((l) => ({
+        text: l,
+      })),
+    };
+  }
+
+  // ✅ Single text only (normal text message)
   return {
     columns: [],
-    rows: [{ text: text.trim() || "-" }],
+    rows: [
+      {
+        text: text.trim(),
+      },
+    ],
   };
 }
-
-//manas code

@@ -2,21 +2,23 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Chatbot</title>
+  <title>PO Chat UI</title>
+
   <style>
     body {
-      font-family: sans-serif;
-      background: #f0f0f0;
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
       padding: 20px;
     }
 
     #chatbox {
-      background: white;
+      background: #fff;
       padding: 15px;
-      width: 350px;
-      height: 500px;
+      width: 420px;
+      height: 520px;
       overflow-y: auto;
       border-radius: 10px;
+      border: 1px solid #ddd;
     }
 
     .message {
@@ -33,140 +35,81 @@
       color: green;
     }
 
-    .card {
-      background: #f9f9f9;
-      padding: 10px;
-      border-radius: 8px;
-      margin-top: 5px;
-      font-size: 13px;
-      border: 1px solid #ddd;
-    }
-
-    .item {
-      border-top: 1px solid #ddd;
-      margin-top: 5px;
-      padding-top: 5px;
-    }
-
     input {
-      width: 260px;
+      width: 300px;
       padding: 10px;
     }
 
     button {
       padding: 10px;
+      cursor: pointer;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
     }
   </style>
 </head>
+
 <body>
 
-<h1>Chatbot 🤖</h1>
+<h2>PO Chat Assistant</h2>
 
 <div id="chatbox"></div>
 
-<input id="userInput" placeholder="Type a message..." />
+<input id="userInput" placeholder="Ask about PO (e.g. GR qty of PO 4500001901 item 10)" />
 <button onclick="sendMessage()">Send</button>
-<h1>i am manas</h1>
-<h2> hello hi</h2>
 
 <script>
-function displayMessage(sender, text, cls) {
+function addMessage(sender, text, cls) {
   const chatbox = document.getElementById("chatbox");
 
   const div = document.createElement("div");
-  div.classList.add("message", cls);
+  div.className = `message ${cls}`;
 
-  const pre = document.createElement("pre"); // 🔥 important
-  pre.style.margin = "0";
-  pre.style.whiteSpace = "pre-wrap"; // keeps line breaks + wraps if needed
-  pre.style.fontFamily = "monospace"; // optional (better table look)
-
-  pre.textContent = `${sender}:\n${text}`;
+  const pre = document.createElement("pre");
+  pre.textContent = `${sender}: ${text}`;
 
   div.appendChild(pre);
   chatbox.appendChild(div);
-  chatbox.scrollTop = chatbox.scrollHeight;
-}
 
-// 🔥 NEW: Card renderer for PO details
-function displayPOCard(data) {
-  const chatbox = document.getElementById("chatbox");
-
-  const card = document.createElement("div");
-  card.classList.add("card");
-
-  const header = data.po_header || {};
-  const vendor = data.vendor || {};
-  const items = data.items || [];
-
-  card.innerHTML = `
-    <strong>PO ${header.po_no}</strong><br/>
-    Company: ${header.company_code}<br/>
-    Vendor: ${vendor.vendor_id}<br/>
-    Date: ${header.doc_date}<br/>
-    Currency: ${header.currency}<br/>
-    Items: ${items.length}
-  `;
-
-  // 🔥 Items section
-  items.forEach(it => {
-    const itemDiv = document.createElement("div");
-    itemDiv.classList.add("item");
-
-    itemDiv.innerHTML = `
-      <b>Item ${it.item.po_item}</b><br/>
-      Material: ${it.item.material}<br/>
-      Qty: ${it.quantity.ordered} ${it.quantity.unit}<br/>
-      Price: ${it.pricing.net_price} ${it.pricing.currency}<br/>
-      Delivery: ${it.delivery.delivery_date}
-    `;
-
-    card.appendChild(itemDiv);
-  });
-
-  chatbox.appendChild(card);
   chatbox.scrollTop = chatbox.scrollHeight;
 }
 
 async function sendMessage() {
   const input = document.getElementById("userInput");
   const message = input.value.trim();
+
   if (!message) return;
 
-  displayMessage("You", message, "user");
+  addMessage("You", message, "user");
   input.value = "";
 
-  const res = await fetch("http://localhost:4000/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message })
-  });
-
-  const data = await res.json();
-
-  // ✅ FIELD → one-line
-  if (data.reply) {
-    displayMessage("Bot", data.reply, "bot");
-    return;
-  }
-
-  // ✅ LIST → multiple lines
-  if (data.data?.lines) {
-    data.data.lines.forEach(line => {
-      displayMessage("Bot", line, "bot");
+  try {
+    const res = await fetch("http://localhost:3000/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        query: message   // ✅ IMPORTANT FIX
+      })
     });
-    return;
-  }
 
-  // ✅ DETAIL → card UI
-  if (data.data?.po_header) {
-    displayPOCard(data.data);
-    return;
-  }
+    const data = await res.json();
 
-  displayMessage("Bot", "No response", "bot");
+    addMessage("Bot", JSON.stringify(data, null, 2), "bot");
+
+  } catch (err) {
+    addMessage("Bot", "❌ Backend error or network issue", "bot");
+  }
 }
 
+// Enter key support
+document.getElementById("userInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendMessage();
+});
 </script>
 
 </body>
