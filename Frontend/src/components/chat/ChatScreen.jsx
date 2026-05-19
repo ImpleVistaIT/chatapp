@@ -10,18 +10,14 @@ function classNames(...x) {
 export default function ChatScreen({
   isConnected,
   userName,
-
   systemList = [],
   normalizeSystemId,
   handleSystemSelect,
-
   tiles = [],
   onAddNewSystem,
-
   showSystemDropdown,
   setShowSystemDropdown,
   connectingSystemId,
-
   messagesElRef,
   onMessagesScrollInternal,
   activeConv,
@@ -35,7 +31,6 @@ export default function ChatScreen({
   onSend,
   onCopyAssistant,
   copiedAtIndex,
-
   loading,
   bottomRef,
   showScrollDown,
@@ -43,20 +38,38 @@ export default function ChatScreen({
 }) {
   const tileList = Array.isArray(tiles) ? tiles : [];
   const [copiedIndex, setCopiedIndex] = useState(null);
+  const [regeneratingIndex, setRegeneratingIndex] = useState(null);
 
   // ✅ COPY FUNCTION (clean + toast)
   const handleCopyText = (text, idx) => {
-      if (!text) return;
+    if (!text) return;
 
-      navigator.clipboard.writeText(text);
-      toast.success("Copied!");
+    navigator.clipboard.writeText(text);
+    toast.success("Copied!");
 
-      setCopiedIndex(idx);
+    setCopiedIndex(idx);
 
-      setTimeout(() => {
-        setCopiedIndex(null);
-      }, 1500);
-    };
+    setTimeout(() => {
+      setCopiedIndex(null);
+    }, 1500);
+  };
+
+  // ✅ REGENERATE FUNCTION
+  const handleRegenerateMessage = (idx) => {
+    if (!isConnected) return;
+
+    setRegeneratingIndex(idx);
+    
+    // Call the regenerate/reload function - you may need to pass this as a prop
+    if (typeof onCopyAssistant === "function") {
+      onCopyAssistant(idx);
+    }
+
+    setTimeout(() => {
+      setRegeneratingIndex(null);
+    }, 1500);
+  };
+
   const showConnectButton = tileList.length > 0;
 
   const disconnectedText = showConnectButton
@@ -87,14 +100,29 @@ export default function ChatScreen({
                 <div key={idx} className="group">
                   {/* USER MESSAGE */}
                   {isUser && !isEditing && (
-                    <div className="relative">
+                    <div className="flex flex-col items-end">
                       <MessageBubble role={m.role} text={m.text} />
-                     <button
-                        onClick={() => startEditMessage(idx)}
-                        className="absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition bg-white border border-gray-300 rounded-md px-2 py-1 text-xs shadow-sm"
-                      >
-                        ✎
-                      </button>
+
+                      {/* USER ACTIONS */}
+                      <div className="mt-1 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity pr-2">
+                        {/* COPY */}
+                        <button
+                          onClick={() => handleCopyText(m.text, idx)}
+                          className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                          title="Copy"
+                        >
+                          {copiedIndex === idx ? "✓" : "⧉"}
+                        </button>
+
+                        {/* EDIT */}
+                        <button
+                          onClick={() => startEditMessage(idx)}
+                          className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                          title="Edit"
+                        >
+                          ✎
+                        </button>
+                      </div>
                     </div>
                   )}
 
@@ -163,45 +191,60 @@ export default function ChatScreen({
                         )}
 
                       {/* MAIN MESSAGE */}
-                      <div className="relative group">
+                      <div className="relative">
                         <MessageBubble
-                        role={m.role}
-                        text={m.text}
-                        onSuggestionClick={(text) => {
-                          if (!isConnected) return;
-                          onSend({ overrideText: text });
-                        }}
-                      />
+                          role={m.role}
+                          text={m.text}
+                          onSuggestionClick={(text) => {
+                            if (!isConnected) return;
+                            onSend({ overrideText: text });
+                          }}
+                        />
 
-                      {/* ✅ SUGGESTIONS BELOW MESSAGE */}
-                      {m.role === "assistant" && m.suggestions?.length > 0 && (
-                        <div className="ml-12 mt-2 flex flex-wrap gap-2">
-                          {m.suggestions.map((s, i) => (
-                            <button
-                              key={i}
-                              onClick={() => onSend({ overrideText: s })}
-                              className="px-4 py-3 text-xs bg-blue-100 hover:bg-blue-200 text-blue-900 rounded-full transition"
-                            >
-                              {s}
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                        {/* ✅ SUGGESTIONS BELOW MESSAGE */}
+                        {m.role === "assistant" &&
+                          m.suggestions?.length > 0 && (
+                            <div className="ml-12 mt-2 flex flex-wrap gap-2">
+                              {m.suggestions.map((s, i) => (
+                                <button
+                                  key={i}
+                                  onClick={() => onSend({ overrideText: s })}
+                                  className="px-5 py-1.5 text-xs bg-white text-black border border-dashed border-green-700 rounded-full transition "
+                                >
+                                  {s}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                      </div>
 
-                        {/* ✅ COPY BUTTON (clean placement) */}
-                        {m.text && (
+                      {/* ✅ COPY & RELOAD BUTTONS (ALWAYS VISIBLE) */}
+                      {m.text && (
+                        <div className="mt-2 flex items-center gap-2 ml-12">
+                          {/* COPY BUTTON */}
                           <button
                             onClick={() => handleCopyText(m.text, idx)}
-                            className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition bg-white border border-gray-300 rounded-md px-2 py-1 text-xs shadow-sm"
+                            className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                            title="Copy"
                           >
-                            {copiedIndex === idx ? (
-                              <span className="text-green-600">✓</span>
+                            {copiedIndex === idx ? "✓" : "⧉"}
+                          </button>
+
+                          {/* RELOAD/REGENERATE BUTTON */}
+                          <button
+                            onClick={() => handleRegenerateMessage(idx)}
+                            className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                            title="Regenerate"
+                            disabled={regeneratingIndex === idx || !isConnected}
+                          >
+                            {regeneratingIndex === idx ? (
+                              <span className="animate-spin">⟳</span>
                             ) : (
-                              "⧉"
+                              "⟳"
                             )}
                           </button>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -238,7 +281,7 @@ export default function ChatScreen({
               <h2 className="text-xl sm:text-2xl font-bold text-green-800 mb-1">
                 Welcome, {userName}!
               </h2>
-              <p className="text-xs sm:text-sm text-black-600 mb-5">
+              <p className="text-xs sm:text-sm text-gray-600 mb-5">
                 {disconnectedText}
               </p>
 
@@ -251,9 +294,7 @@ export default function ChatScreen({
                     className="inline-flex items-center gap-2 bg-emerald-600 text-white font-semibold px-5 py-2.5 rounded-xl hover:bg-emerald-700 transition-all duration-200"
                     type="button"
                   >
-                    {connectingSystemId
-                      ? "Connecting..."
-                      : "Connect to System"}
+                    {connectingSystemId ? "Connecting..." : "Connect to System"}
                   </button>
                 )}
 

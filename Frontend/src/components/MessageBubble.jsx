@@ -4,16 +4,9 @@ import { replyToTable } from "../utils/replyToTable";
 function Avatar({ role }) {
   const isUser = role === "user";
 
-  // ✅ USER AVATAR
+  // ❌ USER AVATAR REMOVED
   if (isUser) {
-    return (
-      <div
-        className="h-8 w-8 shrink-0 rounded-full grid place-items-center text-xs font-bold bg-blue-600 text-white"
-        title="user"
-      >
-        Y
-      </div>
-    );
+    return null;
   }
 
   // ✅ BOT MP4 AVATAR
@@ -33,7 +26,6 @@ function Avatar({ role }) {
     </div>
   );
 }
-
 // normalize text to handle single-line multi-item issue
 function formatText(text = "") {
   const t = String(text || "").trim();
@@ -65,7 +57,7 @@ export default function MessageBubble({
           {text}
         </div>
 
-        <Avatar role={role} />
+        {/* <Avatar role={role} /> */}
       </div>
     );
   }
