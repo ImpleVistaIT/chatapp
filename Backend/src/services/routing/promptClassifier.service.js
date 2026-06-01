@@ -33,6 +33,7 @@ function normalizeIntent(value) {
     check_approvals: "check_approvals",
     create_change_request: "create_change_request",
     get_change_request_details: "get_change_request_details",
+    list_change_requests: "list_change_requests",
     create_transport: "create_transport",
     unknown: "unknown",
   };
@@ -50,6 +51,64 @@ function clampConfidence(n) {
 function cleanString(value) {
   const v = String(value ?? "").trim();
   return v || null;
+}
+
+function normalizeDateYYYYMMDD(value) {
+  const v = cleanString(value);
+  if (!v) return null;
+
+  if (/^\d{8}$/.test(v)) {
+    return v;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    return v.replaceAll("-", "");
+  }
+
+  return null;
+}
+
+function extractCrNumber(query) {
+  const q = String(query || "");
+  const match = q.match(/\b(?:cr|change request)\s*(?:number\s*)?(\d{6,20})\b/i);
+  if (match) return match[1];
+
+  const fallback = q.match(/\b(8\d{9,})\b/);
+  return fallback ? fallback[1] : null;
+}
+
+function extractDateRange(query) {
+  const q = String(query || "");
+
+  const dates = [...q.matchAll(/\b(\d{4}-\d{2}-\d{2}|\d{8})\b/g)]
+    .map((m) => normalizeDateYYYYMMDD(m[1]))
+    .filter(Boolean);
+
+  if (dates.length >= 2) {
+    return {
+      fromDate: dates[0],
+      toDate: dates[1],
+    };
+  }
+
+  if (dates.length === 1) {
+    return {
+      fromDate: dates[0],
+      toDate: dates[0],
+    };
+  }
+
+  return {
+    fromDate: null,
+    toDate: null,
+  };
+}
+
+function inferProcessType(query) {
+  const q = String(query || "").toLowerCase();
+
+  if (q.includes("india")) return "YMH1";
+  return "YMHF";
 }
 
 function normalizeCreateChangeRequestEntities(raw = {}) {
@@ -82,6 +141,30 @@ function normalizeApprovalEntities(raw = {}) {
   };
 }
 
+function normalizeGetChangeRequestEntities(raw = {}) {
+  return {
+    objectId: cleanString(
+      raw.objectId ||
+        raw.OBJECT_ID ||
+        raw.changeRequestId ||
+        raw.crId ||
+        raw.crNumber ||
+        raw.ChangeRequest ||
+        raw.CR
+    ),
+    processType: cleanString(raw.processType || raw.PROCESS_TYPE) || "YMHF",
+  };
+}
+
+function normalizeListChangeRequestEntities(raw = {}) {
+  return {
+    fromDate: normalizeDateYYYYMMDD(raw.fromDate || raw.FROM_DATE),
+    toDate: normalizeDateYYYYMMDD(raw.toDate || raw.TO_DATE),
+    processType: cleanString(raw.processType || raw.PROCESS_TYPE) || "YMHF",
+    triggerAll: cleanString(raw.triggerAll || raw.TRIGGER_ALL) || "X",
+  };
+}
+
 function normalizeEntitiesByIntent(intent, rawEntities = {}) {
   const raw = rawEntities && typeof rawEntities === "object" ? rawEntities : {};
 
@@ -95,6 +178,12 @@ function normalizeEntitiesByIntent(intent, rawEntities = {}) {
     case "check_approvals":
       return normalizeApprovalEntities(raw);
 
+    case "get_change_request_details":
+      return normalizeGetChangeRequestEntities(raw);
+
+    case "list_change_requests":
+      return normalizeListChangeRequestEntities(raw);
+
     default:
       return raw;
   }
@@ -102,6 +191,60 @@ function normalizeEntitiesByIntent(intent, rawEntities = {}) {
 
 function keywordFallback(query) {
   const q = String(query || "").toLowerCase();
+  const objectId = extractCrNumber(query);
+  const { fromDate, toDate } = extractDateRange(query);
+  const processType = inferProcessType(query);
+
+  const mentionsPo = /\bpo\b/.test(q) || q.includes("purchase order") || q.includes("purchase orders");
+  const wantsDetails = /\b(details?|info|information|show details|full details|complete details)\b/.test(q);
+
+  const mentionsCr =
+    q.includes("change request") ||
+    /\bcr\b/.test(q);
+
+  const wantsCrDetails =
+    q.includes("details") ||
+    q.includes("detail") ||
+    q.includes("status") ||
+    q.includes("show") ||
+    q.includes("get") ||
+    q.includes("fetch") ||
+    q.includes("view");
+
+  if (objectId && mentionsCr && wantsCrDetails) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "get_change_request_details",
+      confidence: 0.94,
+      reason: "Matched SolMan CR detail/status keywords",
+      source: "keyword",
+      entities: {
+        objectId,
+        processType,
+      },
+    });
+  }
+
+  if (
+    (q.includes("change requests") || q.includes("change request") || q.includes("solman change requests")) &&
+    (fromDate || toDate)
+  ) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "list_change_requests",
+      confidence: 0.92,
+      reason: "Matched SolMan change request list/date keywords",
+      source: "keyword",
+      entities: {
+        fromDate,
+        toDate,
+        processType,
+        triggerAll: "X",
+      },
+    });
+  }
 
   if (q.includes("create change request") || q.includes("raise change request") || q.includes("create solman cr")) {
     return normalizeRoutingResult({
@@ -115,25 +258,25 @@ function keywordFallback(query) {
     });
   }
 
-  if (q.includes("purchase order") && q.includes("details")) {
+  if (mentionsPo && wantsDetails) {
     return normalizeRoutingResult({
       system: "s4hana",
       module: "mm",
       intent: "get_purchase_order_details",
-      confidence: 0.86,
+      confidence: 0.88,
       reason: "Matched purchase order details keywords",
       source: "keyword",
       entities: normalizeEntitiesByIntent("get_purchase_order_details", {}),
     });
   }
 
-  if (q.includes("purchase order") || q.includes("latest po") || q.includes("latest purchase orders")) {
+  if (mentionsPo) {
     return normalizeRoutingResult({
       system: "s4hana",
       module: "mm",
       intent: "list_purchase_orders",
-      confidence: 0.84,
-      reason: "Matched purchase order listing keywords",
+      confidence: 0.86,
+      reason: "Matched purchase order keywords",
       source: "keyword",
       entities: {},
     });

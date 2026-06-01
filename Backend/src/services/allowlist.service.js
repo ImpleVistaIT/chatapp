@@ -1,35 +1,36 @@
 import axios from "axios";
+import { getPoAllowlistFallback } from "./extractor/poFieldSchema.js";
 
-/**
- * Dynamic allowlist service — builds allowed SAP field names + sap:label map from SAP OData $metadata.
- *
- * ✅ DOES NOT use SAP_BASE_URL anymore.
- * ✅ Works for PO and SO (or any service) using:
- *   - system: { protocol, host, port }
- *   - service: { serviceName }
- *   - entityTypeName: "Po_details" / "SALES_ORDER_DETAILS" / etc.
- *
- * Auth:
- * - Preferred: authOverride = { username, password } from DB creds (per systemId)
- * - Optional fallback: env SAP_USER/SAP_PASSWORD only when allowEnvFallback=true
- *
- * Caching:
- * - In-memory cache per (system + serviceName + entityTypeName) for CACHE_MS duration
- * - Override with env SAP_METADATA_CACHE_MS
- *
- * ✅ IMPORTANT FIXES (without removing your logic):
- * 1) Do NOT reuse cached metadata when validateAuth is requested (ensures wrong password is caught).
- * 2) Add an optional lightweight "auth check" call that MUST hit SAP even if cache is warm.
- *    This prevents "wrong password still logs in" when metadata is served from cache.
- */
+const CACHE_MS = Number(process.env.SAP_METADATA_CACHE_MS || 60 * 60 * 1000);
 
-const CACHE_MS = Number(process.env.SAP_METADATA_CACHE_MS || 60 * 60 * 1000); // 1 hour
-
-// key => { ts, fields, labels }
 const cacheByKey = new Map();
 
+function normalizeKey(v) {
+  return String(v || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function getStaticAllowlist(service, entityTypeName) {
+  const serviceName = normalizeKey(service?.serviceName);
+  const et = normalizeKey(entityTypeName);
+
+  const isPoService = serviceName === "zmmpodetailssrv";
+  const isPoEntity =
+    et === "podetails" ||
+    et === "podetail" ||
+    et === "purchaseorderdetails";
+
+  if (isPoService && isPoEntity) {
+    return getPoAllowlistFallback();
+  }
+
+  return null;
+}
+
 function buildCacheKey({ system, service, entityTypeName }) {
-  const protocol = String(system?.protocol || "https").toLowerCase();
+  const protocol = String(system?.protocol || service?.protocol || "https").toLowerCase();
   const host = String(system?.host || "").trim();
   const port = String(system?.port ?? "").trim();
   const serviceName = String(service?.serviceName || "").trim();
@@ -39,13 +40,13 @@ function buildCacheKey({ system, service, entityTypeName }) {
 }
 
 function getSapServiceRoot({ system, service }) {
-  const protocol = String(system?.protocol || "https").toLowerCase();
+  const protocol = String(system?.protocol || service?.protocol || "https").toLowerCase();
   const host = String(system?.host || "").trim();
   const port = String(system?.port ?? "").trim();
   const serviceName = String(service?.serviceName || "").trim();
 
-  if (!host) throw new Error("SAP system host missing");
-  if (!port) throw new Error("SAP system port missing");
+  if (!host) throw new Error("SAP host missing");
+  if (!port) throw new Error("SAP port missing");
   if (!serviceName) throw new Error("SAP serviceName missing");
 
   const base = `${protocol}://${host}:${port}/sap/opu/odata/sap/${serviceName}/`;
@@ -62,7 +63,6 @@ function excerpt(s, max = 220) {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
-// ✅ NEW: small util so we don't treat any 2xx as ok when it returns an HTML login page
 function assertNotHtmlLogin(body, status) {
   const b = String(body || "");
   if (looksLikeHtml(b)) {
@@ -70,17 +70,55 @@ function assertNotHtmlLogin(body, status) {
   }
 }
 
-/**
- * ✅ NEW: Force an auth check even when cache is warm.
- * This is what fixes "wrong password still logs in" when metadata is cached.
- *
- * We call $metadata with Cache-Control: no-cache and a cache-busting query param,
- * so SAP must authenticate the request.
- */
+function isTransientSapNetworkError(err) {
+  const code = String(err?.code || err?.cause?.code || "").toUpperCase();
+  return [
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "ECONNABORTED",
+    "ENOTFOUND",
+    "EHOSTUNREACH",
+    "ECONNREFUSED",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+  ].includes(code);
+}
+
+function createWrappedError(message, originalError) {
+  const wrapped = new Error(message);
+  wrapped.code = originalError?.code || originalError?.cause?.code || "";
+  wrapped.cause = originalError;
+  return wrapped;
+}
+
+function formatAxiosNetworkError(err, contextLabel) {
+  const code = String(err?.code || err?.cause?.code || "").toUpperCase();
+  const base = contextLabel || "SAP request failed";
+
+  if (code === "ECONNRESET") {
+    return createWrappedError(`${base}: SAP connection was reset while reading response.`, err);
+  }
+  if (code === "ETIMEDOUT" || code === "ECONNABORTED") {
+    return createWrappedError(`${base}: SAP request timed out.`, err);
+  }
+  if (code === "ENOTFOUND") {
+    return createWrappedError(`${base}: SAP host could not be resolved.`, err);
+  }
+  if (code === "EHOSTUNREACH") {
+    return createWrappedError(`${base}: SAP host is unreachable.`, err);
+  }
+  if (code === "ECONNREFUSED") {
+    return createWrappedError(`${base}: SAP server refused the connection.`, err);
+  }
+  if (code.includes("TLS") || code.includes("CERT")) {
+    return createWrappedError(`${base}: TLS/SSL validation failed while connecting to SAP.`, err);
+  }
+
+  return createWrappedError(`${base}: ${err?.message || "Unknown network error."}`, err);
+}
+
 async function authCheck({ system, service, authOverride = null, opts = {} }) {
   const root = getSapServiceRoot({ system, service });
-
-  // cache-bust to prevent server/proxy caching
   const urlObj = new URL("$metadata", root);
   urlObj.searchParams.set("_", String(Date.now()));
   const url = urlObj.toString();
@@ -98,16 +136,21 @@ async function authCheck({ system, service, authOverride = null, opts = {} }) {
     );
   }
 
-  const res = await axios.get(url, {
-    headers: {
-      Accept: "application/xml",
-      "Cache-Control": "no-cache",
-      Pragma: "no-cache",
-    },
-    auth: { username, password },
-    timeout: 30000,
-    validateStatus: () => true,
-  });
+  let res;
+  try {
+    res = await axios.get(url, {
+      headers: {
+        Accept: "application/xml",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+      },
+      auth: { username, password },
+      timeout: 30000,
+      validateStatus: () => true,
+    });
+  } catch (err) {
+    throw formatAxiosNetworkError(err, "SAP auth check failed");
+  }
 
   if (res.status < 200 || res.status >= 300) {
     const body = String(res.data || "");
@@ -124,7 +167,6 @@ async function authCheck({ system, service, authOverride = null, opts = {} }) {
     throw new Error(`SAP auth check failed (${res.status}): ${excerpt(body)}`);
   }
 
-  // even in 200, SAP might return HTML if something is off
   assertNotHtmlLogin(res.data, res.status);
   return true;
 }
@@ -145,18 +187,23 @@ async function fetchMetadataXml({ system, service, authOverride = null, opts = {
     );
   }
 
-  const res = await axios.get(url, {
-    headers: { Accept: "application/xml" },
-    auth: { username, password },
-    timeout: 30000,
-    validateStatus: () => true,
-  });
+  let res;
+  try {
+    res = await axios.get(url, {
+      headers: { Accept: "application/xml" },
+      auth: { username, password },
+      timeout: 30000,
+      validateStatus: () => true,
+    });
+  } catch (err) {
+    throw formatAxiosNetworkError(err, "SAP metadata fetch failed");
+  }
 
   if (res.status < 200 || res.status >= 300) {
     const body = String(res.data || "");
 
     if (res.status === 401) {
-      throw new Error("Invalid SAP Routername or password.");
+      throw new Error("Invalid SAP username or password.");
     }
 
     if (res.status === 403) {
@@ -225,20 +272,12 @@ async function refreshCache({ system, service, entityTypeName, authOverride = nu
   cacheByKey.set(key, { ts: Date.now(), fields, labels });
 }
 
-/**
- * ✅ Main API used by controller.
- *
- * New param (optional): validateAuth
- * - When true, forces an SAP call even if metadata is cached, so wrong password is detected.
- */
 export async function getAllowedFieldsWithLabels({
   system,
   service,
   entityTypeName,
   authOverride = null,
   allowEnvFallback = false,
-
-  // ✅ NEW
   validateAuth = false,
 } = {}) {
   if (!system) throw new Error("system is required");
@@ -249,22 +288,59 @@ export async function getAllowedFieldsWithLabels({
   const now = Date.now();
   const cached = cacheByKey.get(key);
 
-  // ✅ if validateAuth requested, force auth check (even when cache is warm)
+  const hasFreshCache =
+    Boolean(cached?.fields && cached?.labels) && now - cached.ts < CACHE_MS;
+
+  const hasAnyCache =
+    Boolean(cached?.fields && cached?.labels);
+
   if (validateAuth) {
     await authCheck({ system, service, authOverride, opts: { allowEnvFallback } });
   }
 
-  // ✅ keep your cache behavior for speed (unless validateAuth is true AND cache is missing)
-  if (cached?.fields && cached?.labels && now - cached.ts < CACHE_MS) {
+  if (hasFreshCache) {
     return { fields: cached.fields, labels: cached.labels };
   }
 
-  await refreshCache({ system, service, entityTypeName, authOverride, allowEnvFallback });
-  const updated = cacheByKey.get(key);
-  return { fields: updated?.fields || [], labels: updated?.labels || {} };
+  try {
+    await refreshCache({ system, service, entityTypeName, authOverride, allowEnvFallback });
+    const updated = cacheByKey.get(key);
+    return { fields: updated?.fields || [], labels: updated?.labels || {} };
+  } catch (err) {
+    console.log("[ALLOWLIST] metadata fetch failed", {
+      serviceName: service?.serviceName,
+      entityTypeName,
+      error: err?.message,
+      transient: isTransientSapNetworkError(err),
+      systemId: system?.systemId || null,
+      host: system?.host || null,
+      port: system?.port || null,
+      serviceHost: service?.host || null,
+      servicePort: service?.port || null,
+    });
+
+    if (!validateAuth && hasAnyCache && isTransientSapNetworkError(err)) {
+      return { fields: cached.fields, labels: cached.labels };
+    }
+
+    if (!validateAuth && isTransientSapNetworkError(err)) {
+      const staticFallback = getStaticAllowlist(service, entityTypeName);
+      if (staticFallback) {
+        console.log("[ALLOWLIST] using static fallback", {
+          serviceName: service?.serviceName,
+          entityTypeName,
+          systemId: system?.systemId || null,
+          host: system?.host || null,
+          port: system?.port || null,
+        });
+        return staticFallback;
+      }
+    }
+
+    throw err;
+  }
 }
 
-// Optional: keep your old exports for compatibility
 export async function getAllowedFields(args = {}) {
   const { fields } = await getAllowedFieldsWithLabels(args);
   return fields;

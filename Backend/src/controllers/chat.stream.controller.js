@@ -1,535 +1,597 @@
-import mongoose from "mongoose";
-import { extractDocQuery } from "../services/extractor/extractor.service.js";
-import { buildEntitySetQuery, normalizeNumericId } from "../services/odataQueryBuilder.js";
-import { fetchFromSap } from "../services/sap.service.js";
-import { getAllowedFieldsWithLabels } from "../services/allowlist.service.js";
-import { generateSummaryLLM } from "../services/responseNarrator.service.js";
-
-import { ChatSession } from "../models/ChatSession.model.js";
-import { ChatMessage } from "../models/ChatMessage.model.js";
-
+import { classifyPrompt } from "../services/routing/promptClassifier.service.js";
+import { resolveTargetSystem } from "../services/routing/systemContextResolver.service.js";
 import { SapCredential } from "../models/SapCredential.model.js";
-import { decryptString } from "../utils/crypto.js";
+import { ChatMessage } from "../models/ChatMessage.model.js";
+import { SapConnection } from "../models/SapConnection.model.js";
 
-import { SapSystem } from "../models/SapSystem.model.js";
-import { SapServiceMap } from "../models/SapServiceMap.model.js";
+import {
+  createSseSession,
+  getOwner,
+  normalizeSystemId,
+  step,
+} from "./stream/stream.shared.js";
 
-// Helpers
-function getOwner(req) {
-  const owner = String(req.user?.id || "").trim();
-  if (!owner) {
-    const e = new Error("Unauthorized");
-    e.status = 401;
-    throw e;
+import { handleS4poChatStream } from "./stream/s4po.stream.controller.js";
+import { handleSolmanChatStream } from "./stream/solman.stream.controller.js";
+
+function cleanString(v) {
+  return String(v || "").trim();
+}
+
+function isNextPageQuery(query) {
+  return /\b(?:show\s+)?next\s+\d+\b/.test(cleanString(query).toLowerCase());
+}
+
+function isLandscapeOnlyQuery(query) {
+  const q = cleanString(query).toUpperCase();
+  return q === "ROW" || q === "INDIA";
+}
+
+function isSolmanCrQuery(query) {
+  const q = cleanString(query).toLowerCase();
+
+  if (!q) return false;
+
+  if (isNextPageQuery(q)) return true;
+
+  const hasCrContext =
+    /\bcr\b/.test(q) ||
+    /\bchange request\b/.test(q) ||
+    /\bchange requests\b/.test(q) ||
+    /\bcr list\b/.test(q) ||
+    /\bstatus of cr\b/.test(q) ||
+    /\bstatus of each change request\b/.test(q) ||
+    /\bshow the status of the cr\b/.test(q) ||
+    /\bopen cr\b/.test(q) ||
+    /\bclosed cr\b/.test(q) ||
+    /\bapproved cr\b/.test(q) ||
+    /\brejected cr\b/.test(q) ||
+    /\bpending cr\b/.test(q) ||
+    /\bdependency transport\b/.test(q) ||
+    /\bdependency transports\b/.test(q) ||
+    /\btransport created cr\b/.test(q) ||
+    /\btransports created cr\b/.test(q);
+
+  if (!hasCrContext) return false;
+
+  const patterns = [
+    /\b(?:show\s+)?next\s+\d+\b/,
+    /\bcr\b/,
+    /\bchange request\b/,
+    /\bchange requests\b/,
+    /\bcr list\b/,
+    /\bstatus of cr\b/,
+    /\bstatus of each change request\b/,
+    /\bshow the status of the cr\b/,
+    /\bopen cr\b/,
+    /\bclosed cr\b/,
+    /\bapproved cr\b/,
+    /\brejected cr\b/,
+    /\bpending cr\b/,
+    /\bdependency transport\b/,
+    /\bdependency transports\b/,
+    /\btransport created cr\b/,
+    /\btransports created cr\b/,
+    /\blast\s+\d+\s+cr\b/,
+    /\blast\s+\d+\s+cr\s+status\b/,
+    /\bthis month\b/,
+    /\blast month\b/,
+    /\bthis week\b/,
+    /\bthis year\b/,
+    /\bin the month of\b/,
+    /\bmonth of\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b/,
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b/,
+    /\bin the year of\s+\d{4}\b/,
+    /\byear of\s+\d{4}\b/,
+    /\bin\s+20\d{2}\b/,
+  ];
+
+  return patterns.some((re) => re.test(q));
+}
+
+function scopeToProcessType(scope) {
+  const s = cleanString(scope).toUpperCase();
+  if (s === "ROW") return "YMHF";
+  if (s === "INDIA") return "YMH1";
+  return "";
+}
+
+function resolveSolmanSystemId({ systemResolution, systemId }) {
+  const resolvedFromRouting = normalizeSystemId(systemResolution?.targetSystemId);
+  if (resolvedFromRouting) return resolvedFromRouting;
+
+  const resolvedFromRequest = normalizeSystemId(systemId);
+  if (resolvedFromRequest) return resolvedFromRequest;
+
+  return "";
+}
+
+function buildSolmanSystemError(systemResolution) {
+  const hasTargetEndpoint =
+    cleanString(systemResolution?.targetEndpoint?.host) &&
+    cleanString(systemResolution?.targetEndpoint?.port);
+
+  if (hasTargetEndpoint) {
+    return {
+      message:
+        "The required SAP system could not be matched from your current system list. Please add or refresh the correct system to continue.",
+      status: "needs_input",
+      missingFields: ["systemId"],
+      systemResolution,
+      action: {
+        type: "add_system",
+        label: "Add System",
+      },
+    };
   }
-  return owner;
+
+  return {
+    message: "This system isn’t added yet. Please add it to continue.",
+    status: "needs_input",
+    missingFields: ["systemId"],
+    systemResolution,
+    action: {
+      type: "add_system",
+      label: "Add System",
+    },
+  };
 }
 
-function normalizeSystemId(systemId) {
-  return String(systemId || "").trim().toUpperCase();
-}
+async function resolveSolmanSapUser({ owner, systemId, requestedSapUser }) {
+  const resolvedSystemId = normalizeSystemId(systemId);
+  const normalizedRequested = cleanString(requestedSapUser);
 
-function normalizeSapUser(sapUser) {
-  const s = String(sapUser || "").trim();
-  return s ? s : null;
-}
+  if (!resolvedSystemId) return "";
 
-async function getOrCreateSession({ owner, sessionId, systemId, sapUser }) {
-  const sid = normalizeSystemId(systemId);
-  const su = normalizeSapUser(sapUser);
+  if (normalizedRequested) {
+    const exact = await SapCredential.findOne({
+      owner,
+      systemId: resolvedSystemId,
+      sapUser: normalizedRequested,
+    })
+      .sort({ lastUsedAt: -1, updatedAt: -1 })
+      .lean();
 
-  if (sessionId && mongoose.Types.ObjectId.isValid(sessionId)) {
-    const q = { _id: sessionId, owner, systemId: sid };
-    if (su) q.sapUser = su;
-    const existing = await ChatSession.findOne(q);
-    if (existing) return existing;
+    if (exact) return normalizedRequested;
   }
 
-  return ChatSession.create({
+  const latest = await SapCredential.findOne({
     owner,
-    systemId: sid,
-    sapUser: su,
-    title: "",
-    sapConnectionId: null,
-    updatedAt: new Date(),
+    systemId: resolvedSystemId,
+  })
+    .sort({ lastUsedAt: -1, updatedAt: -1, createdAt: -1 })
+    .lean();
+
+  return latest?.sapUser || "";
+}
+
+async function findLastSolmanListContext({ owner, sessionId }) {
+  if (!sessionId) return null;
+
+  const lastAssistant = await ChatMessage.findOne({
+    owner,
+    sessionId,
+    role: "assistant",
+    "extracted.system": "solman",
+    "extracted.intent": "list_change_requests",
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+
+  if (!lastAssistant) return null;
+
+  const pendingFilters = lastAssistant?.data?.pendingAction?.filters || null;
+  const extractedFilters = lastAssistant?.extracted?.filters || null;
+  const responsePagination = lastAssistant?.responseMeta?.pagination || null;
+
+  const filters = pendingFilters || extractedFilters || responsePagination || null;
+
+  if (!filters) return null;
+
+  return {
+    system: "solman",
+    intent: "list_change_requests",
+    query:
+      cleanString(lastAssistant?.data?.pendingAction?.query) ||
+      cleanString(lastAssistant?.summary) ||
+      "",
+    pending:
+      Boolean(lastAssistant?.extracted?.pending) ||
+      Boolean(lastAssistant?.data?.pendingAction),
+    filters: {
+      businessScope: cleanString(filters.businessScope || ""),
+      processType: cleanString(filters.processType || ""),
+      status: cleanString(filters.status || ""),
+      dateText: cleanString(filters.dateText || ""),
+      triggerAll: cleanString(filters.triggerAll || "X") || "X",
+      createdBy: cleanString(filters.createdBy || ""),
+      createdByMode: cleanString(filters.createdByMode || ""),
+      top: filters.top ?? null,
+      skip: filters.skip ?? 0,
+      nextSkip: filters.nextSkip ?? 0,
+      orderBy: cleanString(filters.orderBy || "CREATED_ON desc") || "CREATED_ON desc",
+      fromDate: cleanString(filters.fromDate || ""),
+      toDate: cleanString(filters.toDate || ""),
+      statusMode: cleanString(filters.statusMode || ""),
+      excludeStatuses: Array.isArray(filters.excludeStatuses)
+        ? filters.excludeStatuses
+        : [],
+    },
+  };
+}
+
+async function withLiveConnectionFlags({ owner, availableSystems }) {
+  const systems = Array.isArray(availableSystems) ? availableSystems : [];
+  if (systems.length === 0) return systems;
+
+  const activeConnections = await SapConnection.find({
+    owner,
+    revokedAt: null,
+    expiresAt: { $gt: new Date() },
+  })
+    .select({ systemId: 1 })
+    .lean();
+
+  const connectedSidSet = new Set(
+    activeConnections
+      .map((c) => normalizeSystemId(c?.systemId))
+      .filter(Boolean)
+  );
+
+  if (connectedSidSet.size === 0) return systems;
+
+  return systems.map((item) => {
+    const sid = normalizeSystemId(item?.systemId || item?.id || item?.code);
+    if (!sid || !connectedSidSet.has(sid)) return item;
+
+    return {
+      ...item,
+      connected: true,
+      isConnected: true,
+      status: "connected",
+      active: true,
+    };
   });
 }
 
-async function getSapAuthOrThrow({ owner, systemId, sapUser }) {
-  const sid = normalizeSystemId(systemId);
-  const su = normalizeSapUser(sapUser);
-
-  console.log("[SSE] getSapAuthOrThrow", { owner, systemId: sid, sapUser: su });
-
-  const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-  const cred = su
-    ? await SapCredential.findOne({
-        owner,
-        systemId: sid,
-        sapUser: { $regex: `^${escapeRegex(su)}$`, $options: "i" },
-      }).select({
-        sapUser: 1,
-        encPassword: 1,
-        encIv: 1,
-        encTag: 1,
-      })
-    : await SapCredential.findOne({ owner, systemId: sid })
-        .sort({ lastUsedAt: -1, updatedAt: -1 })
-        .select({
-          sapUser: 1,
-          encPassword: 1,
-          encIv: 1,
-          encTag: 1,
-        });
-
-  console.log("[SSE] credential found?", Boolean(cred));
-
-  if (!cred) {
-    const e = new Error(
-      su
-        ? `No SAP credentials saved for systemId=${sid} sapUser=${su}. Please login first.`
-        : `No SAP credentials saved for systemId=${sid}. Please login first.`
-    );
-    e.status = 401;
-    throw e;
-  }
-
-  const username = String(cred.sapUser || "").trim();
-  const password = decryptString({ enc: cred.encPassword, iv: cred.encIv, tag: cred.encTag });
-
-  if (!username || !password) {
-    const e = new Error("Saved credentials are invalid.");
-    e.status = 500;
-    throw e;
-  }
-
-  await SapCredential.updateOne({ _id: cred._id }, { $set: { lastUsedAt: new Date() } });
-
-  return { username, password };
-}
-
-function toResultsArray(sapData) {
-  const results = sapData?.d?.results;
-  return Array.isArray(results) ? results : [];
-}
-
-function na(v) {
-  if (v == null) return "N/A";
-  if (typeof v === "string") return v.trim() ? v.trim() : "N/A";
-  return String(v);
-}
-
-function formatFieldName(fieldName) {
-  return String(fieldName || "")
-    .replace(/^_+/, "")
-    .replace(/__/g, "_")
-    .split(/[_\s]+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
-
-function buildGenericTableReply({ title = "Results", rows = [], fields = [] }) {
-  if (!Array.isArray(rows) || rows.length === 0) return "No results found.";
-
-  const first = rows[0] && typeof rows[0] === "object" ? rows[0] : {};
-  const keys = Object.keys(first).filter((k) => k !== "__metadata");
-
-  const base = Array.isArray(fields) && fields.length > 0 ? fields.filter((f) => keys.includes(f)) : [];
-  const common = ["CrtDate", "UserCreated", "SuppAcoutNo", "NetPrice", "CurKey"].filter((k) => keys.includes(k));
-  const baseOrCommon = base.length > 0 ? base : common.length > 0 ? common : keys.slice(0, 8);
-
-  const mandatoryIds = [
-    ...(keys.includes("PoNo") ? ["PoNo"] : []),
-    ...(keys.includes("PoItem") ? ["PoItem"] : []),
-  ];
-  const cols = Array.from(new Set([...mandatoryIds, ...baseOrCommon]));
-
-  const headerRow = ["#", ...cols.map((c) => formatFieldName(c))].join(" | ");
-  const dataRows = rows.map((r, i) => [i + 1, ...cols.map((k) => na(r?.[k]))].join(" | "));
-
-  return `${title} (returned ${rows.length})\n\n${headerRow}\n${dataRows.join("\n")}`;
-}
-
-function buildStructuredEntitySetQuery({
-  entitySet,
-  idField,
-  idValue,
-  itemField,
-  itemValue,
-  itemNormalizer,
-  fields,
-  filters,
-  orderBy,
-  limit,
-  skip,
-  count,
-}) {
-  const query = {};
-  const filterParts = [];
-
-  if (idValue && idField) {
-    const safeValue = String(idValue).replace(/'/g, "''");
-    filterParts.push(`${idField} eq '${safeValue}'`);
-  }
-
-  if (itemField && itemValue != null) {
-    const normalizedItem =
-      typeof itemNormalizer === "function" ? itemNormalizer(itemValue) : itemValue;
-
-    if (normalizedItem != null && String(normalizedItem).trim()) {
-      const safeValue = String(normalizedItem).replace(/'/g, "''");
-      filterParts.push(`${itemField} eq '${safeValue}'`);
-    }
-  }
-
-  for (const f of Array.isArray(filters) ? filters : []) {
-    if (!f || typeof f !== "object") continue;
-
-    const field = String(f.field || "").trim();
-    const op = String(f.op || "").trim().toLowerCase();
-    const type = String(f.type || "string").trim().toLowerCase();
-    const value = f.value;
-
-    if (!field || !op || value == null) continue;
-    if (!["eq", "ne", "gt", "ge", "lt", "le"].includes(op)) continue;
-
-    if (type === "number") {
-      const n = Number(value);
-      if (Number.isFinite(n)) {
-        filterParts.push(`${field} ${op} ${n}`);
-      }
-      continue;
-    }
-
-    if (type === "boolean") {
-      if (value === true || value === "true") {
-        filterParts.push(`${field} ${op} true`);
-      } else if (value === false || value === "false") {
-        filterParts.push(`${field} ${op} false`);
-      }
-      continue;
-    }
-
-    if (type === "datetime") {
-      let dt = String(value || "").trim();
-      if (!dt) continue;
-
-      if (/^\d{4}-\d{2}-\d{2}$/.test(dt)) {
-        dt = `${dt}T00:00:00`;
-      } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(dt)) {
-        dt = `${dt}:00`;
-      } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/.test(dt)) {
-        dt = dt.replace(/\.\d{3}$/, "");
-      } else if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(dt)) {
-        continue;
-      }
-
-      dt = dt.replace(/'/g, "''");
-      filterParts.push(`${field} ${op} datetime'${dt}'`);
-      continue;
-    }
-
-    const safeValue = String(value).replace(/'/g, "''").trim();
-    if (!safeValue) continue;
-    filterParts.push(`${field} ${op} '${safeValue}'`);
-  }
-
-  if (filterParts.length > 0) {
-    query.$filter = filterParts.join(" and ");
-  }
-
-  const selectFields = Array.from(
-    new Set([idField, itemField, ...(Array.isArray(fields) ? fields : [])].filter(Boolean))
-  );
-  if (selectFields.length > 0) {
-    query.$select = selectFields.join(",");
-  }
-
-  const orderParts = [];
-  for (const o of Array.isArray(orderBy) ? orderBy : []) {
-    if (!o || typeof o !== "object") continue;
-    const field = String(o.field || "").trim();
-    if (!field) continue;
-    const dir = String(o.dir || "asc").toLowerCase() === "desc" ? "desc" : "asc";
-    orderParts.push(`${field} ${dir}`);
-  }
-  if (orderParts.length > 0) {
-    query.$orderby = orderParts.join(",");
-  }
-
-  const top = Number(limit);
-  if (Number.isFinite(top) && top > 0) {
-    query.$top = String(Math.min(top, 200));
-  }
-
-  const sk = Number(skip);
-  if (Number.isFinite(sk) && sk >= 0) {
-    query.$skip = String(sk);
-  }
-
-  if (count === true) {
-    query.$count = "true";
-  }
-
-  return buildEntitySetQuery(entitySet, query, { maxTop: 200 });
-}
-
-function generateSuggestions(query, extracted, rows) {
-  const q = String(query || "").toLowerCase();
-
-  const firstRow = rows?.[0] || {};
-  const poNumber = firstRow?.PoNo || extracted?.docNumber;
-
-  if (q.includes("po") || extracted?.docNumber) {
-    return [
-      poNumber ? `Show items of PO ${poNumber}` : "Show PO items",
-      poNumber ? `Track PO ${poNumber}` : "Track this PO",
-      "Show vendor details",
-    ];
-  }
-
-  return [
-    "Show latest purchase orders",
-    "Show invoices",
-    "Show reports",
-  ];
-}
-
 export async function handleChatStream(req, res) {
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders?.();
-
-  const send = (event, data) => {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-    res.flush?.();
-  };
-
-  const ping = setInterval(() => {
-    res.write(`event: ping\n`);
-    res.write(`data: {}\n\n`);
-    res.flush?.();
-  }, 15000);
-
-  let closed = false;
-
-  const markClosed = (reason) => {
-    if (closed) return;
-    closed = true;
-    console.log("[SSE] stream closed:", reason);
-    clearInterval(ping);
-  };
-
-  req.on("aborted", () => markClosed("req.aborted"));
-  res.on("close", () => markClosed("res.close"));
-  res.on("finish", () => markClosed("res.finish"));
-
-  const step = async (label, fn) => {
-    console.log(`[SSE] ${label}...`);
-    const t0 = Date.now();
-    const out = await fn();
-    console.log(`[SSE] ${label} done in ${Date.now() - t0}ms`);
-    return out;
-  };
+  const sse = createSseSession(res);
 
   try {
     const owner = getOwner(req);
-    const { query, sessionId, systemId, sapUser } = req.body;
+    const {
+      query,
+      sessionId,
+      systemId,
+      sapUser,
+      availableSystems,
+      businessScope,
+      pendingAction,
+    } = req.body || {};
+
+    const effectiveAvailableSystems = await step("withLiveConnectionFlags", () =>
+      withLiveConnectionFlags({
+        owner,
+        availableSystems: Array.isArray(availableSystems) ? availableSystems : [],
+      })
+    );
+
+    console.log("[SSE] incoming body:", {
+      query,
+      sessionId,
+      systemId,
+      sapUser,
+      businessScope,
+      pendingAction,
+    });
 
     if (!query) {
-      send("error", { message: "query is required" });
-      clearInterval(ping);
-      return res.end();
+      sse.send("error", { message: "query is required" });
+      return sse.end();
     }
 
-    const sid = normalizeSystemId(systemId);
-    if (!sid) {
-      send("error", { message: "systemId is required" });
-      clearInterval(ping);
-      return res.end();
+    sse.send("phase", {
+      phase: "routing",
+      message: "Understanding your request...",
+    });
+
+    const queryIsNextPage = isNextPageQuery(query);
+    const queryIsLandscapeOnly = isLandscapeOnlyQuery(query);
+    const normalizedScope = cleanString(businessScope || query).toUpperCase();
+    const restoredProcessType = scopeToProcessType(normalizedScope);
+
+    let effectivePendingAction = pendingAction || null;
+
+    if (!effectivePendingAction && sessionId) {
+      effectivePendingAction = await step("findLastSolmanListContext", () =>
+        findLastSolmanListContext({
+          owner,
+          sessionId,
+        })
+      );
+
+      console.log("[SSE] recovered last SolMan list context:", effectivePendingAction);
     }
 
-    const su = normalizeSapUser(sapUser);
+    const pendingSystem = cleanString(effectivePendingAction?.system).toLowerCase();
+    const pendingIntent = cleanString(effectivePendingAction?.intent).toLowerCase();
 
-    console.log("[SSE] start", { owner, systemId: sid, sapUser: su, sessionId, hasCursor: false });
+    const shouldRestorePendingSolman =
+      Boolean(effectivePendingAction) &&
+      pendingSystem === "solman" &&
+      pendingIntent === "list_change_requests" &&
+      (
+        Boolean(cleanString(effectivePendingAction?.filters?.processType)) ||
+        queryIsNextPage ||
+        (queryIsLandscapeOnly && Boolean(restoredProcessType)) ||
+        Boolean(effectivePendingAction?.pending)
+      );
 
-    send("phase", { phase: "extracting", message: "Interpreting your query..." });
+    if (shouldRestorePendingSolman) {
+      console.log("[SSE] restoring pending SolMan action:", {
+        businessScope: normalizedScope,
+        processType:
+          restoredProcessType ||
+          cleanString(effectivePendingAction?.filters?.processType),
+        originalQuery: effectivePendingAction?.query,
+        queryIsNextPage,
+        queryIsLandscapeOnly,
+      });
 
-    const session = await step("getOrCreateSession", () =>
-      getOrCreateSession({ owner, sessionId, systemId: sid, sapUser: su })
-    );
+      const restoredSystemResolution = await step(
+        "resolveTargetSystem (restored SolMan)",
+        () =>
+          resolveTargetSystem({
+            query:
+              cleanString(effectivePendingAction?.query) ||
+              "show cr list",
+            classified: {
+              system: "solman",
+              intent: "list_change_requests",
+              routing: {
+                system: "solman",
+                intent: "list_change_requests",
+              },
+            },
+            requestedSystemId: systemId,
+            availableSystems: effectiveAvailableSystems,
+          })
+      );
 
-    await step("save user message", () =>
-      ChatMessage.create({
-        owner,
-        sessionId: session._id,
-        role: "user",
-        text: String(query),
-      })
-    );
+      const resolvedSystemId = resolveSolmanSystemId({
+        systemResolution: restoredSystemResolution,
+        systemId,
+      });
 
-    await step("set session title (first message only)", async () => {
-      if (!session.title) {
-        await ChatSession.updateOne(
-          { _id: session._id },
-          { $set: { title: String(query).slice(0, 80), updatedAt: new Date() } }
-        );
+      console.log(
+        "[SSE] resolved system for restored SolMan action:",
+        resolvedSystemId || "(none)"
+      );
+      console.log(
+        "[SSE] restored SolMan system resolution detail:",
+        restoredSystemResolution
+      );
+
+      if (!resolvedSystemId) {
+        sse.send("error", buildSolmanSystemError(restoredSystemResolution));
+        return sse.end();
       }
-    });
 
-    const sapAuth = await step("getSapAuthOrThrow", () => getSapAuthOrThrow({ owner, systemId: sid, sapUser: su }));
+      const resolvedSapUser = await step("resolveSolmanSapUser", () =>
+        resolveSolmanSapUser({
+          owner,
+          systemId: resolvedSystemId,
+          requestedSapUser: sapUser,
+        })
+      );
 
-    const system = await step("load SapSystem", () => SapSystem.findOne({ owner: "local", systemId: sid }).lean());
-    if (!system) {
-      send("error", { message: `SAP system profile not found for systemId=${sid}` });
-      clearInterval(ping);
-      return res.end();
-    }
+      console.log(
+        "[SSE] resolved sapUser for restored SolMan action:",
+        resolvedSapUser || "(none)"
+      );
 
-    const service = await step("load SapServiceMap", () =>
-      SapServiceMap.findOne({ owner: "local", systemId: sid, serviceType: "PO" }).lean()
-    );
-    if (!service) {
-      send("error", { message: "Service mapping not found (PO)." });
-      clearInterval(ping);
-      return res.end();
-    }
+      if (!resolvedSapUser) {
+        sse.send("error", {
+          message: `No SAP credentials saved for systemId=${resolvedSystemId}. Please login to Solution Manager first.`,
+          status: "missing_solman_credentials",
+          missingFields: ["sapUser"],
+        });
+        return sse.end();
+      }
 
-    const allow = await step("getAllowedFieldsWithLabels", () =>
-      getAllowedFieldsWithLabels({
-        system,
-        service,
-        entityTypeName: service.entityTypeName,
-        authOverride: sapAuth,
-      })
-    );
-    const allowedFields = allow?.fields || [];
-    const fieldLabels = allow?.labels || {};
+      const restoredQuery = cleanString(
+        queryIsLandscapeOnly
+          ? effectivePendingAction?.query || "show cr list"
+          : query || effectivePendingAction?.query
+      );
 
-    const extracted = await step("extractDocQuery", () =>
-      extractDocQuery({
-        query,
-        allowedFields,
-        fieldLabels,
-        defaultDocType: "PO",
-      })
-    );
+      const restoredClassified = {
+        intent: "list_change_requests",
+        system: "solman",
+        entities: {
+          businessScope:
+            normalizedScope ||
+            cleanString(effectivePendingAction?.filters?.businessScope),
+          processType:
+            restoredProcessType ||
+            cleanString(effectivePendingAction?.filters?.processType),
+          status: cleanString(effectivePendingAction?.filters?.status),
+          dateText: cleanString(
+            effectivePendingAction?.filters?.dateText ||
+              effectivePendingAction?.query
+          ),
+          triggerAll:
+            cleanString(effectivePendingAction?.filters?.triggerAll || "X") || "X",
+          createdBy: cleanString(effectivePendingAction?.filters?.createdBy),
+          createdByMode: cleanString(
+            effectivePendingAction?.filters?.createdByMode
+          ),
+          top: queryIsNextPage
+            ? null
+            : effectivePendingAction?.filters?.top ?? null,
+          skip: queryIsNextPage
+            ? effectivePendingAction?.filters?.nextSkip ??
+              effectivePendingAction?.filters?.skip ??
+              0
+            : effectivePendingAction?.filters?.skip ?? 0,
+          nextSkip: effectivePendingAction?.filters?.nextSkip ?? 0,
+          orderBy:
+            cleanString(
+              effectivePendingAction?.filters?.orderBy || "CREATED_ON desc"
+            ) || "CREATED_ON desc",
+          fromDate: cleanString(effectivePendingAction?.filters?.fromDate),
+          toDate: cleanString(effectivePendingAction?.filters?.toDate),
+          statusMode: cleanString(effectivePendingAction?.filters?.statusMode),
+          excludeStatuses: Array.isArray(
+            effectivePendingAction?.filters?.excludeStatuses
+          )
+            ? effectivePendingAction.filters.excludeStatuses
+            : [],
+        },
+      };
 
-    console.log("[SSE] extracted:", JSON.stringify(extracted, null, 2));
-    console.log("[SSE] closed after extract?", closed);
-    if (closed) {
-      clearInterval(ping);
-      return;
-    }
+      console.log("[SSE] dispatching restored pending action to SolMan stream handler");
 
-    send("phase", { phase: "fetching", message: "Fetching data from SAP..." });
-
-    const docNumber = extracted.docNumber
-      ? normalizeNumericId(extracted.docNumber, Number(service.idPad) || null)
-      : null;
-
-    const docItem = extracted.docItem
-      ? normalizeNumericId(extracted.docItem, Number(service.itemPad) || null)
-      : null;
-
-    const limit = Math.min(200, Math.max(1, Number(extracted.limit) || 10));
-    const skip = Number.isFinite(Number(extracted.skip)) ? Math.max(0, Number(extracted.skip)) : 0;
-
-    const relativePath = buildStructuredEntitySetQuery({
-      entitySet: service.entitySet,
-      idField: service.idField,
-      idValue: docNumber,
-      itemField: service.itemField || null,
-      itemValue: docItem,
-      itemNormalizer: (v) => normalizeNumericId(v, Number(service.itemPad) || null),
-      fields: extracted.fields,
-      filters: extracted.filters,
-      orderBy: extracted.orderBy,
-      limit,
-      skip,
-      count: extracted.count === true,
-    });
-
-    console.log("[SSE] SAP relativePath:", relativePath);
-
-    const sapData = await step("fetchFromSap", () =>
-      fetchFromSap({ system, service, relativePath }, sapAuth)
-    );
-
-    if (closed) {
-      clearInterval(ping);
-      return;
-    }
-
-    send("phase", { phase: "formatting", message: "Preparing results..." });
-
-    const safeRows = toResultsArray(sapData);
-
-    const title =
-      Array.isArray(extracted?.filters) && extracted.filters.length > 0
-        ? "Filtered Results"
-        : extracted?.listMode
-          ? String(extracted.listMode).replace(/_/g, " ").toUpperCase()
-          : "Results";
-
-    const reply = buildGenericTableReply({
-      title,
-      rows: safeRows,
-      fields: extracted.fields,
-    });
-
-    const summary = await step("generateSummaryLLM", () =>
-      generateSummaryLLM({
-        entityLabel: "Purchase Orders",
-        count: safeRows.length,
-        extracted,
-        sample: safeRows.slice(0, 10),
-        columns: extracted.fields || [],
-      })
-    );
-
-    await step("save assistant message", () =>
-      ChatMessage.create({
+      return await handleSolmanChatStream({
+        sse,
         owner,
-        sessionId: session._id,
-        role: "assistant",
-        text: reply,
-        summary,
-        extracted: { ...extracted, limit, skip },
-        sapRequest: relativePath,
-        data: safeRows,
-        responseMeta: { ok: true, kind: "stream", returned: safeRows.length },
+        query: restoredQuery,
+        sessionId,
+        systemId: resolvedSystemId,
+        sapUser: resolvedSapUser,
+        classified: restoredClassified,
+        systemResolution: {
+          ...restoredSystemResolution,
+          status: "resolved",
+          targetSystemId: resolvedSystemId,
+          source: "pending_solman_action",
+        },
+      });
+    }
+
+    const classified = await step("classifyPrompt", () =>
+      classifyPrompt({
+        query,
+        sessionContext: null,
       })
     );
 
-    await step("update ChatSession updatedAt", () =>
-      ChatSession.updateOne({ _id: session._id }, { $set: { updatedAt: new Date() } })
+    const forcedSolman =
+      isSolmanCrQuery(query) ||
+      cleanString(classified?.system).toLowerCase() === "solman";
+
+    if (forcedSolman) {
+      console.log("[SSE] forcing SolMan routing based on CR query pattern");
+    }
+
+    const systemResolution = await step("resolveTargetSystem", () =>
+      resolveTargetSystem({
+        query,
+        classified,
+        requestedSystemId: systemId,
+        availableSystems: effectiveAvailableSystems,
+      })
     );
 
-    console.log("[SSE] sending reply event");
-    send("reply", {
-      ok: true,
-      sessionId: String(session._id),
-      extracted: { ...extracted, limit, skip },
-      sapRequest: relativePath,
-      data: safeRows,
-      reply,
-      summary,
-      returned: safeRows.length,
-      suggestions: generateSuggestions(query, extracted, safeRows),
-    });
+    const useSolman = forcedSolman || classified?.system === "solman";
 
-    send("done", { ok: true });
-    clearInterval(ping);
-    return res.end();
+    if (systemResolution.status === "disconnected" && !useSolman) {
+      sse.send("error", {
+        message: `The system ${
+          systemResolution.targetSystemId || "target"
+        } is disconnected. Please connect it and try again.`,
+        status: "disconnected_system",
+        systemResolution,
+      });
+      return sse.end();
+    }
+
+    if (systemResolution.status === "ambiguous" && !useSolman) {
+      sse.send("error", {
+        message:
+          systemResolution.candidates.length > 0
+            ? `I found multiple possible systems for this request: ${systemResolution.candidates.join(
+                ", "
+              )}. Please specify which system to use.`
+            : "I could not determine which system to use. Please specify the system.",
+        status: "needs_input",
+        missingFields: ["systemId"],
+        systemResolution,
+      });
+      return sse.end();
+    }
+
+    let resolvedSystemId = normalizeSystemId(
+      systemResolution.targetSystemId || systemId
+    );
+
+    let resolvedSapUser = cleanString(sapUser);
+
+    if (useSolman) {
+      resolvedSystemId = resolveSolmanSystemId({
+        systemResolution,
+        systemId,
+      });
+
+      console.log("[SSE] resolved system for SolMan:", resolvedSystemId || "(none)");
+      console.log("[SSE] SolMan system resolution detail:", systemResolution);
+
+      if (!resolvedSystemId) {
+        sse.send("error", buildSolmanSystemError(systemResolution));
+        return sse.end();
+      }
+
+      resolvedSapUser = await step("resolveSolmanSapUser", () =>
+        resolveSolmanSapUser({
+          owner,
+          systemId: resolvedSystemId,
+          requestedSapUser: sapUser,
+        })
+      );
+
+      console.log("[SSE] resolved sapUser for SolMan:", resolvedSapUser || "(none)");
+
+      if (!resolvedSapUser) {
+        sse.send("error", {
+          message: `No SAP credentials saved for systemId=${resolvedSystemId}. Please login to Solution Manager first.`,
+          status: "missing_solman_credentials",
+          missingFields: ["sapUser"],
+        });
+        return sse.end();
+      }
+    }
+
+    const context = {
+      sse,
+      owner,
+      query,
+      sessionId,
+      systemId: resolvedSystemId,
+      sapUser: resolvedSapUser,
+      classified: useSolman
+        ? { ...classified, system: "solman" }
+        : classified,
+      systemResolution,
+    };
+
+    if (useSolman) {
+      console.log("[SSE] dispatching to SolMan stream handler");
+      return await handleSolmanChatStream(context);
+    }
+
+    console.log("[SSE] dispatching to S4PO stream handler");
+    return await handleS4poChatStream(context);
   } catch (e) {
     console.error("[SSE] error:", e);
-    send("error", { message: e?.message || "Internal error" });
-    clearInterval(ping);
-    return res.end();
+
+    sse.send("error", {
+      message: e?.userMessage || e?.message || "Internal error",
+      status: e?.status || "internal_error",
+      code: e?.code || "internal_error",
+      missingFields: Array.isArray(e?.missingFields) ? e.missingFields : [],
+      action: e?.action || null,
+    });
+
+    return sse.end();
   }
 }

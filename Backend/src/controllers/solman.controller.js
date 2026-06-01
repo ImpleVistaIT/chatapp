@@ -3,7 +3,10 @@ import { SapCredential } from "../models/SapCredential.model.js";
 import { encryptString } from "../utils/crypto.js";
 import { getOwner, normalizeSystemId, normalizeSapUser } from "./_chat/auth.js";
 import { getSapAuthOrThrow } from "./_chat/sapAuth.js";
-import { createSolmanChangeRequest } from "../services/systems/solman/charm.service.js";
+import {
+  createSolmanChangeRequest,
+  getSolmanChangeRequestDetailsById,
+} from "../services/systems/solman/charm.service.js";
 import { loginToSolman } from "../services/systems/solman/login.service.js";
 
 function cleanString(v) {
@@ -38,6 +41,17 @@ function extractConnectionParts(baseUrl) {
       ? 443
       : 80,
   };
+}
+
+function toCrDetailsArray(result) {
+  if (Array.isArray(result?.results)) return result.results;
+  if (Array.isArray(result?.result?.results)) return result.result.results;
+  if (Array.isArray(result?.data?.results)) return result.data.results;
+  if (Array.isArray(result?.raw?.d?.results)) return result.raw.d.results;
+  if (Array.isArray(result?.d?.results)) return result.d.results;
+  if (result?.raw?.d && !Array.isArray(result.raw.d.results)) return [result.raw.d];
+  if (result?.d && !Array.isArray(result.d.results)) return [result.d];
+  return [];
 }
 
 export async function solmanLoginController(req, res) {
@@ -201,27 +215,27 @@ export async function createChangeRequestController(req, res) {
         ok: false,
         error: result.message || "Failed to create change request",
         sap: {
-          msgType: result.msgType,
+          msgType: result.result?.msgType,
           message: result.message,
-          changeRequestId: result.changeRequestId,
-          status: result.status,
+          changeRequestId: result.result?.changeRequestId,
+          status: result.result?.status,
         },
-        raw: result.raw,
+        raw: result.result?.raw || null,
       });
     }
 
     return res.json({
       ok: true,
       message: result.message || "Change request created successfully",
-      changeRequestId: result.changeRequestId,
-      status: result.status,
+      changeRequestId: result.result?.changeRequestId,
+      status: result.result?.status,
       sap: {
-        msgType: result.msgType,
+        msgType: result.result?.msgType,
         message: result.message,
-        changeRequestId: result.changeRequestId,
-        status: result.status,
+        changeRequestId: result.result?.changeRequestId,
+        status: result.result?.status,
       },
-      raw: result.raw,
+      raw: result.result?.raw || null,
     });
   } catch (e) {
     console.error("createChangeRequestController error:", e);
@@ -229,6 +243,105 @@ export async function createChangeRequestController(req, res) {
     return res.status(e?.status || 500).json({
       ok: false,
       error: e?.message || "Failed to create change request",
+      status: e?.status || 500,
+      details: {
+        name: e?.name || null,
+        code: e?.code || null,
+      },
+      raw: e?.responseData || null,
+    });
+  }
+}
+
+export async function getChangeRequestDetailsController(req, res) {
+  try {
+    const owner = getOwner(req);
+
+    const systemId = normalizeSystemId(req.body?.systemId || req.query?.systemId);
+    if (!systemId) {
+      return res.status(400).json({ ok: false, error: "systemId is required" });
+    }
+
+    const sapUser = normalizeSapUser(req.body?.sapUser || req.query?.sapUser);
+
+    const objectId = cleanString(
+      req.body?.objectId ||
+      req.body?.OBJECT_ID ||
+      req.query?.objectId ||
+      req.query?.OBJECT_ID ||
+      req.body?.changeRequestId ||
+      req.query?.changeRequestId
+    );
+
+    if (!objectId) {
+      return res.status(400).json({ ok: false, error: "objectId is required" });
+    }
+
+    const processType = cleanString(
+      req.body?.processType ||
+      req.body?.PROCESS_TYPE ||
+      req.query?.processType ||
+      req.query?.PROCESS_TYPE
+    ) || "YMHF";
+
+    const sapAuth = await getSapAuthOrThrow({ owner, systemId, sapUser });
+
+    const system = await SapSystem.findOne({
+      owner: { $in: [owner, "local"] },
+      systemId,
+    }).lean();
+
+    if (!system) {
+      return res.status(400).json({
+        ok: false,
+        error: `SAP system profile not found for systemId=${systemId}`,
+      });
+    }
+
+    const result = await getSolmanChangeRequestDetailsById({
+      system,
+      sapAuth,
+      objectId,
+      processType,
+    });
+
+    if (result?.ok === false) {
+      return res.status(400).json({
+        ok: false,
+        error: result.message || "Failed to fetch change request details",
+        raw: result?.result?.raw || null,
+      });
+    }
+
+    const rows = toCrDetailsArray(result);
+    const item = rows[0] || null;
+
+    if (!item) {
+      return res.status(404).json({
+        ok: false,
+        error: `No details found for change request ${objectId}`,
+        objectId,
+        processType,
+        data: [],
+        raw: result?.result?.raw || null,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      message: `Fetched details for change request ${objectId}`,
+      objectId,
+      processType,
+      data: rows,
+      item,
+      raw: result?.result?.raw || null,
+    });
+  } catch (e) {
+    console.error("getChangeRequestDetailsController error:", e);
+
+    return res.status(e?.status || 500).json({
+      ok: false,
+      error: e?.message || "Failed to fetch change request details",
       status: e?.status || 500,
       details: {
         name: e?.name || null,

@@ -1,11 +1,8 @@
-import newChatIcon from "../assets/new-chat.png";
-import searchIcon from "../assets/search.png";
 import close from "../assets/close.png";
 import logoFull from "../assets/ImplevistaLogo.png";
 import logoSmall from "../assets/Vlogo.png";
 import sidebaropen from "../assets/sidebar.png";
 import sidebarclose from "../assets/sidebar-close.png";
-import plusIcon from "../assets/plus.png";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { toast } from "react-hot-toast";
 import { authFetch } from "../api/authFetch";
@@ -42,11 +39,8 @@ function Sidebar({
   onOpenSapLogin = () => {},
   onSystemsChanged = null,
 
-  systems = [],
   handleDelete = null,
-
-  // ✅ single-session truth from parent (Chat.jsx)
-  activeSession = null, // { systemId, sapUser, firstName?, fullName? } | null
+  activeSession = null,
 }) {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [showCollapseBtn, setShowCollapseBtn] = useState(false);
@@ -58,17 +52,15 @@ function Sidebar({
 
   const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
 
-  // ✅ tiles list (one tile per credential)
   const [tiles, setTiles] = useState([]);
-
-  // sessions
   const [sessions, setSessions] = useState([]);
   const [sessionsNextBefore, setSessionsNextBefore] = useState(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsHasMore, setSessionsHasMore] = useState(true);
-  const sessionsScrollRef = useRef(null);
 
-  // active system
+  const sessionsLoadingRef = useRef(false);
+  const sessionsHasMoreRef = useRef(true);
+
   const [activeSystemData, setActiveSystemData] = useState(null);
   const [connectingSid, setConnectingSid] = useState(null);
 
@@ -88,7 +80,6 @@ function Sidebar({
     loadActiveSystem();
   }, [loadActiveSystem]);
 
-  // ✅ load tiles from backend (separate tile per credential)
   const fetchTiles = useCallback(async () => {
     try {
       const res = await authFetch(`${apiBase}/sap/tiles`, { method: "GET" });
@@ -100,12 +91,34 @@ function Sidebar({
       const items = Array.isArray(payload.items) ? payload.items : [];
 
       const mapped = items
-        .map((t) => ({
-          ...t,
-          _id: t?.key || `${t?.systemId}:${t?.sapUser}`,
-          hasCredentials: true,
-        }))
-        .filter((x) => x.systemId && x.sapUser);
+        .map((t, i) => {
+          const connected =
+            t?.connected === true ||
+            t?.isConnected === true ||
+            t?.status === "connected" ||
+            t?.active === true;
+
+          return {
+            ...t,
+            _id: t?._id || t?.id || t?.systemId || `sys-${i}`,
+            systemId: normalizeSid(t?.systemId || t?.name),
+            name:
+              t?.name ||
+              t?.system?.name ||
+              t?.description ||
+              normalizeSid(t?.systemId || t?.name),
+            protocol: t?.protocol || t?.system?.protocol || "https",
+            host: t?.host || t?.system?.host || "",
+            port: t?.port ?? t?.system?.port ?? null,
+            sapRouter: t?.sapRouter || t?.system?.sapRouter || "",
+            sapUser: normalizeSapUser(t?.sapUser || ""),
+            connected,
+            isConnected: connected,
+            status: connected ? "connected" : "disconnected",
+            active: connected,
+          };
+        })
+        .filter((x) => x.systemId);
 
       setTiles(mapped);
     } catch (e) {
@@ -118,41 +131,67 @@ function Sidebar({
     fetchTiles();
   }, [fetchTiles]);
 
-  // ✅ derive active tile for SystemDetailsPanel
-  const activeTile = useMemo(() => {
-    const sid = normalizeSid(activeSession?.systemId || "");
-    const sapUser = normalizeSapUser(activeSession?.sapUser || "");
-    if (!sid || !sapUser) return null;
+  useEffect(() => {
+    sessionsLoadingRef.current = sessionsLoading;
+  }, [sessionsLoading]);
 
-    return (
-      (tiles || []).find((t) => normalizeSid(t?.systemId) === sid && normalizeSapUser(t?.sapUser) === sapUser) || null
+  useEffect(() => {
+    sessionsHasMoreRef.current = sessionsHasMore;
+  }, [sessionsHasMore]);
+
+  const activeTile = useMemo(() => {
+    const sid = normalizeSid(
+      activeSystemData?.systemId ||
+        activeSession?.systemId ||
+        activeSystemData?.name ||
+        ""
     );
-  }, [activeSession?.systemId, activeSession?.sapUser, normalizeSid, normalizeSapUser, tiles]);
+
+    if (!sid) return null;
+
+    return (tiles || []).find((t) => normalizeSid(t?.systemId || t?.name) === sid) || null;
+  }, [activeSystemData, activeSession, tiles]);
+
+  const displaySystems = useMemo(() => {
+    return Array.isArray(tiles) ? tiles : [];
+  }, [tiles]);
+
+  const hasAnyConnectedSystems = useMemo(() => {
+    return displaySystems.some((sys) => {
+      const status = String(sys?.status || "").trim().toLowerCase();
+      return (
+        sys?.connected === true ||
+        sys?.isConnected === true ||
+        status === "connected" ||
+        status === "online" ||
+        status === "active" ||
+        sys?.active === true
+      );
+    });
+  }, [displaySystems]);
 
   const fetchSessions = useCallback(
     async ({ reset = false } = {}) => {
-      if (sessionsLoading) return;
-      if (!reset && !sessionsHasMore) return;
+      if (sessionsLoadingRef.current) return;
+      if (!reset && !sessionsHasMoreRef.current) return;
 
-      const sid = normalizeSid(activeSystemData?.systemId || activeSystemData?.name);
-      if (!sid) {
+      if (!hasAnyConnectedSystems) {
         setSessions([]);
         setSessionsNextBefore(null);
         setSessionsHasMore(false);
+        sessionsHasMoreRef.current = false;
         return;
       }
 
+      sessionsLoadingRef.current = true;
       setSessionsLoading(true);
       try {
         const limit = 20;
         const before = reset ? null : sessionsNextBefore;
 
         const url = new URL(`${apiBase}/chat/sessions`);
-        url.searchParams.set("systemId", sid);
         url.searchParams.set("limit", String(limit));
         if (before) url.searchParams.set("before", before);
-
-        if (activeSystemData?.sapUser) url.searchParams.set("sapUser", String(activeSystemData.sapUser));
 
         const res = await authFetch(url.toString(), { method: "GET" });
         const payload = await res.json().catch(() => ({}));
@@ -170,8 +209,7 @@ function Sidebar({
 
           for (const it of items) {
             const id = String(it?._id || "");
-            if (!id) continue;
-            if (seen.has(id)) continue;
+            if (!id || seen.has(id)) continue;
             seen.add(id);
             merged.push({
               _id: id,
@@ -191,20 +229,19 @@ function Sidebar({
         });
 
         setSessionsNextBefore(nextBefore);
-        setSessionsHasMore(Boolean(nextBefore) && items.length > 0);
+        const hasMore = Boolean(nextBefore) && items.length > 0;
+        setSessionsHasMore(hasMore);
+        sessionsHasMoreRef.current = hasMore;
       } catch (e) {
         console.error("Failed to fetch sessions:", e);
       } finally {
+        sessionsLoadingRef.current = false;
         setSessionsLoading(false);
       }
     },
     [
-      activeSystemData?.name,
-      activeSystemData?.sapUser,
-      activeSystemData?.systemId,
       apiBase,
-      sessionsHasMore,
-      sessionsLoading,
+      hasAnyConnectedSystems,
       sessionsNextBefore,
     ]
   );
@@ -218,29 +255,12 @@ function Sidebar({
   useEffect(() => {
     const onSapSessionChanged = () => {
       loadActiveSystem();
-
-      let hasSelectedSystem = false;
-      try {
-        const s = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
-        hasSelectedSystem = Boolean(s?.systemId || s?.name);
-      } catch {
-        hasSelectedSystem = false;
-      }
-
-      if (!hasSelectedSystem) {
-        setSessions([]);
-        setSessionsNextBefore(null);
-        setSessionsHasMore(false);
-        return;
-      }
-
-      setSessionsHasMore(true);
-      fetchSessions({ reset: true });
+      fetchTiles();
     };
 
     window.addEventListener("sapActiveSessionChanged", onSapSessionChanged);
     return () => window.removeEventListener("sapActiveSessionChanged", onSapSessionChanged);
-  }, [fetchSessions, loadActiveSystem]);
+  }, [fetchTiles, loadActiveSystem]);
 
   const renameSessionApi = useCallback(
     async (id, title) => {
@@ -267,17 +287,20 @@ function Sidebar({
   );
 
   useEffect(() => {
-    fetchSessions({ reset: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!hasAnyConnectedSystems) {
+      setSessions([]);
+      setSessionsNextBefore(null);
+      setSessionsHasMore(false);
+      sessionsHasMoreRef.current = false;
+      return;
+    }
 
-  useEffect(() => {
     setSessions([]);
     setSessionsNextBefore(null);
     setSessionsHasMore(true);
+    sessionsHasMoreRef.current = true;
     fetchSessions({ reset: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSystemData?.systemId, activeSystemData?.sapUser]);
+  }, [hasAnyConnectedSystems]);
 
   useEffect(() => {
     const convArr = Array.isArray(conversations) ? conversations : [];
@@ -287,7 +310,10 @@ function Sidebar({
         _id: String(c?._id || c?.id || ""),
         title: c?.title || "New chat",
         createdAt: c?.createdAt || null,
-        updatedAt: typeof c?.updatedAt === "number" ? new Date(c.updatedAt).toISOString() : c?.updatedAt || null,
+        updatedAt:
+          typeof c?.updatedAt === "number"
+            ? new Date(c.updatedAt).toISOString()
+            : c?.updatedAt || null,
       }))
       .filter((s) => s._id && s._id !== "draft");
 
@@ -343,11 +369,6 @@ function Sidebar({
     return () => document.removeEventListener("mousedown", onOutsideChatMenu);
   }, [setMenuOpenId]);
 
-  // ✅ show ONLY saved logins (tiles)
-  const displaySystems = useMemo(() => {
-    return Array.isArray(tiles) ? tiles : [];
-  }, [tiles]);
-
   const onNewChatWithToast = useCallback(() => {
     onNewChat?.();
     toast.success("New chat created");
@@ -359,7 +380,6 @@ function Sidebar({
       if (!sid) return;
 
       const label = sys?.name || sys?.description || sid;
-      const tileSapUser = normalizeSapUser(sys?.sapUser || "");
 
       const nextActiveSystem = {
         systemId: sid,
@@ -368,8 +388,6 @@ function Sidebar({
         host: sys?.host || "",
         port: sys?.port ?? null,
         sapRouter: sys?.sapRouter || "",
-        username: activeSystemData?.username || userName || "User",
-        sapUser: tileSapUser || activeSystemData?.sapUser || null,
       };
 
       localStorage.setItem("sapActiveSystem", JSON.stringify(nextActiveSystem));
@@ -379,26 +397,30 @@ function Sidebar({
       setActiveId?.("draft");
       onNewChat?.();
 
-      const connectingKey = `${sid}:${normalizeSapUser(nextActiveSystem.sapUser || "")}`;
-      setConnectingSid(connectingKey);
+      setConnectingSid(sid);
+
+      setTiles((prev) =>
+        (Array.isArray(prev) ? prev : []).map((t) =>
+          normalizeSid(t?.systemId) === sid
+            ? {
+                ...t,
+                connected: false,
+                isConnected: false,
+                status: "connecting",
+                active: false,
+              }
+            : t
+        )
+      );
 
       const toastId = toast.loading(`Connecting to ${label}...`);
 
       try {
-        const hasCreds = typeof sys?.hasCredentials === "boolean" ? sys.hasCredentials : null;
-
-        if (hasCreds === false) {
-          toast.error("Login required for this system.", { id: toastId });
-          onOpenSapLogin?.(sys);
-          return;
-        }
-
         const connRes = await authFetch(`${apiBase}/sap/connect`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             systemId: sid,
-            sapUser: nextActiveSystem.sapUser || null,
             validate: true,
           }),
         });
@@ -408,158 +430,194 @@ function Sidebar({
           throw new Error(connPayload?.error || `Connect failed (${connRes.status})`);
         }
 
-        const connectedSapUser = normalizeSapUser(connPayload?.sapUser || nextActiveSystem.sapUser || "");
+        const connectedSapUser = normalizeSapUser(connPayload?.sapUser || "");
 
-        const updatedActive = connectedSapUser ? { ...nextActiveSystem, sapUser: connectedSapUser } : nextActiveSystem;
+        const updatedActive = {
+          ...nextActiveSystem,
+          sapUser: connectedSapUser || null,
+        };
 
         localStorage.setItem("sapActiveSystem", JSON.stringify(updatedActive));
         setActiveSystemData(updatedActive);
-
-        const firstName = String(connPayload?.firstName || "").trim();
-        const fullName = String(connPayload?.fullName || "").trim();
 
         localStorage.setItem(
           "sapActiveSession",
           JSON.stringify({
             systemId: sid,
-            sapUser: connectedSapUser,
-            firstName,
-            fullName,
+            sapUser: connectedSapUser || null,
+            firstName: String(connPayload?.firstName || "").trim(),
+            fullName: String(connPayload?.fullName || "").trim(),
           })
         );
 
+        await fetchTiles();
         window.dispatchEvent(new Event("sapActiveSessionChanged"));
+        window.dispatchEvent(new Event("sapConnectionChanged"));
+
+        if (typeof onSystemsChanged === "function") {
+          await onSystemsChanged();
+        }
 
         toast.success(`Connected to ${label}`, { id: toastId });
-
-        fetchTiles();
       } catch (e) {
-        console.error("Auto-connect failed:", e);
+        console.error("Connect failed:", e);
+
+        setTiles((prev) =>
+          (Array.isArray(prev) ? prev : []).map((t) =>
+            normalizeSid(t?.systemId) === sid
+              ? {
+                  ...t,
+                  connected: false,
+                  isConnected: false,
+                  status: "disconnected",
+                  active: false,
+                }
+              : t
+          )
+        );
+
         toast.error(e?.message || "Connect failed. Please login again.", { id: toastId });
         onOpenSapLogin?.(sys);
       } finally {
         setConnectingSid(null);
       }
     },
+    [apiBase, fetchTiles, onNewChat, onOpenSapLogin, onSystemsChanged, setActiveId]
+  );
+
+  const disconnectSystem = useCallback(
+    async (sys) => {
+      const sid = normalizeSid(sys?.systemId || sys?.name);
+      if (!sid) {
+        toast.error("No system selected.");
+        return;
+      }
+
+      const label = sys?.name || sys?.description || sid;
+      const ok = window.confirm(`Disconnect ${label}?`);
+      if (!ok) return;
+
+      const toastId = toast.loading(`Disconnecting ${label}...`);
+
+      try {
+        const res = await authFetch(`${apiBase}/sap/disconnect`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ systemId: sid }),
+        });
+
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || payload?.ok !== true) {
+          throw new Error(payload?.error || `Disconnect failed (${res.status})`);
+        }
+
+        if (normalizeSid(activeSystemData?.systemId || activeSystemData?.name) === sid) {
+          localStorage.removeItem("sapActiveSystem");
+          localStorage.removeItem("chatSessionId");
+          localStorage.removeItem("sapActiveSession");
+          setActiveSystemData(null);
+          setActiveId?.("draft");
+          onNewChat?.();
+        }
+
+        await fetchTiles();
+        window.dispatchEvent(new Event("sapActiveSessionChanged"));
+        toast.success(`Disconnected ${label}`, { id: toastId });
+
+        if (typeof onSystemsChanged === "function") {
+          onSystemsChanged();
+        }
+
+        await fetchSessions({ reset: true });
+      } catch (e) {
+        console.error("Disconnect failed:", e);
+        toast.error(e?.message || "Failed to disconnect system.", { id: toastId });
+      } finally {
+        setUserMenuOpen(false);
+        setShowSystemDetails(false);
+      }
+    },
     [
-      activeSystemData?.sapUser,
-      activeSystemData?.username,
+      activeSystemData?.name,
+      activeSystemData?.systemId,
       apiBase,
+      fetchSessions,
       fetchTiles,
-      normalizeSapUser,
-      normalizeSid,
       onNewChat,
-      onOpenSapLogin,
+      onSystemsChanged,
       setActiveId,
-      userName,
     ]
   );
 
-  // ✅ UPDATED removeActiveSystem with detailed console logs (your request)
-  const removeActiveSystem = useCallback(async () => {
-    console.log("========== REMOVE ACTIVE SYSTEM ==========");
-    console.log("activeSystemData:", activeSystemData);
-    console.log("activeTile:", activeTile);
-    console.log("activeSession:", activeSession);
+  const removeSystem = useCallback(
+    async (sys) => {
+      const targetSystem = sys || activeSystemData;
+      const sid = normalizeSid(targetSystem?.systemId || targetSystem?.name);
 
-    const sid = normalizeSid(activeTile?.systemId || activeSystemData?.systemId || activeSystemData?.name);
-    const sapUser = normalizeSapUser(activeTile?.sapUser || activeSystemData?.sapUser || "");
-
-    console.log("resolved sid:", sid);
-    console.log("resolved sapUser:", sapUser);
-
-    if (!sid) {
-      console.warn("ABORT: sid missing");
-      toast.error("No system selected.");
-      return;
-    }
-    if (!sapUser) {
-      console.warn("ABORT: sapUser missing");
-      toast.error("No SAP user found for this tile.");
-      return;
-    }
-
-    const ok = window.confirm(`Remove saved login ${sid} (${sapUser})? This will not delete the system.`);
-    console.log("confirm:", ok);
-    if (!ok) return;
-
-    const toastId = toast.loading(`Removing ${sid} (${sapUser})...`);
-
-    try {
-      console.log("CALL DELETE /sap/credentials ...");
-      const url = new URL(`${apiBase}/sap/credentials`);
-      url.searchParams.set("systemId", sid);
-      url.searchParams.set("sapUser", sapUser);
-
-      console.log("DELETE URL:", url.toString());
-
-      const res = await authFetch(url.toString(), { method: "DELETE" });
-      console.log("DELETE status:", res.status);
-
-      const payload = await res.json().catch(() => ({}));
-      console.log("DELETE payload:", payload);
-
-      if (!res.ok || payload?.ok !== true) {
-        throw new Error(payload?.error || `Remove failed (${res.status})`);
+      if (!sid) {
+        toast.error("No system selected.");
+        return;
       }
 
-      console.log("REMOVE TILE FROM UI (local state) ...");
-      setTiles((prev) => {
-        const beforeCount = Array.isArray(prev) ? prev.length : 0;
-        const next = (Array.isArray(prev) ? prev : []).filter(
-          (t) => !(normalizeSid(t?.systemId) === sid && normalizeSapUser(t?.sapUser) === sapUser)
+      const label = targetSystem?.name || targetSystem?.description || sid;
+      const ok = window.confirm(
+        `Remove ${label}? This will delete the system and related records.`
+      );
+      if (!ok) return;
+
+      const toastId = toast.loading(`Removing ${label}...`);
+
+      try {
+        const res = await authFetch(`${apiBase}/sap/systems/${encodeURIComponent(sid)}`, {
+          method: "DELETE",
+        });
+
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || payload?.ok !== true) {
+          throw new Error(payload?.error || `Remove failed (${res.status})`);
+        }
+
+        setTiles((prev) =>
+          (Array.isArray(prev) ? prev : []).filter(
+            (t) => normalizeSid(t?.systemId || t?.name) !== sid
+          )
         );
-        console.log("tiles before:", beforeCount, "tiles after:", next.length);
-        return next;
-      });
 
-      console.log("CLEAR localStorage sapActiveSystem/chatSessionId/sapActiveSession ...");
-      localStorage.removeItem("sapActiveSystem");
-      localStorage.removeItem("chatSessionId");
-      localStorage.removeItem("sapActiveSession");
+        if (normalizeSid(activeSystemData?.systemId || activeSystemData?.name) === sid) {
+          localStorage.removeItem("sapActiveSystem");
+          localStorage.removeItem("sapActiveSession");
+          localStorage.removeItem("chatSessionId");
+          setActiveSystemData(null);
+          setActiveId?.("draft");
+          onNewChat?.();
+        }
 
-      console.log("DISPATCH sapActiveSessionChanged ...");
-      window.dispatchEvent(new Event("sapActiveSessionChanged"));
+        window.dispatchEvent(new Event("sapActiveSessionChanged"));
+        toast.success(`${label} removed`, { id: toastId });
 
-      console.log("RESET local state (activeSystemData + active chat) ...");
-      setActiveSystemData(null);
-      setActiveId?.("draft");
-      onNewChat?.();
+        if (typeof onSystemsChanged === "function") {
+          onSystemsChanged();
+        }
 
-      toast.success(`Removed ${sid} (${sapUser})`, { id: toastId });
-
-      if (typeof onSystemsChanged === "function") {
-        console.log("CALL onSystemsChanged ...");
-        onSystemsChanged();
+        await fetchSessions({ reset: true });
+      } catch (e) {
+        console.error("Remove failed:", e);
+        toast.error(e?.message || "Failed to remove system.", { id: toastId });
+      } finally {
+        setUserMenuOpen(false);
+        setShowSystemDetails(false);
       }
-
-      console.log("REFRESH tiles + sessions (safety) ...");
-      await fetchTiles();
-      await fetchSessions({ reset: true });
-
-      console.log("✅ REMOVE DONE");
-    } catch (e) {
-      console.error("❌ REMOVE FAILED:", e);
-      toast.error(e?.message || "Failed to remove saved login.", { id: toastId });
-    } finally {
-      console.log("FINALLY: close menu + details");
-      setUserMenuOpen(false);
-      setShowSystemDetails(false);
-      console.log("=========================================");
-    }
-  }, [
-    activeSystemData,
-    activeTile,
-    activeSession,
-    apiBase,
-    fetchTiles,
-    fetchSessions,
-    normalizeSid,
-    normalizeSapUser,
-    onNewChat,
-    onSystemsChanged,
-    setActiveId,
-  ]);
+    },
+    [
+      activeSystemData?.name,
+      activeSystemData?.systemId,
+      apiBase,
+      fetchSessions,
+      onNewChat,
+      onSystemsChanged,
+      setActiveId,
+    ]
+  );
 
   return (
     <>
@@ -582,7 +640,6 @@ function Sidebar({
           collapsed ? "w-16" : "w-72"
         )}
       >
-        {/* HEADER */}
         <div className={classNames("flex items-center justify-between flex-shrink-0", collapsed ? "px-2 py-3" : "px-3 py-2")}>
           {collapsed ? (
             <div
@@ -629,7 +686,6 @@ function Sidebar({
 
         <div className={classNames("h-px bg-gray-200 flex-shrink-0", collapsed ? "mx-1" : "mx-3")} />
 
-        {/* BODY */}
         <div className="flex-1 min-h-0 flex flex-col">
           {collapsed && (
             <div className="flex-1 min-h-0 overflow-hidden">
@@ -646,7 +702,7 @@ function Sidebar({
 
           {!collapsed && (
             <>
-              <div className="flex-1 min-h-0 overflow-y-auto">
+              <div className="flex-1 min-h-0 overflow-visible relative">
                 <ChatHistorySection
                   onNewChatWithToast={onNewChatWithToast}
                   sessions={sessions}
@@ -666,10 +722,12 @@ function Sidebar({
                   deleteSessionApi={deleteSessionApi}
                   fetchSessions={fetchSessions}
                   handleDelete={handleDelete}
+                  currentSystemId={activeSystemData?.systemId || activeSystemData?.name || ""}
+                  showHistory={hasAnyConnectedSystems}
                 />
               </div>
 
-              <div className="flex-shrink-0">
+              <div className="flex-shrink-0 relative z-10">
                 <div className="mx-3 h-px bg-gray-200 flex-shrink-0" />
 
                 <div className="px-4 pt-3 pb-2 text-[9px] font-semibold tracking-widest text-zinc-400 uppercase flex-shrink-0">
@@ -678,16 +736,14 @@ function Sidebar({
 
                 <SystemsGrid
                   displaySystems={displaySystems}
-                  activeSystemData={activeSystemData}
                   connectingSid={connectingSid}
                   normalizeSid={normalizeSid}
-                  normalizeSapUser={normalizeSapUser}
                   setActiveSystemLocal={setActiveSystemLocal}
-                  activeSession={activeSession}
+                  onDisconnectSystem={disconnectSystem}
                 />
               </div>
 
-              <div className="mt-auto">
+              <div className="mt-auto relative z-10">
                 <div className="mx-3 h-px bg-gray-200 flex-shrink-0" />
 
                 <UserMenu
@@ -699,7 +755,7 @@ function Sidebar({
                   activeSystemData={activeSystemData}
                   userName={userName}
                   onAddNewSystem={onAddNewSystem}
-                  removeActiveSystem={removeActiveSystem}
+                  removeActiveSystem={removeSystem}
                   activeSession={activeSession}
                   activeTile={activeTile}
                 />

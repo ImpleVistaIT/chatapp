@@ -10,7 +10,7 @@ export async function setSessionPendingAction(sessionId, pendingAction) {
         pendingAction,
       },
     },
-    { new: true }
+    { returnDocument: "after" }
   );
 }
 
@@ -24,7 +24,7 @@ export async function clearSessionPendingAction(sessionId) {
         pendingAction: null,
       },
     },
-    { new: true }
+    { returnDocument: "after" }
   );
 }
 

@@ -9,7 +9,6 @@ function normalizeSystemId(sid) {
   return String(sid || "").trim().toUpperCase();
 }
 
-// app display name fallback
 function resolveAppDisplayName(userNameProp) {
   const fromStorage =
     String(localStorage.getItem("userName") || "").trim() ||
@@ -32,11 +31,7 @@ export default function UserMenu({
   userName,
   onAddNewSystem,
   removeActiveSystem,
-
-  // ✅ single truth for active connection
-  activeSession, // { systemId, sapUser, firstName?, fullName? } | null
-
-  // ✅ tile object from /sap/tiles (has `system` inside)
+  activeSession,
   activeTile = null,
 }) {
   const appName = resolveAppDisplayName(userName);
@@ -47,36 +42,55 @@ export default function UserMenu({
   const activeSid = normalizeSystemId(activeSession?.systemId || "");
   const activeSapUser = String(activeSession?.sapUser || "").trim();
 
-  const isConnected = Boolean(activeSid && activeSapUser);
+  const tileSapUser = String(
+    activeTile?.sapUser || activeTile?.system?.sapUser || ""
+  ).trim();
+  const tileFirstName = String(activeTile?.profileFirstName || "").trim();
+  const tileFullName = String(activeTile?.profileFullName || "").trim();
 
-  // ✅ allow menu actions when a system is selected (even if disconnected)
-  const hasSelection = Boolean(selectedSid);
+  const tileConnected =
+    activeTile?.connected === true ||
+    activeTile?.isConnected === true ||
+    activeTile?.status === "connected" ||
+    activeTile?.active === true;
 
-  // ✅ "Active" badge only if selected == active session (systemId + sapUser)
+  const hasSelection = Boolean(selectedSid || activeSid);
+  const isConnected = Boolean(
+    tileConnected ||
+      activeSapUser ||
+      selectedSapUser ||
+      tileSapUser ||
+      (activeSid && selectedSid && activeSid === selectedSid)
+  );
+
   const isActiveForSelected =
-    Boolean(selectedSid && selectedSapUser) &&
+    Boolean(selectedSid) &&
+    Boolean(activeSid) &&
     selectedSid === activeSid &&
-    selectedSapUser === activeSapUser;
+    Boolean(activeSapUser || selectedSapUser);
 
   const systemLabel =
     String(activeSystemData?.name || "").trim() ||
+    String(activeTile?.name || "").trim() ||
     String(activeSystemData?.systemId || "").trim() ||
+    String(activeTile?.systemId || "").trim() ||
+    activeSid ||
     "";
 
-  // ✅ Prefer Fullname/Firstname from activeSession (fallback to sapUser)
   const displayName =
     String(activeSession?.fullName || "").trim() ||
     String(activeSession?.firstName || "").trim() ||
-    activeSapUser;
+    activeSapUser ||
+    tileFullName ||
+    tileFirstName ||
+    tileSapUser ||
+    selectedSapUser ||
+    appName;
 
-  // ✅ When connected show SAP person's name; when disconnected show app user name
   const primaryName = isConnected ? displayName : appName;
 
-  // ✅ Secondary line: show actual connection target when connected, else show selected system (if any)
-  const secondaryLine = isConnected
-    ? systemLabel || activeSid || "Connected"
-    : hasSelection
-    ? systemLabel || selectedSid
+  const secondaryLine = hasSelection
+    ? `${systemLabel || selectedSid}${isConnected ? "" : " (Disconnected)"}`
     : "Disconnected";
 
   return (
@@ -90,7 +104,6 @@ export default function UserMenu({
       <div ref={menuRef} className="relative">
         <button
           onClick={() => {
-            // ✅ allow opening menu when there is a selection OR connected
             if (!hasSelection && !isConnected) return;
             setUserMenuOpen((v) => !v);
           }}
@@ -102,15 +115,23 @@ export default function UserMenu({
           disabled={!hasSelection && !isConnected}
           aria-disabled={!hasSelection && !isConnected}
         >
-          <img src={userImg} alt="user" className="w-9 h-9 rounded-full object-cover flex-shrink-0" />
+          <img
+            src={userImg}
+            alt="user"
+            className="w-9 h-9 rounded-full object-cover flex-shrink-0"
+          />
 
           <div className="flex flex-col min-w-0 flex-1">
-            <span className="text-xs font-semibold text-zinc-800 truncate">{primaryName}</span>
+            <span className="text-xs font-semibold text-zinc-800 truncate">
+              {primaryName}
+            </span>
 
             <div className="flex items-center gap-1 mt-0.5">
-              <span className="text-[11px] text-zinc-500 truncate flex-1">{secondaryLine}</span>
+              <span className="text-[11px] text-zinc-500 truncate flex-1">
+                {secondaryLine}
+              </span>
 
-              {isActiveForSelected && (
+              {isActiveForSelected && isConnected && (
                 <span className="text-[9px] font-bold text-white bg-green-600 px-1.5 py-0.5 rounded-full flex-shrink-0">
                   Active
                 </span>
@@ -151,8 +172,8 @@ export default function UserMenu({
                   setShowSystemDetails(true);
                 }}
                 type="button"
-                disabled={!isActiveForSelected}
-                title={!isActiveForSelected ? "Connect to view system details" : "System Details"}
+                disabled={!isConnected}
+                title={!isConnected ? "Connect to view system details" : "System Details"}
               >
                 System Details
               </button>
@@ -171,13 +192,12 @@ export default function UserMenu({
               <button
                 className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 disabled:opacity-60 disabled:cursor-not-allowed"
                 onClick={() => {
-                  console.log("REMOVE BUTTON CLICKED");
                   setUserMenuOpen(false);
-                  removeActiveSystem?.();
+                  removeActiveSystem?.(activeSystemData);
                 }}
                 type="button"
-                disabled={!Boolean(selectedSid && selectedSapUser)}
-                title={!Boolean(selectedSid && selectedSapUser) ? "No saved login selected" : "Remove saved login"}
+                disabled={!hasSelection}
+                title={!hasSelection ? "No system selected" : "Remove system"}
               >
                 Remove System
               </button>
