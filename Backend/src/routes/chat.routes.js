@@ -1,7 +1,11 @@
 import express from "express";
 
 import { handleChatEntry } from "../controllers/chat.entry.controller.js";
-import { submitSolmanCreateChangeRequest } from "../controllers/chat.actions.controller.js";
+import {
+  submitSolmanCreateChangeRequest,
+  getSolmanChangeRequestDetails,
+  listSolmanChangeRequests,
+} from "../controllers/chat.actions.controller.js";
 
 import {
   listChatSessions,
@@ -16,7 +20,20 @@ export const chatRoutes = express.Router();
 chatRoutes.post("/", handleChatEntry);
 
 // action endpoints
-chatRoutes.post("/actions/solman/create-change-request", submitSolmanCreateChangeRequest);
+chatRoutes.post(
+  "/actions/solman/create-change-request",
+  submitSolmanCreateChangeRequest
+);
+
+chatRoutes.post(
+  "/actions/solman/get-change-request-details",
+  getSolmanChangeRequestDetails
+);
+
+chatRoutes.post(
+  "/actions/solman/list-change-requests",
+  listSolmanChangeRequests
+);
 
 // sidebar sessions
 chatRoutes.get("/sessions", listChatSessions);

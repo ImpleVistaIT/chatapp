@@ -2,6 +2,7 @@ import { classifyPrompt } from "./promptClassifier.service.js";
 import { validateRoutingResult } from "./routingValidator.service.js";
 import { resolveRoutingAction } from "./actionResolver.service.js";
 import { executeResolvedAction } from "./executor.service.js";
+import { resolveTargetSystem } from "./systemContextResolver.service.js";
 import {
   buildPendingAction,
   mergePendingActionData,
@@ -44,7 +45,26 @@ function buildResumeQuery({ pendingAction, query }) {
   return `${originalQuery}\n${nextQuery}`;
 }
 
-export async function orchestrateChatRequest({ query, sessionContext = null, req = null }) {
+function applyResolvedSystemIdToAction(resolved, systemId) {
+  if (!resolved || !systemId) return resolved;
+
+  return {
+    ...resolved,
+    action: {
+      ...(resolved.action || {}),
+      payload: {
+        ...((resolved.action && resolved.action.payload) || {}),
+        systemId,
+      },
+    },
+  };
+}
+
+export async function orchestrateChatRequest({
+  query,
+  sessionContext = null,
+  req = null,
+}) {
   const sessionId = sessionContext?.session?._id || null;
   const existingPendingAction = sessionContext?.session?.pendingAction || null;
 
@@ -60,8 +80,70 @@ export async function orchestrateChatRequest({ query, sessionContext = null, req
     sessionContext,
   });
 
+  const availableSystems = Array.isArray(req?.body?.availableSystems)
+    ? req.body.availableSystems
+    : [];
+
+  const incomingSystemId = String(req?.body?.systemId || "").trim();
+  let resolvedSystemId = incomingSystemId || null;
+  let systemResolution = null;
+
+  if (!incomingSystemId && availableSystems.length > 0) {
+    systemResolution = await resolveTargetSystem({
+      query: effectiveQuery,
+      classified,
+      requestedSystemId: incomingSystemId,
+      availableSystems,
+    });
+
+    if (systemResolution.status === "disconnected") {
+      return {
+        ok: false,
+        status: "disconnected_system",
+        message: `The system ${systemResolution.targetSystemId} is disconnected. Please connect it and try again.`,
+        routing: classified,
+        systemResolution,
+      };
+    }
+
+    if (systemResolution.status === "ambiguous") {
+      return {
+        ok: true,
+        status: "needs_input",
+        message:
+          systemResolution.candidates.length > 0
+            ? `I found multiple possible systems for this request: ${systemResolution.candidates.join(", ")}. Please specify which system to use.`
+            : "I could not determine which system to use. Please specify the system.",
+        routing: classified,
+        systemResolution,
+        missingFields: ["systemId"],
+      };
+    }
+
+    if (systemResolution.status === "unknown") {
+      return {
+        ok: true,
+        status: "needs_input",
+        message:
+          "I could not determine the target system from your request. Please specify the system.",
+        routing: classified,
+        systemResolution,
+        missingFields: ["systemId"],
+      };
+    }
+
+    if (systemResolution.status === "resolved") {
+      resolvedSystemId = systemResolution.targetSystemId;
+      req.body.systemId = resolvedSystemId;
+    }
+  }
+
   const validated = validateRoutingResult(classified);
-  const resolved = resolveRoutingAction(validated);
+  let resolved = resolveRoutingAction(validated);
+
+  if (resolvedSystemId) {
+    resolved = applyResolvedSystemIdToAction(resolved, resolvedSystemId);
+  }
 
   const extractedFields = getCollectedFields(validated);
   const missingFields = getMissingFields(validated);
@@ -91,16 +173,22 @@ export async function orchestrateChatRequest({ query, sessionContext = null, req
     }
 
     if (resolved?.action?.type === "execute_api") {
-      return executeResolvedAction({
+      const executionResponse = await executeResolvedAction({
         resolvedActionResponse: resolved,
         req,
       });
+
+      return {
+        ...executionResponse,
+        ...(systemResolution ? { systemResolution } : {}),
+      };
     }
 
     return {
       ...resolved,
       resumedFromPendingAction: true,
       collected: mergedPendingAction.collected || {},
+      ...(systemResolution ? { systemResolution } : {}),
     };
   }
 
@@ -129,6 +217,7 @@ export async function orchestrateChatRequest({ query, sessionContext = null, req
       formId: pendingAction.formId,
       pendingAction,
       missingFields,
+      ...(systemResolution ? { systemResolution } : {}),
     });
   }
 
@@ -137,11 +226,19 @@ export async function orchestrateChatRequest({ query, sessionContext = null, req
   }
 
   if (resolved?.action?.type === "execute_api") {
-    return executeResolvedAction({
+    const executionResponse = await executeResolvedAction({
       resolvedActionResponse: resolved,
       req,
     });
+
+    return {
+      ...executionResponse,
+      ...(systemResolution ? { systemResolution } : {}),
+    };
   }
 
-  return resolved;
+  return {
+    ...resolved,
+    ...(systemResolution ? { systemResolution } : {}),
+  };
 }

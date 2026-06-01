@@ -39,11 +39,14 @@ export function createRoutingResult(overrides = {}) {
     reason: "",
     source: "unknown", // llm | keyword | rule | validator | memory | unknown
     entities: {},
+    collected: {},
     needsClarification: false,
     clarificationQuestion: "",
     clarificationOptions: [],
     requiredInputs: [],
     missingInputs: [],
+    requiredFields: [],
+    missingFields: [],
     action: "none",
     actionPayload: null,
     ...overrides,
@@ -63,7 +66,31 @@ export function clampConfidence(value) {
   return n;
 }
 
+function normalizeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function normalizeStringArray(value) {
+  return Array.isArray(value)
+    ? value.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+}
+
 export function normalizeRoutingResult(input = {}) {
+  const entities = normalizeObject(input.entities);
+  const collected = normalizeObject(input.collected);
+
+  const requiredInputs = normalizeStringArray(input.requiredInputs);
+  const missingInputs = normalizeStringArray(input.missingInputs);
+
+  const requiredFields = normalizeStringArray(
+    input.requiredFields?.length ? input.requiredFields : requiredInputs
+  );
+
+  const missingFields = normalizeStringArray(
+    input.missingFields?.length ? input.missingFields : missingInputs
+  );
+
   return createRoutingResult({
     system: normalizeEnum(input.system, ROUTING_SYSTEMS, "unknown"),
     module: normalizeEnum(input.module, ROUTING_MODULES, "unknown"),
@@ -71,12 +98,17 @@ export function normalizeRoutingResult(input = {}) {
     confidence: clampConfidence(input.confidence),
     reason: String(input.reason || "").trim(),
     source: String(input.source || "unknown").trim().toLowerCase(),
-    entities: input.entities && typeof input.entities === "object" ? input.entities : {},
+    entities,
+    collected: Object.keys(collected).length > 0 ? collected : entities,
     needsClarification: Boolean(input.needsClarification),
     clarificationQuestion: String(input.clarificationQuestion || "").trim(),
-    clarificationOptions: Array.isArray(input.clarificationOptions) ? input.clarificationOptions : [],
-    requiredInputs: Array.isArray(input.requiredInputs) ? input.requiredInputs : [],
-    missingInputs: Array.isArray(input.missingInputs) ? input.missingInputs : [],
+    clarificationOptions: Array.isArray(input.clarificationOptions)
+      ? input.clarificationOptions
+      : [],
+    requiredInputs,
+    missingInputs,
+    requiredFields,
+    missingFields,
     action: normalizeEnum(input.action, ROUTING_ACTIONS, "none"),
     actionPayload: input.actionPayload ?? null,
   });

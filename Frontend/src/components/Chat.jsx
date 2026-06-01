@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSpeechToText } from "../hooks/useSpeechToText";
 import { sendChatMessageStream } from "../api/chatApiStream";
+import { getSolmanChangeRequestDetails } from "../api/solmanApi";
 
 import Sidebar from "./Sidebar";
 import ChatWindow from "./ChatWindow";
 import SapLogin from "../pages/saplogin";
 import { authFetch } from "../api/authFetch";
 import SolmanCreateCrForm from "./SolmanCreateCrForm";
+
+//---------------------------------------------//
+// Utility helpers
+//---------------------------------------------//
 
 async function copyToClipboard(text) {
   const t = String(text ?? "");
@@ -46,14 +51,161 @@ function normalizeSystemId(sid) {
 }
 
 function normalizeActiveSession(v) {
-  if (!v || !v.systemId || !v.sapUser) return null;
+  if (!v || !v.systemId) return null;
   return {
     systemId: normalizeSystemId(v.systemId),
-    sapUser: String(v.sapUser).trim(),
+    sapUser: String(v.sapUser || "").trim() || null,
     firstName: String(v.firstName || "").trim(),
     fullName: String(v.fullName || "").trim(),
   };
 }
+
+function buildAvailableSystemsFromTiles(tiles = []) {
+  if (!Array.isArray(tiles)) return [];
+
+  return tiles
+    .map((tile) => {
+      const system = tile?.system && typeof tile.system === "object" ? tile.system : {};
+
+      const systemId = String(
+        tile?.systemId ||
+          tile?.SystemId ||
+          system?.systemId ||
+          system?.SystemId ||
+          tile?.code ||
+          system?.code ||
+          ""
+      )
+        .trim()
+        .toUpperCase();
+
+      if (!systemId) return null;
+
+      const name = String(
+        tile?.name ||
+          tile?.systemName ||
+          tile?.title ||
+          system?.name ||
+          system?.systemName ||
+          systemId
+      ).trim();
+
+      const host = String(
+        tile?.host ||
+          tile?.Host ||
+          system?.host ||
+          system?.Host ||
+          ""
+      )
+        .trim()
+        .toLowerCase();
+
+      const rawPort =
+        tile?.port ??
+        tile?.Port ??
+        system?.port ??
+        system?.Port ??
+        "";
+
+      const port = String(rawPort).trim();
+
+      const protocol = String(
+        tile?.protocol ||
+          tile?.Protocol ||
+          system?.protocol ||
+          system?.Protocol ||
+          "https"
+      )
+        .trim()
+        .toLowerCase();
+
+      const connected =
+        tile?.connected === true ||
+        tile?.isConnected === true ||
+        system?.connected === true ||
+        system?.isConnected === true ||
+        tile?.status === "connected" ||
+        system?.status === "connected" ||
+        tile?.active === true ||
+        system?.active === true;
+
+      const aliases = Array.isArray(tile?.aliases)
+        ? tile.aliases.map((a) => String(a || "").trim()).filter(Boolean)
+        : [];
+
+      return {
+        systemId,
+        name,
+        host,
+        port,
+        protocol,
+        connected,
+        isConnected: connected,
+        status: connected ? "connected" : "disconnected",
+        aliases,
+        sapUser:
+          tile?.sapUser ||
+          system?.sapUser ||
+          tile?.user ||
+          system?.user ||
+          "",
+      };
+    })
+    .filter((item) => item && (item.systemId || (item.host && item.port)));
+}
+
+function getCurrentConnectedSystem({ activeSession, selectedSystem, availableSystems }) {
+  const activeId = normalizeSystemId(activeSession?.systemId);
+  const selectedId = normalizeSystemId(selectedSystem?.systemId);
+  const activeSapUser = String(activeSession?.sapUser || "").trim();
+
+  // Allow immediate requests right after a successful connect before tiles refresh.
+  if (activeId && activeSapUser) {
+    return {
+      systemId: activeId,
+      sapUser: activeSapUser,
+    };
+  }
+
+  const activeMatch = activeId
+    ? availableSystems.find(
+        (item) =>
+          normalizeSystemId(item?.systemId) === activeId &&
+          item?.connected === true
+      )
+    : null;
+
+  if (activeMatch) {
+    return {
+      systemId: activeId,
+      sapUser: String(activeSession?.sapUser || activeMatch?.sapUser || "").trim(),
+    };
+  }
+
+  const selectedMatch = selectedId
+    ? availableSystems.find(
+        (item) =>
+          normalizeSystemId(item?.systemId) === selectedId &&
+          item?.connected === true
+      )
+    : null;
+
+  if (selectedMatch) {
+    return {
+      systemId: selectedId,
+      sapUser: String(selectedMatch?.sapUser || activeSession?.sapUser || "").trim(),
+    };
+  }
+
+  return {
+    systemId: "",
+    sapUser: "",
+  };
+}
+
+//---------------------------------------------//
+// Main component
+//---------------------------------------------//
 
 export default function Chat() {
   const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
@@ -67,6 +219,10 @@ export default function Chat() {
     }
   })();
 
+  //---------------------------------------------//
+  // UI state
+  //---------------------------------------------//
+
   const [sapView, setSapView] = useState(() => {
     try {
       const force = localStorage.getItem("forceSapLogin") === "1";
@@ -78,6 +234,11 @@ export default function Chat() {
   const [selectedSystem, setSelectedSystem] = useState(null);
   const [statusText, setStatusText] = useState("");
   const [showSolmanCrForm, setShowSolmanCrForm] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null);
+
+  //---------------------------------------------//
+  // Active SAP session state
+  //---------------------------------------------//
 
   const [activeSession, setActiveSession] = useState(() => {
     try {
@@ -88,32 +249,6 @@ export default function Chat() {
   });
 
   useEffect(() => {
-    function syncActiveSessionFromStorage() {
-      try {
-        setActiveSession(normalizeActiveSession(JSON.parse(localStorage.getItem("sapActiveSession") || "null")));
-      } catch {
-        setActiveSession(null);
-      }
-    }
-
-    function onStorage(e) {
-      if (e.key === "sapActiveSession") syncActiveSessionFromStorage();
-    }
-
-    function onSapSessionChanged() {
-      syncActiveSessionFromStorage();
-    }
-
-    window.addEventListener("storage", onStorage);
-    window.addEventListener("sapActiveSessionChanged", onSapSessionChanged);
-
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener("sapActiveSessionChanged", onSapSessionChanged);
-    };
-  }, []);
-
-  useEffect(() => {
     if (activeSession) {
       localStorage.setItem("sapActiveSession", JSON.stringify(activeSession));
     } else {
@@ -121,7 +256,9 @@ export default function Chat() {
     }
   }, [activeSession]);
 
-  const isConnected = Boolean(activeSession?.systemId && activeSession?.sapUser);
+  //---------------------------------------------//
+  // SAP systems and tiles
+  //---------------------------------------------//
 
   const [systems, setSystems] = useState([]);
   const [tiles, setTiles] = useState([]);
@@ -144,11 +281,66 @@ export default function Chat() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok || payload?.ok !== true) return;
       const items = Array.isArray(payload.items) ? payload.items : [];
-      setTiles(items);
-    } catch {} finally {
+
+      const normalized = items.map((tile) => {
+        const connected =
+          tile?.connected === true ||
+          tile?.isConnected === true ||
+          tile?.status === "connected" ||
+          tile?.active === true;
+
+        return {
+          ...tile,
+          systemId: normalizeSystemId(tile?.systemId || tile?.SystemId || ""),
+          connected,
+          isConnected: connected,
+          status: connected ? "connected" : "disconnected",
+          active: connected,
+        };
+      });
+
+      setTiles(normalized);
+    } catch {
+    } finally {
       setTilesLoaded(true);
     }
   }, [apiBase]);
+
+  useEffect(() => {
+    function syncActiveSessionFromStorage() {
+      try {
+        setActiveSession(normalizeActiveSession(JSON.parse(localStorage.getItem("sapActiveSession") || "null")));
+      } catch {
+        setActiveSession(null);
+      }
+    }
+
+    function onStorage(e) {
+      if (e.key === "sapActiveSession") syncActiveSessionFromStorage();
+    }
+
+    function onSapSessionChanged() {
+      syncActiveSessionFromStorage();
+      loadSystems();
+      loadTiles();
+    }
+
+    function onSapConnectionChanged() {
+      syncActiveSessionFromStorage();
+      loadSystems();
+      loadTiles();
+    }
+
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("sapActiveSessionChanged", onSapSessionChanged);
+    window.addEventListener("sapConnectionChanged", onSapConnectionChanged);
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("sapActiveSessionChanged", onSapSessionChanged);
+      window.removeEventListener("sapConnectionChanged", onSapConnectionChanged);
+    };
+  }, [loadSystems, loadTiles]);
 
   useEffect(() => {
     function onChatSessionsChanged() {}
@@ -182,6 +374,82 @@ export default function Chat() {
 
     if (sapView !== "saplogin") setSapView("chat");
   }, [tilesLoaded, tiles, sapView]);
+
+  useEffect(() => {
+    if (!Array.isArray(tiles) || tiles.length === 0) {
+      if (activeSession?.systemId) {
+        setSelectedSystem(null);
+      }
+      return;
+    }
+
+    const isTileConnected = (t) =>
+      t?.connected === true ||
+      t?.isConnected === true ||
+      t?.status === "connected" ||
+      t?.active === true;
+
+    if (activeSession?.systemId) {
+      const matchedTile = tiles.find(
+        (t) =>
+          normalizeSystemId(t?.systemId || t?.SystemId || t?.name) ===
+          normalizeSystemId(activeSession.systemId)
+      );
+
+      if (!matchedTile) {
+        setSelectedSystem(null);
+        setActiveSession(null);
+        localStorage.removeItem("sapActiveSession");
+        window.dispatchEvent(new Event("sapActiveSessionChanged"));
+        return;
+      }
+
+      if (!isTileConnected(matchedTile)) {
+        setSelectedSystem(matchedTile);
+        setActiveSession(null);
+        localStorage.removeItem("sapActiveSession");
+        window.dispatchEvent(new Event("sapActiveSessionChanged"));
+        return;
+      }
+
+      setSelectedSystem(matchedTile);
+
+      const nextSapUser = String(
+        matchedTile?.sapUser || activeSession?.sapUser || ""
+      ).trim();
+
+      const nextSession = normalizeActiveSession({
+        ...activeSession,
+        systemId: matchedTile.systemId,
+        sapUser: nextSapUser,
+      });
+
+      const prevKey = JSON.stringify(activeSession || null);
+      const nextKey = JSON.stringify(nextSession || null);
+
+      if (nextSession && prevKey !== nextKey) {
+        setActiveSession(nextSession);
+      }
+
+      return;
+    }
+
+    const connectedSelected = selectedSystem?.systemId
+      ? tiles.find(
+          (t) =>
+            normalizeSystemId(t?.systemId || t?.SystemId || t?.name) ===
+              normalizeSystemId(selectedSystem.systemId) && isTileConnected(t)
+        )
+      : null;
+
+    if (connectedSelected) {
+      setSelectedSystem(connectedSelected);
+    }
+  }, [tiles, activeSession, selectedSystem]);
+
+  //---------------------------------------------//
+  // Conversation state
+  //---------------------------------------------//
 
   const [conversations, setConversations] = useState(() => [
     {
@@ -223,13 +491,11 @@ export default function Chat() {
 
   const [copiedAtIndex, setCopiedAtIndex] = useState(null);
 
-  const abortRef = useRef(null);
-  const onStop = useCallback(() => {
-    try {
-      abortRef.current?.abort();
-    } catch {}
-  }, []);
+  //---------------------------------------------//
+  // Refs
+  //---------------------------------------------//
 
+  const abortRef = useRef(null);
   const sendingRef = useRef(false);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
@@ -238,7 +504,9 @@ export default function Chat() {
   const interimRef = useRef("");
   const cursorRef = useRef(null);
 
-  const summaryConvIdsRef = useRef(new Set());
+  //---------------------------------------------//
+  // Derived data
+  //---------------------------------------------//
 
   const activeConv = useMemo(() => {
     const found = conversations.find((c) => c.id === activeId);
@@ -250,6 +518,60 @@ export default function Chat() {
 
     return conversations[0] || null;
   }, [conversations, activeId]);
+
+  const availableSystems = useMemo(() => {
+    return buildAvailableSystemsFromTiles(tiles);
+  }, [tiles]);
+
+  const hasConnectedSystems = useMemo(() => {
+    return availableSystems.some((item) => item?.connected === true);
+  }, [availableSystems]);
+
+  const canSendMessage = useMemo(() => {
+    const optimisticActiveId = normalizeSystemId(activeSession?.systemId);
+    const optimisticSapUser = String(activeSession?.sapUser || "").trim();
+
+    if (optimisticActiveId && optimisticSapUser) {
+      return true;
+    }
+
+    if (hasConnectedSystems) return true;
+
+    if (activeSession?.systemId) {
+      const matchedActive = availableSystems.find(
+        (item) => item.systemId === normalizeSystemId(activeSession.systemId)
+      );
+      if (matchedActive?.connected) return true;
+    }
+
+    if (selectedSystem?.systemId) {
+      const matchedSelected = availableSystems.find(
+        (item) => item.systemId === normalizeSystemId(selectedSystem.systemId)
+      );
+      if (matchedSelected?.connected) return true;
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
+      const sid = normalizeSystemId(stored?.systemId || "");
+      if (sid) {
+        const matched = availableSystems.find((item) => item.systemId === sid);
+        if (matched?.connected) return true;
+      }
+    } catch {}
+
+    return false;
+  }, [
+    hasConnectedSystems,
+    availableSystems,
+    activeSession?.systemId,
+    activeSession?.sapUser,
+    selectedSystem?.systemId,
+  ]);
+
+  //---------------------------------------------//
+  // Effects for active conversation
+  //---------------------------------------------//
 
   useEffect(() => {
     if (!isMongoId(activeId)) return;
@@ -300,19 +622,37 @@ export default function Chat() {
     setSidebarOpen(false);
   }, [activeId]);
 
+  //---------------------------------------------//
+  // Basic UI helpers
+  //---------------------------------------------//
+
+  const onStop = useCallback(() => {
+    try {
+      abortRef.current?.abort();
+    } catch {}
+  }, []);
+
   function focusInput() {
     setTimeout(() => inputRef.current?.focus(), 0);
   }
 
-  function updateActiveMessages(updater) {
+  function updateConversationById(convId, updater) {
     setConversations((prev) =>
       prev.map((c) => {
-        if (c.id !== activeId) return c;
+        if (String(c.id) !== String(convId)) return c;
         const messages = typeof updater === "function" ? updater(c.messages) : updater;
         return { ...c, messages, updatedAt: Date.now() };
       })
     );
   }
+
+  function updateActiveMessages(updater) {
+    updateConversationById(activeId, updater);
+  }
+
+  //---------------------------------------------//
+  // Sidebar actions
+  //---------------------------------------------//
 
   function handleDelete(id) {
     setConversations((prev) => prev.filter((c) => c.id !== id));
@@ -332,10 +672,15 @@ export default function Chat() {
     setEditingTitle("");
   }
 
+  //---------------------------------------------//
+  // New chat / edit message logic
+  //---------------------------------------------//
+
   function onNewChat() {
     setActiveId("draft");
     cursorRef.current = null;
     setShowSolmanCrForm(false);
+    setPendingAction(null);
 
     setConversations((prev) => {
       const withoutDraft = prev.filter((c) => c.id !== "draft");
@@ -397,6 +742,10 @@ export default function Chat() {
     return newText;
   }
 
+  //---------------------------------------------//
+  // Local draft-to-real-session sync logic
+  //---------------------------------------------//
+
   const ensureSessionExistsLocally = useCallback((sessionId, firstUserText) => {
     if (!isMongoId(sessionId)) return;
 
@@ -414,70 +763,180 @@ export default function Chat() {
     });
   }, []);
 
-  async function onSend({ overrideText, fromEdit = false } = {}) {
-    if (!isConnected) return;
+  //---------------------------------------------//
+  // Main send logic
+  //---------------------------------------------//
 
-    const text = String(overrideText ?? input).trim();
+  async function onSend({
+    overrideText,
+    displayText = "",
+    fromEdit = false,
+    forcedSystemId = null,
+    businessScope = "",
+    pendingContext = null,
+  } = {}) {
+    const requestText =
+      typeof overrideText === "string"
+        ? overrideText
+        : typeof input === "string"
+          ? input
+          : "";
+
+    const text = requestText.trim();
+    const uiText = String(displayText || text).trim();
+
     if (!text || loading) return;
     if (sendingRef.current) return;
-    sendingRef.current = true;
 
-    const normalizedText = text.toLowerCase();
+    const explicitSystemId = String(forcedSystemId || "")
+      .trim()
+      .toUpperCase();
 
-    if (
-      normalizedText.includes("create change request") ||
-      normalizedText.includes("create solman cr") ||
-      normalizedText.includes("raise change request")
-    ) {
-      baseRef.current = "";
-      interimRef.current = "";
+    const optimisticActiveId = normalizeSystemId(activeSession?.systemId);
+    const optimisticSapUser = String(activeSession?.sapUser || "").trim();
 
-      if (!fromEdit) {
-        updateActiveMessages((m) => [...m, { role: "user", text }]);
+    const isSystemConnectedNow = (sid) => {
+      const normalizedSid = normalizeSystemId(sid);
+      if (!normalizedSid) return false;
 
-        setConversations((prev) =>
-          prev.map((c) => {
-            if (c.id !== activeId) return c;
-            if (c.title === "New chat" || c.title === "SAP MM Chat") {
-              return { ...c, title: generateTitle(text) };
-            }
-            return c;
-          })
-        );
+      if (optimisticActiveId === normalizedSid && optimisticSapUser) {
+        return true;
       }
 
-      updateActiveMessages((m) => [
+      const matched = availableSystems.find(
+        (item) => normalizeSystemId(item?.systemId) === normalizedSid
+      );
+
+      return matched?.connected === true;
+    };
+
+    const matchedRequestedSystem = explicitSystemId
+      ? availableSystems.find(
+          (item) => String(item?.systemId || "").trim().toUpperCase() === explicitSystemId
+        ) || null
+      : null;
+
+    const currentConnected = getCurrentConnectedSystem({
+      activeSession,
+      selectedSystem,
+      availableSystems,
+    });
+
+    const fallbackConnectedSystemId = currentConnected.systemId || null;
+    const fallbackSapUser = currentConnected.sapUser || "";
+
+    const safeExplicitSystemId =
+      explicitSystemId &&
+      isSystemConnectedNow(explicitSystemId)
+        ? explicitSystemId
+        : "";
+
+    if (explicitSystemId && !matchedRequestedSystem && !fallbackConnectedSystemId) {
+      updateConversationById(activeId, (m) => [
+        ...m,
+        { role: "user", text: uiText },
+        {
+          role: "assistant",
+          text: `The requested system ${explicitSystemId} is not available right now. Please wait a moment and try again.`,
+        },
+      ]);
+      setInput("");
+      return;
+    }
+
+    if (
+      explicitSystemId &&
+      matchedRequestedSystem &&
+      !isSystemConnectedNow(explicitSystemId) &&
+      !fallbackConnectedSystemId
+    ) {
+      updateConversationById(activeId, (m) => [
+        ...m,
+        { role: "user", text: uiText },
+        {
+          role: "assistant",
+          text: `The requested system ${explicitSystemId} is disconnected. Please connect that system and try again.`,
+        },
+      ]);
+      setInput("");
+      return;
+    }
+
+    if (!canSendMessage) {
+      updateConversationById(activeId, (m) => [
         ...m,
         {
           role: "assistant",
-          text: "Sure — please fill the required SolMan change request details.",
+          text: "Please connect that system and try again.",
         },
       ]);
-
-      setInput("");
-      setShowSolmanCrForm(true);
-      sendingRef.current = false;
       return;
     }
+
+    const effectiveAvailableSystems = (() => {
+      if (!optimisticActiveId || !optimisticSapUser) return availableSystems;
+
+      const hasOptimisticSystem = availableSystems.some(
+        (item) => normalizeSystemId(item?.systemId) === optimisticActiveId
+      );
+
+      if (!hasOptimisticSystem) {
+        return [
+          ...availableSystems,
+          {
+            systemId: optimisticActiveId,
+            sapUser: optimisticSapUser,
+            connected: true,
+            isConnected: true,
+            status: "connected",
+          },
+        ];
+      }
+
+      return availableSystems.map((item) => {
+        if (normalizeSystemId(item?.systemId) !== optimisticActiveId) return item;
+
+        return {
+          ...item,
+          sapUser: optimisticSapUser || item?.sapUser || "",
+          connected: true,
+          isConnected: true,
+          status: "connected",
+        };
+      });
+    })();
+
+    const requestAvailableSystems = safeExplicitSystemId
+      ? effectiveAvailableSystems.filter(
+          (item) => String(item?.systemId || "").trim().toUpperCase() === safeExplicitSystemId
+        )
+      : effectiveAvailableSystems;
+
+    sendingRef.current = true;
 
     baseRef.current = "";
     interimRef.current = "";
 
+    const currentConvId = activeId;
+
     if (!fromEdit) {
-      updateActiveMessages((m) => [...m, { role: "user", text }]);
+      updateConversationById(currentConvId, (m) => [...m, { role: "user", text: uiText }]);
 
       setConversations((prev) =>
         prev.map((c) => {
-          if (c.id !== activeId) return c;
-          if (c.title === "New chat" || c.title === "SAP MM Chat") return { ...c, title: generateTitle(text) };
+          if (c.id !== currentConvId) return c;
+          if (c.title === "New chat" || c.title === "SAP MM Chat") {
+            return { ...c, title: generateTitle(text) };
+          }
           return c;
         })
       );
     }
 
     setInput("");
-    setTimeout(() => inputRef.current?.blur(), 50);
     setLoading(true);
+
+    setTimeout(() => inputRef.current?.blur(), 50);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -486,19 +945,41 @@ export default function Chat() {
       const isNextQuery = /\b(next|more|another|load|show\s+more)\b/i.test(text);
       if (!isNextQuery) cursorRef.current = null;
 
-      const sessionIdToSend = isMongoId(activeId) ? activeId : null;
+      const sessionIdToSend = isMongoId(currentConvId) ? currentConvId : null;
 
-      summaryConvIdsRef.current = new Set([String(activeId)]);
       setStatusText("Interpreting your query...");
 
       let streamedPayload = null;
 
+      console.log("[Chat onSend] system resolution input", {
+        explicitSystemId,
+        safeExplicitSystemId,
+        activeSessionSystemId: activeSession?.systemId || null,
+        activeSessionSapUser: activeSession?.sapUser || null,
+        selectedSystemId: selectedSystem?.systemId || null,
+        fallbackConnectedSystemId,
+        fallbackSapUser,
+        availableSystems: availableSystems.map((s) => ({
+          systemId: s.systemId,
+          connected: s.connected,
+          status: s.status,
+          sapUser: s.sapUser || "",
+        })),
+      });
+
       await sendChatMessageStream(text, {
         apiBase,
-        systemId: activeSession.systemId,
-        sapUser: activeSession?.sapUser ? activeSession.sapUser : null,
+        systemId:
+          safeExplicitSystemId ||
+          fallbackConnectedSystemId ||
+          null,
+        sapUser: fallbackSapUser || null,
         sessionId: sessionIdToSend,
+        availableSystems:
+          requestAvailableSystems.length > 0 ? requestAvailableSystems : effectiveAvailableSystems,
         cursor: isNextQuery ? cursorRef.current : null,
+        businessScope: businessScope || "",
+        pendingAction: pendingContext || pendingAction || null,
         signal: controller.signal,
 
         onPhase: ({ message }) => {
@@ -513,7 +994,28 @@ export default function Chat() {
       const data = streamedPayload;
       if (!data) throw new Error("No reply received from stream");
 
-      updateActiveMessages((m) => [
+      setPendingAction(null);
+
+      const targetConvId =
+        data?.sessionId && isMongoId(data.sessionId) ? data.sessionId : currentConvId;
+
+      if (data?.sessionId && isMongoId(data.sessionId)) {
+        if (currentConvId === "draft") {
+          ensureSessionExistsLocally(data.sessionId, text);
+
+          const newTitle = generateTitle(text);
+          authFetch(`${apiBase}/chat/sessions/${data.sessionId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: newTitle }),
+          }).catch(() => {});
+        }
+
+        setActiveId(data.sessionId);
+        window.dispatchEvent(new Event("chatSessionsChanged"));
+      }
+
+      updateConversationById(targetConvId, (m) => [
         ...m,
         {
           role: "assistant",
@@ -521,35 +1023,112 @@ export default function Chat() {
           suggestions: data.suggestions,
           summary: data.summary || "",
           summaryStatus: data.summary ? "done" : "pending",
+          data: data.data || null,
+          pagination: data.pagination || null,
         },
       ]);
 
       cursorRef.current = data?.cursor || null;
-
-      if (data?.sessionId && isMongoId(data.sessionId)) {
-        const newSessionId = data.sessionId;
-
-        summaryConvIdsRef.current.add(String(newSessionId));
-
-        if (activeId === "draft") {
-          ensureSessionExistsLocally(newSessionId, text);
-
-          const newTitle = generateTitle(text);
-          authFetch(`${apiBase}/chat/sessions/${newSessionId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title: newTitle }),
-          }).catch(() => {});
-        }
-
-        setActiveId(newSessionId);
-        window.dispatchEvent(new Event("chatSessionsChanged"));
-      }
     } catch (e) {
       if (e?.name === "AbortError") {
-        updateActiveMessages((m) => [...m, { role: "assistant", text: "Stopped generating." }]);
+        updateConversationById(currentConvId, (m) => [
+          ...m,
+          { role: "assistant", text: "Stopped generating." },
+        ]);
       } else {
-        updateActiveMessages((m) => [...m, { role: "assistant", text: `Error: ${e.message}` }]);
+        const payload = e?.payload || null;
+
+        if (
+          payload?.action?.type === "open_form" &&
+          payload?.action?.formId === "solman_create_cr"
+        ) {
+          setPendingAction(payload?.pendingAction || null);
+          setShowSolmanCrForm(true);
+
+          updateConversationById(currentConvId, (m) => [
+            ...m,
+            {
+              role: "assistant",
+              text:
+                payload?.message ||
+                "Please complete the required change request details.",
+            },
+          ]);
+        } else if (payload?.action?.type === "add_system") {
+          updateConversationById(currentConvId, (m) => [
+            ...m,
+            {
+              role: "assistant",
+              text:
+                payload?.message ||
+                "This system isn’t added yet. Please add it to continue.",
+              suggestions: [payload?.action?.label || "Add System"],
+              action: payload?.action || null,
+            },
+          ]);
+        } else if (
+          payload?.status === "needs_input" &&
+          Array.isArray(payload?.missingFields) &&
+          payload.missingFields.includes("processType")
+        ) {
+          setPendingAction(payload?.pendingAction || null);
+
+          const options = Array.isArray(payload?.action?.options)
+            ? payload.action.options.map((x) => x?.label || x?.value).filter(Boolean)
+            : ["ROW", "INDIA"];
+
+          updateConversationById(currentConvId, (m) => [
+            ...m,
+            {
+              role: "assistant",
+              text:
+                payload?.message ||
+                "Which landscape would you like to view the Change Requests from?",
+              suggestions: options,
+              pendingAction: payload?.pendingAction || null,
+            },
+          ]);
+        } else if (
+          payload?.status === "needs_input" &&
+          Array.isArray(payload?.missingFields) &&
+          payload.missingFields.includes("systemId")
+        ) {
+          const candidates = Array.isArray(payload?.systemResolution?.candidates)
+            ? payload.systemResolution.candidates
+            : [];
+
+          updateConversationById(currentConvId, (m) => [
+            ...m,
+            {
+              role: "assistant",
+              text: payload?.message || "Please specify which system to use.",
+              ...(candidates.length > 0
+                ? {
+                    suggestions: candidates.map((id) => `Use ${id}`),
+                  }
+                : {}),
+            },
+          ]);
+        } else if (payload?.status === "disconnected_system") {
+          updateConversationById(currentConvId, (m) => [
+            ...m,
+            {
+              role: "assistant",
+              text:
+                payload?.message ||
+                `The requested system${
+                  payload?.systemResolution?.targetSystemId
+                    ? ` ${payload.systemResolution.targetSystemId}`
+                    : ""
+                } is disconnected. Please connect that system and try again.`,
+            },
+          ]);
+        } else {
+          updateConversationById(currentConvId, (m) => [
+            ...m,
+            { role: "assistant", text: `Error: ${e.message}` },
+          ]);
+        }
       }
     } finally {
       setLoading(false);
@@ -558,6 +1137,10 @@ export default function Chat() {
       setStatusText("");
     }
   }
+
+  //---------------------------------------------//
+  // Keyboard shortcuts
+  //---------------------------------------------//
 
   function onKeyDown(e) {
     if (editingIndex != null) {
@@ -576,9 +1159,13 @@ export default function Chat() {
     }
   }
 
+  //---------------------------------------------//
+  // Speech-to-text logic
+  //---------------------------------------------//
+
   const { supported, listening, start, stop } = useSpeechToText({
     onText: (text, meta) => {
-      if (!isConnected) return;
+      if (!canSendMessage) return;
       const t = String(text || "").trim();
       if (!t) return;
 
@@ -606,7 +1193,7 @@ export default function Chat() {
       return;
     }
 
-    if (!isConnected) return;
+    if (!canSendMessage) return;
 
     if (listening) {
       stop();
@@ -622,6 +1209,10 @@ export default function Chat() {
     focusInput();
   }
 
+  //---------------------------------------------//
+  // Copy and scroll logic
+  //---------------------------------------------//
+
   async function onCopyAssistant(idx, text) {
     const ok = await copyToClipboard(text);
     if (!ok) return;
@@ -636,18 +1227,93 @@ export default function Chat() {
     setShowScrollDown(!isNearBottom);
   }
 
+  //---------------------------------------------//
+  // SolMan CR details fetch after create form success
+  //---------------------------------------------//
+
+  async function handleViewCrStatus({ objectId, processType = "YMHF" }) {
+    if (!activeSession?.systemId) {
+      updateActiveMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          text: "Cannot fetch CR status because no active SAP system is selected.",
+        },
+      ]);
+      return;
+    }
+
+    if (!activeSession?.sapUser) {
+      updateActiveMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          text: "Cannot fetch CR status because no active SAP user is available.",
+        },
+      ]);
+      return;
+    }
+
+    try {
+      const data = await getSolmanChangeRequestDetails({
+        systemId: activeSession.systemId,
+        sapUser: activeSession.sapUser,
+        objectId,
+        processType,
+      });
+
+      const item = data?.result?.results?.[0];
+
+      if (!item) {
+        updateActiveMessages((m) => [
+          ...m,
+          {
+            role: "assistant",
+            text: `No details found for CR ${objectId}.`,
+          },
+        ]);
+        return;
+      }
+
+      updateActiveMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          text:
+            `CR ${item.OBJECT_ID}\n` +
+            `Short Description: ${item.SHORT_DESC || "-"}\n` +
+            `Status: ${item.STATUS || "-"}\n` +
+            `Priority: ${item.PRIORITY || "-"}\n` +
+            `Created On: ${item.CREATED_ON || "-"}\n` +
+            `Last Changed By: ${item.LAST_CHANGED_BY || "-"}\n` +
+            `Last Changed At: ${item.LAST_CHANGED_AT || "-"}\n` +
+            `Category: ${item.CATEGORY || "-"}`,
+        },
+      ]);
+    } catch (err) {
+      updateActiveMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          text: err?.message || "Failed to fetch change request details.",
+        },
+      ]);
+    }
+  }
+
+  //---------------------------------------------//
+  // SAP login/connect/disconnect logic
+  //---------------------------------------------//
+
   const handleConnectedFromSapLogin = async (payload) => {
     try {
       localStorage.removeItem("forceSapLogin");
     } catch {}
 
-    await loadTiles();
-    await loadSystems();
-
     const sid = normalizeSystemId(payload?.systemId || payload?.system?.systemId);
     const sapUser = String(payload?.sapUser || payload?.system?.sapUser || "").trim();
 
-    if (sid && sapUser) {
+    if (sid) {
       const next = normalizeActiveSession({
         systemId: sid,
         sapUser,
@@ -656,21 +1322,52 @@ export default function Chat() {
       });
 
       setActiveSession(next);
+      setSelectedSystem({
+        systemId: sid,
+        sapUser,
+        name: payload?.system?.name || sid,
+        connected: true,
+        isConnected: true,
+        status: "connected",
+        active: true,
+      });
+
       localStorage.setItem("sapActiveSession", JSON.stringify(next));
       window.dispatchEvent(new Event("sapActiveSessionChanged"));
     }
 
+    await loadTiles();
+    await loadSystems();
+
     setSapView("chat");
-    setSelectedSystem(null);
   };
 
-  const handleDisconnect = async () => {
-    setActiveSession(null);
-    localStorage.removeItem("sapActiveSession");
-    window.dispatchEvent(new Event("sapActiveSessionChanged"));
-    setShowSolmanCrForm(false);
+  const handleDisconnect = async (system = null) => {
+    try {
+      const sid = normalizeSystemId(
+        system?.systemId ||
+        activeSession?.systemId ||
+        selectedSystem?.systemId
+      );
 
-    authFetch(`${apiBase}/sap/disconnect`, { method: "POST" }).catch(() => {});
+      setActiveSession(null);
+      setSelectedSystem(null);
+      setShowSolmanCrForm(false);
+      setPendingAction(null);
+
+      localStorage.removeItem("sapActiveSession");
+      localStorage.removeItem("sapConnected");
+      window.dispatchEvent(new Event("sapActiveSessionChanged"));
+
+      await authFetch(`${apiBase}/sap/disconnect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sid ? { systemId: sid } : {}),
+      }).catch(() => {});
+    } finally {
+      await loadTiles();
+      await loadSystems();
+    }
   };
 
   const openSapLogin = (system = null) => {
@@ -681,52 +1378,71 @@ export default function Chat() {
     setSelectedSystem(system);
     setSapView("saplogin");
     setShowSolmanCrForm(false);
+    setPendingAction(null);
   };
 
-  const handleSystemSelect = useCallback(
-    (system) => {
-      setSelectedSystem(system);
+  const handleSystemSelect = useCallback((system) => {
+    setSelectedSystem(system);
 
-      try {
-        const prev = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
-        const payload = {
-          systemId: system?.systemId ? normalizeSystemId(system.systemId) : null,
-          name: system?.name || "",
-          username: prev?.username || "User",
-          sapUser: system?.sapUser || prev?.sapUser || null,
-        };
+    try {
+      const prev = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
+      const payload = {
+        systemId: system?.systemId ? normalizeSystemId(system.systemId) : null,
+        name: system?.name || "",
+        username: prev?.username || "User",
+        sapUser: system?.sapUser || prev?.sapUser || null,
+      };
 
-        if (payload.systemId) {
-          localStorage.setItem("sapActiveSystem", JSON.stringify(payload));
-        }
-      } catch {}
+      if (payload.systemId) {
+        localStorage.setItem("sapActiveSystem", JSON.stringify(payload));
+      }
+    } catch {}
 
-      localStorage.removeItem("chatSessionId");
-      setActiveId("draft");
-      onNewChat();
-    },
-    [onNewChat]
-  );
+    localStorage.removeItem("chatSessionId");
+    setActiveId("draft");
+    onNewChat();
+  }, []);
+
+  //---------------------------------------------//
+  // SolMan create form block
+  //---------------------------------------------//
 
   const solmanCreateCrForm = showSolmanCrForm ? (
     <div className="px-4 pb-4">
       <SolmanCreateCrForm
-        systemId={activeSession?.systemId || "HSM"}
+        systemId={activeSession?.systemId || ""}
         sapUser={activeSession?.sapUser || ""}
-        onCancel={() => setShowSolmanCrForm(false)}
-        onSuccess={(data) => {
+        initialValues={pendingAction?.collected || {}}
+        pendingAction={pendingAction}
+        onCancel={() => {
           setShowSolmanCrForm(false);
+        }}
+        onSuccess={async (data) => {
+          const crId = data.changeRequestId;
+
+          setShowSolmanCrForm(false);
+          setPendingAction(null);
+
           updateActiveMessages((m) => [
             ...m,
             {
               role: "assistant",
-              text: `CR ${data.changeRequestId} created successfully. Status: ${data.status}`,
+              text: `CR ${crId} created successfully. Status: ${data.status}`,
             },
           ]);
+
+          await handleViewCrStatus({
+            objectId: crId,
+            processType: "YMHF",
+          });
         }}
       />
     </div>
   ) : null;
+
+  //---------------------------------------------//
+  // Render
+  //---------------------------------------------//
 
   return (
     <div className="fixed inset-0 bg-[#f7f7f8] text-zinc-800">
@@ -792,6 +1508,7 @@ export default function Chat() {
             setSidebarOpen={setSidebarOpen}
             setInput={setInput}
             onSend={onSend}
+            pendingAction={pendingAction}
             onStop={onStop}
             onKeyDown={onKeyDown}
             onMicClick={onMicClick}

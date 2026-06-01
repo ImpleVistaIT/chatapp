@@ -30,7 +30,7 @@ export async function resolveSapConnection({ owner, systemId, sapUser }) {
   }
 
   const system = await SapSystem.findOne({
-    owner: normalizedOwner,
+    owner: { $in: [normalizedOwner, "local"] },
     systemId: normalizedSystemId,
   }).lean();
 
@@ -62,10 +62,15 @@ export async function resolveSapConnection({ owner, systemId, sapUser }) {
 
   return {
     system: {
+      _id: system._id,
+      owner: system.owner,
+      systemId: system.systemId,
+      name: system.name || "",
       protocol: system.protocol || "https",
       host: system.host,
       port: system.port,
       sapRouter: system.sapRouter || "",
+      baseUrl: system.baseUrl || "",
       allowInsecureTls:
         String(process.env.SAP_ALLOW_INSECURE_TLS || "").toLowerCase() === "true",
     },
@@ -78,6 +83,7 @@ export async function resolveSapConnection({ owner, systemId, sapUser }) {
       systemId: normalizedSystemId,
       sapUser: normalizedSapUser,
       systemName: system.name || "",
+      resolvedSystemOwner: system.owner || null,
     },
   };
 }

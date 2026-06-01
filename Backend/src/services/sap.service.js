@@ -36,23 +36,36 @@ function normalizeSapData(data) {
 // HTTPS Agent
 // -----------------------
 function makeHttpsAgent() {
-  const allowInsecure = String(process.env.SAP_ALLOW_INSECURE_TLS || "false").toLowerCase() === "true";
-  return new https.Agent({ rejectUnauthorized: !allowInsecure });
+  const allowInsecure =
+    String(process.env.SAP_ALLOW_INSECURE_TLS || "false").toLowerCase() === "true";
+
+  return new https.Agent({
+    rejectUnauthorized: !allowInsecure,
+    keepAlive: false,
+  });
+}
+
+// -----------------------
+// Connection parts
+// -----------------------
+function getConnectionParts({ system, service }) {
+  const protocol = String(service?.protocol || system?.protocol || "https").toLowerCase();
+  const host = String(service?.host || system?.host || "").trim();
+  const port = String(service?.port || system?.port || "").trim();
+  const serviceName = String(service?.serviceName || "").trim();
+
+  if (!host) throw new Error("SAP host missing");
+  if (!port) throw new Error("SAP port missing");
+  if (!serviceName) throw new Error("SAP serviceName missing");
+
+  return { protocol, host, port, serviceName };
 }
 
 // -----------------------
 // Build SAP URL from DB system + service map
 // -----------------------
 export function buildSapServiceRoot({ system, service }) {
-  const protocol = (system?.protocol || "https").toLowerCase();
-  const host = String(system?.host || "").trim();
-  const port = String(system?.port || "").trim();
-  const serviceName = String(service?.serviceName || "").trim();
-
-  if (!host) throw new Error("SAP system host missing");
-  if (!port) throw new Error("SAP system port missing");
-  if (!serviceName) throw new Error("SAP serviceName missing");
-
+  const { protocol, host, port, serviceName } = getConnectionParts({ system, service });
   return `${protocol}://${host}:${port}/sap/opu/odata/sap/${serviceName}/`;
 }
 
@@ -81,6 +94,53 @@ function safePreview(x, max = 300) {
   } catch {
     return "<unpreviewable>";
   }
+}
+
+function isTransientSapNetworkError(err) {
+  const code = String(err?.code || err?.cause?.code || "").toUpperCase();
+  return [
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "ECONNABORTED",
+    "ENOTFOUND",
+    "EHOSTUNREACH",
+    "ECONNREFUSED",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+  ].includes(code);
+}
+
+function createWrappedError(message, originalError) {
+  const wrapped = new Error(message);
+  wrapped.code = originalError?.code || originalError?.cause?.code || "";
+  wrapped.cause = originalError;
+  return wrapped;
+}
+
+function formatSapNetworkError(err, contextLabel = "SAP GET failed") {
+  const code = String(err?.code || err?.cause?.code || "").toUpperCase();
+  const base = contextLabel;
+
+  if (code === "ECONNRESET") {
+    return createWrappedError(`${base}: SAP connection was reset while reading response.`, err);
+  }
+  if (code === "ETIMEDOUT" || code === "ECONNABORTED") {
+    return createWrappedError(`${base}: SAP request timed out.`, err);
+  }
+  if (code === "ENOTFOUND") {
+    return createWrappedError(`${base}: SAP host could not be resolved.`, err);
+  }
+  if (code === "EHOSTUNREACH") {
+    return createWrappedError(`${base}: SAP host is unreachable.`, err);
+  }
+  if (code === "ECONNREFUSED") {
+    return createWrappedError(`${base}: SAP server refused the connection.`, err);
+  }
+  if (code.includes("TLS") || code.includes("CERT")) {
+    return createWrappedError(`${base}: TLS/SSL validation failed while connecting to SAP.`, err);
+  }
+
+  return createWrappedError(`${base}: ${err?.message || "Unknown network error."}`, err);
 }
 
 // -----------------------
@@ -124,11 +184,9 @@ async function parseSapXml(xmlText) {
 }
 
 // -----------------------
-// MAIN FUNCTION
+// Low-level request
 // -----------------------
-export async function fetchFromSap({ system, service, relativePath }, authOverride) {
-  const url = buildSapUrl({ system, service, relativePath });
-
+async function doSapGet(url, authOverride) {
   const username = authOverride?.username;
   const password = authOverride?.password;
 
@@ -136,20 +194,53 @@ export async function fetchFromSap({ system, service, relativePath }, authOverri
     throw new Error("SAP credentials missing (authOverride required)");
   }
 
+  return axios.get(url, {
+    httpsAgent: makeHttpsAgent(),
+    proxy: false,
+    headers: {
+      Accept: "application/json, application/atom+xml, application/xml, text/xml",
+      Connection: "close",
+      "Keep-Alive": "timeout=0, max=0",
+      "X-Requested-With": "XMLHttpRequest",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+    auth: { username, password },
+    timeout: 30000,
+    validateStatus: () => true,
+    responseType: "text",
+    transformResponse: [(data) => data],
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    decompress: true,
+  });
+}
+
+// -----------------------
+// MAIN FUNCTION
+// -----------------------
+export async function fetchFromSap({ system, service, relativePath }, authOverride) {
+  const url = buildSapUrl({ system, service, relativePath });
+
+  let res;
   try {
-    const res = await axios.get(url, {
-      httpsAgent: makeHttpsAgent(),
-      headers: {
-        Accept: "application/json, application/atom+xml, application/xml, text/xml",
-      },
-      auth: { username, password },
-      timeout: 30000,
-      validateStatus: () => true,
-      responseType: "text",
-      transformResponse: [(data) => data],
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-    });
+    try {
+      res = await doSapGet(url, authOverride);
+    } catch (err) {
+      if (isTransientSapNetworkError(err)) {
+        console.log("⚠️ SAP transient error, retrying once...", {
+          url,
+          code: err?.code || err?.cause?.code || "",
+          message: err?.message,
+          host: service?.host || system?.host,
+          port: service?.port || system?.port,
+          serviceName: service?.serviceName,
+        });
+        res = await doSapGet(url, authOverride);
+      } else {
+        throw err;
+      }
+    }
 
     console.log("👉 SAP URL:", url);
     console.log("👉 SAP STATUS:", res.status);
@@ -183,7 +274,20 @@ export async function fetchFromSap({ system, service, relativePath }, authOverri
 
     return normalized;
   } catch (err) {
-    console.log("❌ SAP CALL FAILED:", err.message);
-    throw err;
+    const wrapped =
+      axios.isAxiosError?.(err) || err?.isAxiosError
+        ? formatSapNetworkError(err, "SAP GET failed")
+        : err;
+
+    console.log("❌ SAP CALL FAILED:", wrapped.message, {
+      code: wrapped?.code || "",
+      transient: isTransientSapNetworkError(wrapped),
+      relativePath,
+      host: service?.host || system?.host,
+      port: service?.port || system?.port,
+      serviceName: service?.serviceName,
+    });
+
+    throw wrapped;
   }
 }

@@ -1,8 +1,8 @@
 import { normalizeRoutingResult } from "../../config/routing.schema.js";
 import { getIntentDefinition, isSupportedIntent } from "../../config/routing.registry.js";
 
-function getMissingInputs(requiredInputs = [], entities = {}) {
-  return requiredInputs.filter((key) => {
+function getMissingFields(requiredFields = [], entities = {}) {
+  return requiredFields.filter((key) => {
     const value = entities?.[key];
     if (value == null) return true;
     if (typeof value === "string" && !value.trim()) return true;
@@ -11,15 +11,42 @@ function getMissingInputs(requiredInputs = [], entities = {}) {
   });
 }
 
+function looksLikePoQuery(result) {
+  const query = String(
+    result?.originalQuery ||
+    result?.query ||
+    result?.message ||
+    ""
+  ).toLowerCase();
+  return /\b(po|purchase\s*order|purchase\s*orders)\b/.test(query);
+}
+
 export function validateRoutingResult(routingResult) {
   const result = normalizeRoutingResult(routingResult);
+  const poLike = looksLikePoQuery(result);
 
-  if (
+  const unknownish =
     result.system === "ambiguous" ||
     result.system === "unknown" ||
     result.module === "unknown" ||
-    result.intent === "unknown"
-  ) {
+    result.intent === "unknown";
+
+  if (unknownish) {
+    if (poLike) {
+      return normalizeRoutingResult({
+        ...result,
+        system: "s4hana",
+        module: "mm",
+        intent: "list_purchase_orders",
+        needsClarification: false,
+        clarificationQuestion: "",
+        action: "execute_api",
+        collected: result.entities || {},
+        requiredFields: [],
+        missingFields: [],
+      });
+    }
+
     return normalizeRoutingResult({
       ...result,
       needsClarification: true,
@@ -27,6 +54,9 @@ export function validateRoutingResult(routingResult) {
         result.clarificationQuestion ||
         "I’m not fully sure what you want to do. Can you clarify the target system or action?",
       action: "ask_question",
+      collected: result.entities || {},
+      requiredFields: [],
+      missingFields: [],
     });
   }
 
@@ -37,12 +67,30 @@ export function validateRoutingResult(routingResult) {
   });
 
   if (!supported) {
+    if (poLike) {
+      return normalizeRoutingResult({
+        ...result,
+        system: "s4hana",
+        module: "mm",
+        intent: "list_purchase_orders",
+        needsClarification: false,
+        clarificationQuestion: "",
+        action: "execute_api",
+        collected: result.entities || {},
+        requiredFields: [],
+        missingFields: [],
+      });
+    }
+
     return normalizeRoutingResult({
       ...result,
       needsClarification: true,
       clarificationQuestion:
         "This request is not currently supported. Please rephrase or choose a supported action.",
       action: "unsupported",
+      collected: result.entities || {},
+      requiredFields: [],
+      missingFields: [],
     });
   }
 
@@ -52,29 +100,35 @@ export function validateRoutingResult(routingResult) {
     intent: result.intent,
   });
 
-  const requiredInputs = Array.isArray(definition?.requiredInputs)
+  const requiredFields = Array.isArray(definition?.requiredInputs)
     ? definition.requiredInputs
     : [];
 
-  const missingInputs = getMissingInputs(requiredInputs, result.entities);
+  const missingFields = getMissingFields(requiredFields, result.entities);
 
   let action = definition?.action || "none";
   let needsClarification = false;
   let clarificationQuestion = result.clarificationQuestion || "";
 
   if (result.confidence < 0.6) {
-    needsClarification = true;
-    action = "ask_question";
-    clarificationQuestion =
-      clarificationQuestion ||
-      "I found multiple possible actions. Can you confirm what you want to do?";
-  } else if (missingInputs.length > 0) {
+    if (poLike) {
+      action = "execute_api";
+      needsClarification = false;
+      clarificationQuestion = "";
+    } else {
+      needsClarification = true;
+      action = "ask_question";
+      clarificationQuestion =
+        clarificationQuestion ||
+        "I found multiple possible actions. Can you confirm what you want to do?";
+    }
+  } else if (missingFields.length > 0) {
     if (action === "execute_api") {
       action = "ask_question";
       needsClarification = true;
       clarificationQuestion =
         clarificationQuestion ||
-        `I need a few more details to continue: ${missingInputs.join(", ")}.`;
+        `I need a few more details to continue: ${missingFields.join(", ")}.`;
     }
 
     if (action === "open_form") {
@@ -84,8 +138,11 @@ export function validateRoutingResult(routingResult) {
 
   return normalizeRoutingResult({
     ...result,
-    requiredInputs,
-    missingInputs,
+    requiredInputs: requiredFields,
+    missingInputs: missingFields,
+    requiredFields,
+    missingFields,
+    collected: result.entities || {},
     needsClarification,
     clarificationQuestion,
     action,
@@ -93,7 +150,8 @@ export function validateRoutingResult(routingResult) {
       action === "open_form"
         ? {
             formId: definition?.formId || null,
-            requiredInputs,
+            requiredFields,
+            missingFields,
           }
         : result.actionPayload,
   });

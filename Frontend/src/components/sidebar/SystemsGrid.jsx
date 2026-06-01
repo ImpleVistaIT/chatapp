@@ -4,95 +4,115 @@ function classNames(...x) {
 
 export default function SystemsGrid({
   displaySystems,
-  connectingSid, // should be `${sid}:${sapUser}` or null
+  connectingSid,
   normalizeSid,
-  normalizeSapUser,
   setActiveSystemLocal,
-
-  // ✅ connection truth (from Chat.jsx -> Sidebar.jsx)
-  activeSession = null, // { systemId, sapUser } | null
+  onDisconnectSystem = () => {},
 }) {
   const systemsArr = Array.isArray(displaySystems) ? displaySystems : [];
 
-  // ✅ active connection truth (what is actually connected)
-  const activeSid = normalizeSid(activeSession?.systemId || "");
-  const activeSapUser = normalizeSapUser(activeSession?.sapUser || "");
-  const activeKey = activeSid && activeSapUser ? `${activeSid}:${activeSapUser}` : "";
-  const isConnected = Boolean(activeKey);
-
-  // ✅ NEW: when disconnected, disable ALL tiles
-  const isDisconnected = !isConnected;
-
   return (
-    // ✅ mt-auto pushes this block to bottom INSIDE the scroll area
     <div className="px-2 pb-3 flex-shrink-0 mt-auto">
-      <div className={classNames("grid grid-cols-2 gap-2", "max-h-[220px] overflow-y-auto pr-1")}>
+      <div
+        className={classNames(
+          "grid grid-cols-2 gap-2",
+          "max-h-[220px] overflow-y-auto pr-1",
+          "[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+        )}
+      >
         {systemsArr.map((sys, i) => {
           const sid = normalizeSid(sys?.systemId || sys?.name);
-          const sapUser = normalizeSapUser(sys?.sapUser || "");
-          const tileKey = `${sid}:${sapUser}`;
+          const status = String(sys?.status || "").trim().toLowerCase();
 
-          const isActive = Boolean(activeKey) && activeKey === tileKey;
+          const isConnected =
+            sys?.connected === true ||
+            sys?.isConnected === true ||
+            status === "connected" ||
+            status === "online" ||
+            status === "active" ||
+            sys?.active === true;
 
-          // ✅ connectingSid should be `${sid}:${sapUser}`
-          const isConnecting = Boolean(connectingSid) && String(connectingSid) === tileKey;
+          const isConnecting = Boolean(connectingSid) && String(connectingSid) === sid;
 
-          // ✅ block switching: if connected, user can only click the ACTIVE tile
-          const isBlockedByActiveSession = isConnected && !isActive;
-
-          // ✅ block all interaction when disconnected
-          const isBlockedByDisconnected = isDisconnected;
-
-          const isBlocked = isConnecting || isBlockedByActiveSession || isBlockedByDisconnected;
-
-          const labelBase = sys?.name || sys?.description || sid || `System ${i + 1}`;
-          const label = sapUser ? `${labelBase} (${sapUser})` : labelBase;
+          const label = sys?.name || sys?.description || sid || `System ${i + 1}`;
 
           return (
-            <button
-              key={sys._id || sys.id || tileKey}
+            <div
+              key={sys?._id || sys?.id || sid || i}
               className={classNames(
-                "relative px-3 py-2 rounded-lg border-2 transition-all duration-150 text-center font-medium",
-                isActive
-                  ? "border-green-500 bg-green-50 text-green-700 shadow-sm"
-                  : "border-gray-300 bg-white text-zinc-800",
-                isBlocked ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-emerald-400 hover:bg-emerald-50",
-                isConnecting && "opacity-70 cursor-wait"
+                "group relative rounded-lg border-2 transition-all duration-150 overflow-hidden",
+                isConnected
+                  ? "border-green-400 bg-white text-zinc-800 hover:bg-green-50 shadow-sm"
+                  : "border-red-400 bg-red-50 text-red-700 hover:bg-red-100"
               )}
-              type="button"
-              onClick={() => {
-                if (isBlocked) return;
-                setActiveSystemLocal(sys);
-              }}
-              title={
-                isBlockedByDisconnected
-                  ? "Connect first to use system tiles."
-                  : isBlockedByActiveSession
-                  ? "Disconnect current system to switch."
-                  : label
-              }
-              disabled={isBlocked}
             >
-              {isActive && !isConnecting && (
-                <span className="absolute top-1 left-1 text-[9px] px-1.5 py-0.5 rounded bg-green-600 text-white">
-                  Act..
+              <div
+                className={classNames(
+                  "w-full px-3 py-3 text-center font-medium rounded-lg transition",
+                  isConnecting ? "cursor-wait opacity-70" : "cursor-default"
+                )}
+                title={
+                  isConnected
+                    ? `${label} is connected`
+                    : `${label} is disconnected`
+                }
+              >
+                <span
+                  className={classNames(
+                    "absolute top-1 right-1 text-[9px] px-1.5 py-0.5 rounded text-white",
+                    isConnected ? "bg-green-600" : "bg-red-600"
+                  )}
+                >
+                  {isConnected ? "Live" : "Disconnected"}
                 </span>
-              )}
 
-              <span className="text-[10px] block truncate">{isConnecting ? "Connecting…" : label}</span>
+                <span className="text-[11px] block truncate font-semibold">
+                  {isConnecting ? "Connecting…" : label}
+                </span>
+              </div>
 
-              {isBlockedByDisconnected && !isConnecting && (
-                <span className="text-[8px] mt-1 block text-zinc-500">Connect to use</span>
+              {!isConnecting && (
+                <div className="absolute inset-x-2 bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {isConnected ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDisconnectSystem({
+                          ...sys,
+                          systemId: sid,
+                          name: label,
+                        });
+                      }}
+                      className="w-full rounded-md bg-red-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-red-700"
+                      title={`Disconnect ${label}`}
+                    >
+                      Disconnect
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveSystemLocal({
+                          ...sys,
+                          systemId: sid,
+                          name: label,
+                          connected: false,
+                          isConnected: false,
+                          status: "disconnected",
+                          active: false,
+                        });
+                      }}
+                      className="w-full rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-emerald-700"
+                      title={`Connect ${label}`}
+                    >
+                      Connect
+                    </button>
+                  )}
+                </div>
               )}
-
-              {isBlockedByActiveSession && (
-                <span className="text-[8px] mt-1 block text-zinc-500">Disconnect to switch</span>
-              )}
-
-              {sys?.hasCredentials === false && !isConnecting && !isBlockedByActiveSession && !isBlockedByDisconnected && (
-                <span className="text-[9px] mt-1 block text-amber-700">Login required</span>
-              )}
-            </button>
+            </div>
           );
         })}
       </div>

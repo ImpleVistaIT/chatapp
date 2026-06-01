@@ -5,7 +5,11 @@ import { buildClarificationResponse } from "./clarificationBuilder.service.js";
 export function resolveRoutingAction(routingResult) {
   const result = normalizeRoutingResult(routingResult);
 
-  if (result.needsClarification || result.action === "ask_question" || result.action === "unsupported") {
+  if (
+    result.needsClarification ||
+    result.action === "ask_question" ||
+    result.action === "unsupported"
+  ) {
     return buildClarificationResponse(result);
   }
 
@@ -33,12 +37,15 @@ export function resolveRoutingAction(routingResult) {
       status: "input_required",
       message: `Please provide the details for ${definition.label}.`,
       routing: result,
+      collected: result.collected || result.entities || {},
+      requiredFields: result.requiredFields || result.requiredInputs || [],
+      missingFields: result.missingFields || result.missingInputs || [],
       action: {
         type: "open_form",
         formId: definition.formId || null,
         title: definition.label,
-        requiredInputs: result.requiredInputs || [],
-        missingInputs: result.missingInputs || [],
+        requiredFields: result.requiredFields || result.requiredInputs || [],
+        missingFields: result.missingFields || result.missingInputs || [],
       },
     };
   }
@@ -49,10 +56,13 @@ export function resolveRoutingAction(routingResult) {
       status: "ready_to_execute",
       message: `Executing ${definition.label}.`,
       routing: result,
+      collected: result.collected || result.entities || {},
+      requiredFields: result.requiredFields || result.requiredInputs || [],
+      missingFields: result.missingFields || result.missingInputs || [],
       action: {
         type: "execute_api",
         executor: definition.executor,
-        requiredInputs: result.requiredInputs || [],
+        requiredFields: result.requiredFields || result.requiredInputs || [],
         payload: result.entities || {},
       },
     };
@@ -63,6 +73,9 @@ export function resolveRoutingAction(routingResult) {
     status: "noop",
     message: "No action resolved.",
     routing: result,
+    collected: result.collected || result.entities || {},
+    requiredFields: result.requiredFields || result.requiredInputs || [],
+    missingFields: result.missingFields || result.missingInputs || [],
     action: {
       type: "none",
     },

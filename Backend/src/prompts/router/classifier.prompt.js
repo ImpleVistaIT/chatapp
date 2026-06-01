@@ -66,6 +66,12 @@ For intent = "create_change_request", try to extract these entities when present
   "Landscape": string | null
 }
 
+For intent = "get_change_request_details", try to extract:
+{
+  "OBJECT_ID": string | null,
+  "PROCESS_TYPE": string | null
+}
+
 For intent = "get_purchase_order_details", try to extract:
 {
   "PurchaseOrder": string | null
@@ -76,6 +82,26 @@ For intent = "check_approvals", try to extract:
   "Approver": string | null,
   "Status": string | null
 }
+
+If the user mentions a change request number, CR number, or a numeric ID together with phrases like:
+- "show cr"
+- "show change request"
+- "get change request"
+- "change request details"
+- "cr details"
+- "cr status"
+- "status of cr"
+- "status of change request"
+then classify as:
+- system = "solman"
+- module = "charm"
+- intent = "get_change_request_details"
+
+For SolMan change request detail queries:
+- map "CR", "change request", and "ChaRM request" number to "OBJECT_ID"
+- extract "PROCESS_TYPE" only if explicitly mentioned
+- if process type is not mentioned, set it to null
+- do not invent PROCESS_TYPE unless clearly provided in the user message
 
 If an entity is not present, set it to null or omit it.
 
@@ -126,6 +152,36 @@ Return:
   "entities": {
     "Approver": null,
     "Status": "pending"
+  }
+}
+
+Example 4
+User: "show CR 8000003191 details"
+Return:
+{
+  "system": "solman",
+  "module": "charm",
+  "intent": "get_change_request_details",
+  "confidence": 0.97,
+  "reason": "User requested details of a specific change request",
+  "entities": {
+    "OBJECT_ID": "8000003191",
+    "PROCESS_TYPE": null
+  }
+}
+
+Example 5
+User: "show status of change request 8000003191 for process type YMHF"
+Return:
+{
+  "system": "solman",
+  "module": "charm",
+  "intent": "get_change_request_details",
+  "confidence": 0.98,
+  "reason": "User requested status of an existing SolMan change request",
+  "entities": {
+    "OBJECT_ID": "8000003191",
+    "PROCESS_TYPE": "YMHF"
   }
 }
 

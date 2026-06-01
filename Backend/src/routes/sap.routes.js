@@ -2,11 +2,14 @@ import express from "express";
 import { SapSystem } from "../models/SapSystem.model.js";
 import { SapServiceMap } from "../models/SapServiceMap.model.js";
 import { SapCredential } from "../models/SapCredential.model.js";
+import { SapConnection } from "../models/SapConnection.model.js";
+
+import { ingestSapCatalog } from "../controllers/sap.catalog.controller.js";
 
 import { encryptString, decryptString } from "../utils/crypto.js";
 import { getAllowedFieldsWithLabels } from "../services/allowlist.service.js";
-
 import { fetchFromSap } from "../services/sap.service.js";
+import { loginToSolman } from "../services/systems/solman/login.service.js";
 
 export const sapRoutes = express.Router();
 
@@ -24,36 +27,74 @@ function normalizeSystemId(systemId) {
   return String(systemId || "").trim().toUpperCase();
 }
 
-// ✅ NEW: normalize sapUser consistently everywhere
-function normalizeSapUser(u) {
-  return String(u || "").trim().toUpperCase();
+function normalizeSapUser(value) {
+  return String(value || "").trim().toUpperCase();
 }
 
-function clampString(v, max = 200) {
-  const s = String(v ?? "").trim();
+function clampString(value, max = 200) {
+  const s = String(value ?? "").trim();
   return s.length > max ? s.slice(0, max) : s;
 }
 
-function toInt(v) {
-  const n = Number(v);
+function toInt(value) {
+  const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
 
-// ✅ robust boolean parsing
-function parseBool(v, defaultValue = true) {
-  if (v === undefined || v === null) return defaultValue;
-  if (typeof v === "boolean") return v;
-  const s = String(v).trim().toLowerCase();
+function parseBool(value, defaultValue = true) {
+  if (value === undefined || value === null) return defaultValue;
+  if (typeof value === "boolean") return value;
+
+  const s = String(value).trim().toLowerCase();
   if (["true", "1", "yes", "y", "on"].includes(s)) return true;
   if (["false", "0", "no", "n", "off"].includes(s)) return false;
+
   return defaultValue;
 }
 
-/**
- * Pick credential:
- * - if sapUser provided => use that
- * - else => use lastUsedAt desc (fallback to updatedAt desc)
- */
+function inferSystemKind(system = {}) {
+  const name = String(system?.name || "").toLowerCase();
+  const host = String(system?.host || "").toLowerCase();
+
+  if (
+    name.includes("solman") ||
+    name.includes("solution manager") ||
+    host.includes("solman") ||
+    host.includes("smap")
+  ) {
+    return "solman";
+  }
+
+  return "generic";
+}
+
+function sanitizeErrorMessage(err, fallback = "Request failed") {
+  const raw = String(err?.message || err || fallback);
+  return raw || fallback;
+}
+
+function sanitizeResponseData(value) {
+  if (value == null) return null;
+  const s = String(value);
+  return s.length > 4000 ? `${s.slice(0, 4000)}...` : s;
+}
+
+function buildClientError(err, { exposeRequestUrl = false } = {}) {
+  return {
+    ok: false,
+    error: sanitizeErrorMessage(err),
+    requestUrl: exposeRequestUrl ? err?.requestUrl || null : null,
+    responseData: sanitizeResponseData(err?.responseData || null),
+  };
+}
+
+function buildValidationWarning(err, fallback = "Validation failed") {
+  return {
+    validated: false,
+    warning: sanitizeErrorMessage(err, fallback),
+  };
+}
+
 async function pickCredential({ owner, systemId, sapUser }) {
   const sid = normalizeSystemId(systemId);
   const su = normalizeSapUser(sapUser || "");
@@ -67,10 +108,6 @@ async function pickCredential({ owner, systemId, sapUser }) {
     .lean();
 }
 
-/**
- * Default PO/SO mapping seeded per system
- * Users can override per system via PUT endpoint.
- */
 function getDefaultServiceMaps({ owner, systemId }) {
   return [
     {
@@ -100,15 +137,20 @@ function getDefaultServiceMaps({ owner, systemId }) {
   ];
 }
 
-/**
- * SYSTEMS
- */
+/* -----------------------------
+ * Catalog
+ * ----------------------------- */
+
+sapRoutes.post("/catalog/ingest", ingestSapCatalog);
+
+/* -----------------------------
+ * Systems
+ * ----------------------------- */
 
 // GET /sap/systems
-// ✅ UPDATED: systems are shared => read from owner "local" (only)
 sapRoutes.get("/systems", async (req, res, next) => {
   try {
-    const owner = getOwner(req); // still needed for creds lookup
+    const owner = getOwner(req);
     const systemsOwner = "local";
 
     const [systems, creds] = await Promise.all([
@@ -119,6 +161,7 @@ sapRoutes.get("/systems", async (req, res, next) => {
     ]);
 
     const bestCredBySid = new Map();
+
     for (const c of creds) {
       const sid = normalizeSystemId(c.systemId);
       const cur = bestCredBySid.get(sid);
@@ -131,8 +174,11 @@ sapRoutes.get("/systems", async (req, res, next) => {
 
       const better = cScore > curScore || (cScore === curScore && cUpd > curUpd);
       if (!cur || better) {
-        // keep original c.sapUser in db, but for consistency you may normalize on write (we do below)
-        bestCredBySid.set(sid, { sapUser: c.sapUser, updatedAt: c.updatedAt, lastUsedAt: c.lastUsedAt });
+        bestCredBySid.set(sid, {
+          sapUser: c.sapUser,
+          updatedAt: c.updatedAt,
+          lastUsedAt: c.lastUsedAt,
+        });
       }
     }
 
@@ -152,7 +198,6 @@ sapRoutes.get("/systems", async (req, res, next) => {
           sapRouter: s.sapRouter || "",
           createdAt: s.createdAt,
           updatedAt: s.updatedAt,
-
           hasCredentials: Boolean(cred),
           sapUser: cred?.sapUser || null,
           credentialsUpdatedAt: cred?.updatedAt || null,
@@ -165,19 +210,16 @@ sapRoutes.get("/systems", async (req, res, next) => {
   }
 });
 
-/**
- * ✅ TILES (one tile per credential)
- * GET /sap/tiles
- */
+// GET /sap/tiles
 sapRoutes.get("/tiles", async (req, res, next) => {
   try {
     const owner = getOwner(req);
+    const now = new Date();
 
-    const [systems, creds] = await Promise.all([
+    const [systems, creds, activeConnections] = await Promise.all([
       SapSystem.find({ owner: { $in: [owner, "local"] } })
         .sort({ updatedAt: -1 })
         .lean(),
-
       SapCredential.find({ owner })
         .select({
           systemId: 1,
@@ -185,35 +227,62 @@ sapRoutes.get("/tiles", async (req, res, next) => {
           updatedAt: 1,
           lastUsedAt: 1,
           createdAt: 1,
+          profileFirstName: 1,
+          profileLastName: 1,
+          profileFullName: 1,
+          profileUpdatedAt: 1,
         })
         .sort({ lastUsedAt: -1, updatedAt: -1 })
         .lean(),
+      SapConnection.find({
+        owner,
+        revokedAt: null,
+        expiresAt: { $gt: now },
+      })
+        .select({
+          systemId: 1,
+          username: 1,
+          connectedAt: 1,
+          expiresAt: 1,
+        })
+        .lean(),
     ]);
 
-    // ✅ Normalize system IDs
     const sysBySid = new Map(systems.map((s) => [normalizeSystemId(s.systemId), s]));
+
+    const activeConnectionMap = new Map(
+      activeConnections.map((c) => [
+        `${normalizeSystemId(c.systemId)}:${normalizeSapUser(c.username)}`,
+        c,
+      ])
+    );
 
     const items = creds.map((c) => {
       const sid = normalizeSystemId(c.systemId);
       const su = normalizeSapUser(c.sapUser);
       const sys = sysBySid.get(sid);
-
-      // 🚨 DEBUG (remove later)
-      if (!sys) {
-        console.warn("⚠️ SYSTEM NOT FOUND for SID:", sid);
-      }
+      const activeConn = activeConnectionMap.get(`${sid}:${su}`);
+      const connected = Boolean(activeConn);
 
       return {
-        // ✅ ensure key matches what UI uses (case-normalized)
         key: `${sid}:${su}`,
+        _id: `${sid}:${su}`,
         systemId: sid,
+        name: sys?.name || sid,
         sapUser: su,
-
+        connected,
+        isConnected: connected,
+        status: connected ? "connected" : "disconnected",
+        active: connected,
+        connectedAt: activeConn?.connectedAt || null,
+        expiresAt: activeConn?.expiresAt || null,
         lastUsedAt: c.lastUsedAt || null,
         credentialsUpdatedAt: c.updatedAt || null,
         credentialsCreatedAt: c.createdAt || null,
-
-        // ✅ ONLY attach system if found
+        profileFirstName: String(c?.profileFirstName || "").trim(),
+        profileLastName: String(c?.profileLastName || "").trim(),
+        profileFullName: String(c?.profileFullName || "").trim(),
+        profileUpdatedAt: c?.profileUpdatedAt || null,
         system: sys
           ? {
               _id: String(sys._id),
@@ -226,7 +295,7 @@ sapRoutes.get("/tiles", async (req, res, next) => {
               createdAt: sys.createdAt || null,
               updatedAt: sys.updatedAt || null,
             }
-          : null, // ❗ IMPORTANT: DO NOT FAKE EMPTY OBJECT
+          : null,
       };
     });
 
@@ -237,10 +306,9 @@ sapRoutes.get("/tiles", async (req, res, next) => {
 });
 
 // POST /sap/systems
-// ✅ UPDATED: systems are shared -> always store under owner "local"
 sapRoutes.post("/systems", async (req, res, next) => {
   try {
-    const owner = "local"; // ✅ force shared systems
+    const owner = "local";
 
     const systemId = normalizeSystemId(req.body?.systemId);
     const name = clampString(req.body?.name || req.body?.description || systemId, 80);
@@ -248,8 +316,12 @@ sapRoutes.post("/systems", async (req, res, next) => {
     const protocolRaw = String(req.body?.protocol || "https").toLowerCase();
     const protocol = protocolRaw === "http" ? "http" : "https";
 
-    const host = clampString(req.body?.host || req.body?.appServer || req.body?.applicationServer || "", 200);
+    const host = clampString(
+      req.body?.host || req.body?.appServer || req.body?.applicationServer || "",
+      200
+    );
     const port = toInt(req.body?.port);
+    const sapRouter = clampString(req.body?.sapRouter || "", 300);
 
     if (!systemId || !host || port == null) {
       return res.status(400).json({ ok: false, error: "systemId, host, port are required" });
@@ -262,19 +334,27 @@ sapRoutes.post("/systems", async (req, res, next) => {
     const doc = await SapSystem.findOneAndUpdate(
       { owner, systemId },
       {
-        $set: { owner, systemId, name, protocol, host, port, updatedAt: new Date() },
+        $set: {
+          owner,
+          systemId,
+          name,
+          protocol,
+          host,
+          port,
+          sapRouter,
+          updatedAt: new Date(),
+        },
         $setOnInsert: { createdAt: new Date() },
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
     );
 
-    // ✅ defaults also must be shared (owner "local")
     const defaults = getDefaultServiceMaps({ owner, systemId });
     for (const m of defaults) {
       await SapServiceMap.findOneAndUpdate(
         { owner, systemId, serviceType: m.serviceType },
         { $setOnInsert: m },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
       );
     }
 
@@ -300,12 +380,62 @@ sapRoutes.post("/systems", async (req, res, next) => {
   }
 });
 
-/**
- * SERVICE MAPS (override per system)
- */
+// DELETE /sap/systems/:systemId
+sapRoutes.delete("/systems/:systemId", async (req, res, next) => {
+  try {
+    const owner = getOwner(req);
+    const systemId = normalizeSystemId(req.params.systemId);
+
+    if (!systemId) {
+      return res.status(400).json({ ok: false, error: "systemId is required" });
+    }
+
+    const systemDeleteResult = await SapSystem.deleteMany({
+      systemId,
+      owner: { $in: [owner, "local"] },
+    });
+
+    const serviceMapDeleteResult = await SapServiceMap.deleteMany({
+      systemId,
+      owner: { $in: [owner, "local"] },
+    });
+
+    const credentialDeleteResult = await SapCredential.deleteMany({
+      owner,
+      systemId,
+    });
+
+    const now = new Date();
+
+    await SapConnection.updateMany(
+      {
+        owner,
+        systemId,
+        revokedAt: null,
+      },
+      {
+        $set: {
+          revokedAt: now,
+        },
+      }
+    );
+
+    return res.json({
+      ok: true,
+      systemId,
+      deleted: true,
+      deletedCounts: {
+        systems: systemDeleteResult?.deletedCount || 0,
+        serviceMaps: serviceMapDeleteResult?.deletedCount || 0,
+        credentials: credentialDeleteResult?.deletedCount || 0,
+      },
+    });
+  } catch (e) {
+    next(e);
+  }
+});
 
 // GET /sap/systems/:systemId/services
-// ✅ UPDATED: service maps are shared under "local"
 sapRoutes.get("/systems/:systemId/services", async (req, res, next) => {
   try {
     const systemId = normalizeSystemId(req.params.systemId);
@@ -335,7 +465,6 @@ sapRoutes.get("/systems/:systemId/services", async (req, res, next) => {
 });
 
 // PUT /sap/systems/:systemId/services/:serviceType
-// ✅ UPDATED: service maps are shared under "local"
 sapRoutes.put("/systems/:systemId/services/:serviceType", async (req, res, next) => {
   try {
     const systemId = normalizeSystemId(req.params.systemId);
@@ -359,7 +488,7 @@ sapRoutes.put("/systems/:systemId/services/:serviceType", async (req, res, next)
     const updated = await SapServiceMap.findOneAndUpdate(
       { owner, systemId, serviceType },
       { $set: { ...patch, updatedAt: new Date() } },
-      { new: true }
+      { returnDocument: "after" }
     );
 
     if (!updated) {
@@ -387,9 +516,9 @@ sapRoutes.put("/systems/:systemId/services/:serviceType", async (req, res, next)
   }
 });
 
-/**
- * CREDENTIALS
- */
+/* -----------------------------
+ * Credentials
+ * ----------------------------- */
 
 // GET /sap/credentials/status?systemId=S4D
 sapRoutes.get("/credentials/status", async (req, res, next) => {
@@ -409,7 +538,6 @@ sapRoutes.get("/credentials/status", async (req, res, next) => {
     return res.json({
       ok: true,
       items: items.map((x) => ({
-        // ✅ normalize on output too (optional, but keeps UI consistent)
         sapUser: normalizeSapUser(x.sapUser),
         updatedAt: x.updatedAt,
         lastUsedAt: x.lastUsedAt || null,
@@ -423,7 +551,6 @@ sapRoutes.get("/credentials/status", async (req, res, next) => {
 });
 
 // POST /sap/credentials
-// ✅ UPDATED: system lookup uses [owner, "local"]; service maps use "local"
 sapRoutes.post("/credentials", async (req, res, next) => {
   try {
     const owner = getOwner(req);
@@ -449,60 +576,67 @@ sapRoutes.post("/credentials", async (req, res, next) => {
       });
     }
 
-    const authOverride = { username: sapUser, password: sapPassword };
+    let validationInfo = { validated: !validate };
 
     if (validate) {
-      // ✅ service maps are shared (local)
-      const maps = await SapServiceMap.find({ owner: "local", systemId }).lean();
-      if (!maps || maps.length === 0) {
-        return res.status(400).json({ ok: false, error: `No service mappings found for systemId=${systemId}.` });
-      }
+      const systemKind = inferSystemKind(system);
 
-      const verified = [];
-      for (const m of maps) {
+      if (systemKind === "solman") {
         try {
-          const meta = await getAllowedFieldsWithLabels({
-            system,
-            service: m,
-            entityTypeName: m.entityTypeName,
-            authOverride,
-            validateAuth: true,
+          const loginResult = await loginToSolman({
+            protocol: system.protocol || "https",
+            host: system.host,
+            port: system.port,
+            sapUser,
+            sapPassword,
           });
 
-          verified.push({
-            serviceType: m.serviceType,
-            serviceName: m.serviceName,
-            entitySet: m.entitySet,
-            entityTypeName: m.entityTypeName,
-            fieldsCount: meta.fields?.length || 0,
-          });
+          if (!loginResult?.ok) {
+            validationInfo = {
+              validated: false,
+              warning: loginResult?.message || "SAP login validation failed",
+            };
+          } else {
+            validationInfo = { validated: true };
+          }
         } catch (err) {
-          const msg = String(err?.message || err);
-          return res.status(401).json({ ok: false, error: msg });
-        }
-      }
-
-      const enc = encryptString(sapPassword);
-
-      await SapCredential.updateOne(
-        { owner, systemId, sapUser },
-        {
-          $set: {
-            owner,
+          console.error("[POST /sap/credentials] solman validation failed", {
             systemId,
-            sapUser, // ✅ normalized
-            encPassword: enc.enc,
-            encIv: enc.iv,
-            encTag: enc.tag,
-            lastUsedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          $setOnInsert: { createdAt: new Date() },
-        },
-        { upsert: true }
-      );
+            sapUser,
+            message: err?.message || String(err),
+            requestUrl: err?.requestUrl || null,
+          });
 
-      return res.json({ ok: true, verified });
+          validationInfo = buildValidationWarning(err, "SolMan validation failed");
+        }
+      } else {
+        const authOverride = { username: sapUser, password: sapPassword };
+        const maps = await SapServiceMap.find({ owner: "local", systemId }).lean();
+
+        if (!maps || maps.length === 0) {
+          return res.status(400).json({
+            ok: false,
+            error: `No service mappings found for systemId=${systemId}.`,
+          });
+        }
+
+        for (const m of maps) {
+          try {
+            await getAllowedFieldsWithLabels({
+              system,
+              service: m,
+              entityTypeName: m.entityTypeName,
+              authOverride,
+              validateAuth: true,
+            });
+          } catch (err) {
+            const msg = String(err?.message || err);
+            return res.status(401).json({ ok: false, error: msg });
+          }
+        }
+
+        validationInfo = { validated: true };
+      }
     }
 
     const enc = encryptString(sapPassword);
@@ -513,7 +647,7 @@ sapRoutes.post("/credentials", async (req, res, next) => {
         $set: {
           owner,
           systemId,
-          sapUser, // ✅ normalized
+          sapUser,
           encPassword: enc.enc,
           encIv: enc.iv,
           encTag: enc.tag,
@@ -525,7 +659,13 @@ sapRoutes.post("/credentials", async (req, res, next) => {
       { upsert: true }
     );
 
-    return res.json({ ok: true });
+    return res.json({
+      ok: true,
+      saved: true,
+      systemId,
+      sapUser,
+      ...validationInfo,
+    });
   } catch (e) {
     next(e);
   }
@@ -547,23 +687,50 @@ sapRoutes.delete("/credentials", async (req, res, next) => {
       if ((r?.deletedCount || 0) === 0) {
         return res.status(404).json({ ok: false, error: "Credential not found (already removed?)" });
       }
+
+      await SapConnection.updateMany(
+        {
+          owner,
+          systemId,
+          username: sapUser,
+          revokedAt: null,
+        },
+        {
+          $set: {
+            revokedAt: new Date(),
+          },
+        }
+      );
+
       return res.json({ ok: true, deletedCount: r.deletedCount });
     }
 
     const r = await SapCredential.deleteMany({ owner, systemId });
+
+    await SapConnection.updateMany(
+      {
+        owner,
+        systemId,
+        revokedAt: null,
+      },
+      {
+        $set: {
+          revokedAt: new Date(),
+        },
+      }
+    );
+
     return res.json({ ok: true, deletedCount: r.deletedCount || 0 });
   } catch (e) {
     next(e);
   }
 });
 
-/**
- * CONNECT / DISCONNECT
- */
+/* -----------------------------
+ * Connection
+ * ----------------------------- */
 
 // POST /sap/connect
-// ✅ UPDATED: system lookup uses [owner, "local"]; service maps use "local"
-// ✅ UPDATED: returns cached profile fields from SapCredential so UI always has name after reconnect
 sapRoutes.post("/connect", async (req, res, next) => {
   try {
     const owner = getOwner(req);
@@ -591,17 +758,10 @@ sapRoutes.post("/connect", async (req, res, next) => {
 
     await SapCredential.updateOne({ _id: cred._id }, { $set: { lastUsedAt: new Date() } });
 
-    if (validate) {
-      const svc =
-        (await SapServiceMap.findOne({ owner: "local", systemId, serviceType: "PO" }).lean()) ||
-        (await SapServiceMap.findOne({ owner: "local", systemId, serviceType: "SO" }).lean());
+    let validationInfo = { validated: !validate };
 
-      if (!svc) {
-        return res.status(400).json({
-          ok: false,
-          error: "No service mappings found for this system. Create system again or configure services.",
-        });
-      }
+    if (validate) {
+      const systemKind = inferSystemKind(sys);
 
       let plainPassword = "";
       try {
@@ -617,48 +777,152 @@ sapRoutes.post("/connect", async (req, res, next) => {
         });
       }
 
-      try {
-        await getAllowedFieldsWithLabels({
-          system: sys,
-          service: svc,
-          entityTypeName: svc.entityTypeName,
-          authOverride: { username: cred.sapUser, password: plainPassword },
-          validateAuth: true,
-        });
-      } catch (e) {
-        const msg = String(e?.message || e);
-        return res.status(401).json({ ok: false, error: msg });
+      if (systemKind === "solman") {
+        try {
+          const loginResult = await loginToSolman({
+            protocol: sys.protocol || "https",
+            host: sys.host,
+            port: sys.port,
+            sapUser: cred.sapUser,
+            sapPassword: plainPassword,
+          });
+
+          if (!loginResult?.ok) {
+            validationInfo = {
+              validated: false,
+              warning: loginResult?.message || "SAP login validation failed",
+            };
+          } else {
+            validationInfo = { validated: true };
+          }
+        } catch (e) {
+          console.error("[POST /sap/connect] solman validation failed", {
+            systemId,
+            sapUser: cred.sapUser,
+            message: e?.message || String(e),
+            requestUrl: e?.requestUrl || null,
+          });
+
+          validationInfo = buildValidationWarning(e, "SolMan validation failed");
+        }
+      } else {
+        const svc =
+          (await SapServiceMap.findOne({ owner: "local", systemId, serviceType: "PO" }).lean()) ||
+          (await SapServiceMap.findOne({ owner: "local", systemId, serviceType: "SO" }).lean());
+
+        if (!svc) {
+          return res.status(400).json({
+            ok: false,
+            error: "No service mappings found for this system. Create system again or configure services.",
+          });
+        }
+
+        try {
+          await getAllowedFieldsWithLabels({
+            system: sys,
+            service: svc,
+            entityTypeName: svc.entityTypeName,
+            authOverride: { username: cred.sapUser, password: plainPassword },
+            validateAuth: true,
+          });
+
+          validationInfo = { validated: true };
+        } catch (e) {
+          const msg = String(e?.message || e);
+          return res.status(401).json({ ok: false, error: msg });
+        }
       }
     }
 
-    // ✅ IMPORTANT: include cached profile values from DB
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 12 * 60 * 60 * 1000);
+
+    await SapConnection.updateMany(
+      {
+        owner,
+        systemId,
+        revokedAt: null,
+      },
+      {
+        $set: {
+          revokedAt: now,
+        },
+      }
+    );
+
+    await SapConnection.create({
+      owner,
+      description: sys.name || systemId,
+      applicationServer: sys.host || "",
+      instanceNumber: String(sys.port ?? ""),
+      systemId,
+      saprouter: sys.sapRouter || "",
+      username: normalizeSapUser(cred.sapUser),
+      passwordEnc: cred.encPassword || "stored-in-credential",
+      connectedAt: now,
+      expiresAt,
+      revokedAt: null,
+    });
+
     return res.json({
       ok: true,
       connected: true,
+      isConnected: true,
+      status: "connected",
+      active: true,
       systemId,
       sapUser: normalizeSapUser(cred.sapUser),
       firstName: String(cred?.profileFirstName || "").trim(),
       lastName: String(cred?.profileLastName || "").trim(),
       fullName: String(cred?.profileFullName || "").trim(),
       profileUpdatedAt: cred?.profileUpdatedAt || null,
+      connectedAt: now,
+      expiresAt,
+      ...validationInfo,
     });
   } catch (e) {
     next(e);
   }
 });
 
+// POST /sap/disconnect
 sapRoutes.post("/disconnect", async (req, res, next) => {
   try {
-    return res.json({ ok: true, connected: false });
+    const owner = getOwner(req);
+    const systemId = normalizeSystemId(req.body?.systemId);
+    const sapUser = normalizeSapUser(req.body?.sapUser || "");
+    const now = new Date();
+
+    const query = {
+      owner,
+      revokedAt: null,
+    };
+
+    if (systemId) query.systemId = systemId;
+    if (sapUser) query.username = sapUser;
+
+    await SapConnection.updateMany(query, {
+      $set: {
+        revokedAt: now,
+      },
+    });
+
+    return res.json({
+      ok: true,
+      connected: false,
+      isConnected: false,
+      status: "disconnected",
+      active: false,
+      systemId: systemId || null,
+      sapUser: sapUser || null,
+      disconnectedAt: now,
+    });
   } catch (e) {
     next(e);
   }
 });
 
 // POST /sap/user-profile
-// Returns Firstname/Lastname/Fullname for the currently connected SAP user.
-// Uses stored credentials (decrypts password) so the browser never sends password again.
-// ✅ NOW: caches the profile into SapCredential (DB) and serves cached profile when available.
 sapRoutes.post("/user-profile", async (req, res, next) => {
   try {
     const owner = getOwner(req);
@@ -683,7 +947,6 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
       return res.status(404).json({ ok: false, error: "No credentials saved for this SAP user/system." });
     }
 
-    // ✅ 1) Return cached profile (no SAP call) if present
     const cachedFullName = String(cred?.profileFullName || "").trim();
     const cachedFirstName = String(cred?.profileFirstName || "").trim();
     const cachedLastName = String(cred?.profileLastName || "").trim();
@@ -702,18 +965,18 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
       });
     }
 
-    // ✅ 2) Not cached => decrypt password and fetch from SAP
     let plainPassword = "";
     try {
-      plainPassword = decryptString({ enc: cred.encPassword, iv: cred.encIv, tag: cred.encTag });
+      plainPassword = decryptString({
+        enc: cred.encPassword,
+        iv: cred.encIv,
+        tag: cred.encTag,
+      });
     } catch {
       return res.status(500).json({ ok: false, error: "Failed to decrypt stored SAP credentials." });
     }
 
-    // Service is fixed: ZSAP_USER_LOGIN_SRV
     const service = { serviceName: "ZSAP_USER_LOGIN_SRV" };
-
-    // IMPORTANT: SAP service accepts $filter with UserName + Password
     const filter = `UserName eq '${String(sapUser).replace(/'/g, "''")}' and Password eq '${String(
       plainPassword
     ).replace(/'/g, "''")}'`;
@@ -742,7 +1005,8 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
         }
       : { sapUser, firstName: "", lastName: "", fullName: "", cached: false };
 
-    // ✅ 3) Save into DB (cache for next time)
+    const now = new Date();
+
     await SapCredential.updateOne(
       { _id: cred._id },
       {
@@ -750,19 +1014,18 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
           profileFirstName: profile.firstName,
           profileLastName: profile.lastName,
           profileFullName: profile.fullName,
-          profileUpdatedAt: new Date(),
+          profileUpdatedAt: now,
         },
       }
     );
 
-    return res.json({ ok: true, profile: { ...profile, profileUpdatedAt: new Date() } });
+    return res.json({ ok: true, profile: { ...profile, profileUpdatedAt: now } });
   } catch (e) {
     next(e);
   }
 });
 
 // GET /sap/status?systemId=S4D
-// ✅ UPDATED: system existence checks "local"; creds remain per-user
 sapRoutes.get("/status", async (req, res, next) => {
   try {
     const owner = getOwner(req);
@@ -772,10 +1035,27 @@ sapRoutes.get("/status", async (req, res, next) => {
       return res.status(400).json({ ok: false, error: "systemId is required" });
     }
 
-    const sys = await SapSystem.findOne({ owner: "local", systemId }).select({ _id: 1 });
-    const cred = await pickCredential({ owner, systemId, sapUser: "" });
+    const now = new Date();
 
-    return res.json({ ok: true, connected: Boolean(sys && cred) });
+    const activeConn = await SapConnection.findOne({
+      owner,
+      systemId,
+      revokedAt: null,
+      expiresAt: { $gt: now },
+    })
+      .sort({ connectedAt: -1, updatedAt: -1 })
+      .lean();
+
+    return res.json({
+      ok: true,
+      connected: Boolean(activeConn),
+      isConnected: Boolean(activeConn),
+      status: activeConn ? "connected" : "disconnected",
+      active: Boolean(activeConn),
+      sapUser: activeConn?.username ? normalizeSapUser(activeConn.username) : null,
+      connectedAt: activeConn?.connectedAt || null,
+      expiresAt: activeConn?.expiresAt || null,
+    });
   } catch (e) {
     next(e);
   }

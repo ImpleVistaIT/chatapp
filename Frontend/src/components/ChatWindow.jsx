@@ -10,6 +10,16 @@ function classNames(...x) {
   return x.filter(Boolean).join(" ");
 }
 
+function normalizeBool(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (["true", "yes", "1", "connected", "online", "active"].includes(v)) return true;
+    if (["false", "no", "0", "disconnected", "offline", "inactive"].includes(v)) return false;
+  }
+  return fallback;
+}
+
 export default function ChatWindow({
   loading,
   input,
@@ -27,6 +37,7 @@ export default function ChatWindow({
   setSidebarOpen,
   setInput,
   onSend,
+  pendingAction,
   onKeyDown,
   onMicClick,
   onCopyAssistant,
@@ -57,10 +68,147 @@ export default function ChatWindow({
 }) {
   const [showSystemDropdown, setShowSystemDropdown] = useState(false);
   const [connectingSystemId, setConnectingSystemId] = useState(null);
+  const [localConnectedSession, setLocalConnectedSession] = useState(null);
 
-  const apiBase = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.hostname}:3000`;
+  const apiBase =
+    import.meta.env.VITE_API_BASE_URL ||
+    `${window.location.protocol}//${window.location.hostname}:3000`;
 
-  const isConnected = Boolean(activeSession?.systemId && activeSession?.sapUser);
+  const normalizeSystemId = useCallback((sid) => String(sid || "").trim().toUpperCase(), []);
+
+  const normalizedAvailableSystems = useMemo(() => {
+    const tileList = Array.isArray(tiles) ? tiles : [];
+
+    return tileList
+      .map((tile) => {
+        const system = tile?.system && typeof tile.system === "object" ? tile.system : {};
+
+        const systemId = normalizeSystemId(
+          tile?.systemId ||
+            system?.systemId ||
+            tile?.name ||
+            system?.name ||
+            tile?.code ||
+            system?.code
+        );
+
+        const host = String(tile?.host || system?.host || "").trim().toLowerCase();
+        const protocol = String(tile?.protocol || system?.protocol || "https").trim().toLowerCase();
+        const rawPort = tile?.port ?? system?.port ?? "";
+        const port = String(rawPort).trim();
+        const status = String(tile?.status || system?.status || "").trim().toLowerCase();
+
+        const connected =
+          tile?.connected === true ||
+          tile?.isConnected === true ||
+          system?.connected === true ||
+          system?.isConnected === true ||
+          status === "connected" ||
+          status === "online" ||
+          status === "active" ||
+          normalizeBool(tile?.active, false) ||
+          normalizeBool(system?.active, false);
+
+        return {
+          systemId,
+          host,
+          port,
+          protocol,
+          connected,
+          isConnected: connected,
+          status: connected ? "connected" : status || "disconnected",
+          name:
+            tile?.name ||
+            system?.name ||
+            tile?.description ||
+            system?.description ||
+            systemId,
+          sapUser:
+            tile?.sapUser ||
+            system?.sapUser ||
+            tile?.user ||
+            system?.user ||
+            "",
+        };
+      })
+      .filter((item) => item.systemId || (item.host && item.port));
+  }, [tiles, normalizeSystemId]);
+
+  useEffect(() => {
+    console.log("[ChatWindow] tiles:", tiles);
+    console.log("[ChatWindow] normalizedAvailableSystems:", normalizedAvailableSystems);
+  }, [tiles, normalizedAvailableSystems]);
+
+  useEffect(() => {
+    if (!activeSession?.systemId) {
+      setLocalConnectedSession(null);
+    }
+  }, [activeSession?.systemId]);
+
+  const effectiveSession = localConnectedSession || activeSession || null;
+
+  const activeSystemId = normalizeSystemId(effectiveSession?.systemId || "");
+  const activeSapUser = String(effectiveSession?.sapUser || "").trim();
+
+  const buildSendPayload = useCallback(
+    (overrides = {}) => {
+      const {
+        systemId: _ignoredSystemId,
+        sapUser: overrideSapUser,
+        ...rest
+      } = overrides || {};
+
+      return {
+        availableSystems: normalizedAvailableSystems,
+        systemId: activeSystemId || "",
+        sapUser: overrideSapUser ?? activeSapUser ?? "",
+        ...rest,
+      };
+    },
+    [normalizedAvailableSystems, activeSystemId, activeSapUser]
+  );
+
+  const hasConnectedSystems = useMemo(() => {
+    return normalizedAvailableSystems.some(
+      (tile) =>
+        tile?.connected === true ||
+        tile?.isConnected === true ||
+        tile?.status === "connected"
+    );
+  }, [normalizedAvailableSystems]);
+
+const isConnected = useMemo(() => {
+  // immediate frontend connection state
+  if (localConnectedSession?.systemId) {
+    return true;
+  }
+
+  // backend tiles state
+  if (hasConnectedSystems) {
+    return true;
+  }
+
+  if (!activeSystemId) {
+    return false;
+  }
+
+  return normalizedAvailableSystems.some(
+    (item) =>
+      normalizeSystemId(item?.systemId) === activeSystemId &&
+      (
+        item?.connected === true ||
+        item?.isConnected === true ||
+        item?.status === "connected"
+      )
+  );
+}, [
+  localConnectedSession,
+  hasConnectedSystems,
+  normalizedAvailableSystems,
+  activeSystemId,
+  normalizeSystemId,
+]);
+  const canInteract = isConnected && !connectingSystemId;
 
   const [msgNextBefore, setMsgNextBefore] = useState(null);
   const [msgLoadingMore, setMsgLoadingMore] = useState(false);
@@ -69,7 +217,6 @@ export default function ChatWindow({
   const messagesElRef = useRef(null);
 
   const isMongoId = useCallback((v) => /^[a-f0-9]{24}$/i.test(String(v || "")), []);
-  const normalizeSystemId = useCallback((sid) => String(sid || "").trim().toUpperCase(), []);
 
   const sessionId = useMemo(() => {
     const id = activeConv?.id;
@@ -95,7 +242,11 @@ export default function ChatWindow({
         prev.map((c) => {
           if (c.id !== activeConv.id) return c;
           const existing = Array.isArray(c.messages) ? c.messages : [];
-          return { ...c, messages: [...olderMessages, ...existing], updatedAt: c.updatedAt || Date.now() };
+          return {
+            ...c,
+            messages: [...olderMessages, ...existing],
+            updatedAt: c.updatedAt || Date.now(),
+          };
         })
       );
     },
@@ -144,7 +295,9 @@ export default function ChatWindow({
         });
 
         const profPayload = await profRes.json().catch(() => ({}));
-        if (!profRes.ok || profPayload?.ok !== true) return { firstName: "", fullName: "" };
+        if (!profRes.ok || profPayload?.ok !== true) {
+          return { firstName: "", fullName: "" };
+        }
 
         const p = profPayload.profile || profPayload;
         const firstName = String(p?.firstName || p?.Firstname || "").trim();
@@ -211,7 +364,15 @@ export default function ChatWindow({
     } finally {
       setMsgLoadingMore(false);
     }
-  }, [apiBase, bottomRef, canFetchDbMessages, normalizeSystemId, sessionId, setConversations, activeConv?.id]);
+  }, [
+    apiBase,
+    bottomRef,
+    canFetchDbMessages,
+    normalizeSystemId,
+    sessionId,
+    setConversations,
+    activeConv?.id,
+  ]);
 
   const fetchOlderMessages = useCallback(async () => {
     if (!canFetchDbMessages) return;
@@ -269,7 +430,16 @@ export default function ChatWindow({
     } finally {
       setMsgLoadingMore(false);
     }
-  }, [apiBase, canFetchDbMessages, msgHasMore, msgLoadingMore, msgNextBefore, normalizeSystemId, prependActiveMessages, sessionId]);
+  }, [
+    apiBase,
+    canFetchDbMessages,
+    msgHasMore,
+    msgLoadingMore,
+    msgNextBefore,
+    normalizeSystemId,
+    prependActiveMessages,
+    sessionId,
+  ]);
 
   useEffect(() => {
     setMsgNextBefore(null);
@@ -294,7 +464,9 @@ export default function ChatWindow({
       setShowSystemDropdown(false);
 
       const sid = normalizeSystemId(tileOrSystem?.systemId || tileOrSystem?.name);
-      const sapUser = String(tileOrSystem?.sapUser || tileOrSystem?.system?.sapUser || tileOrSystem?.user || "").trim();
+      const sapUser = String(
+        tileOrSystem?.sapUser || tileOrSystem?.system?.sapUser || tileOrSystem?.user || ""
+      ).trim();
 
       if (!sid) return;
 
@@ -304,7 +476,11 @@ export default function ChatWindow({
         return;
       }
 
-      localStorage.removeItem("chatSessionId");
+      // clear storage
+    localStorage.removeItem("sapConnected");
+    localStorage.removeItem("sapActiveSession");
+    localStorage.removeItem("sapActiveSystem");
+    localStorage.removeItem("chatSessionId");
       if (typeof setActiveId === "function") setActiveId("draft");
 
       setConnectingSystemId(`${sid}:${sapUser}`);
@@ -323,20 +499,44 @@ export default function ChatWindow({
 
         const connectedSapUser = String(connPayload?.sapUser || sapUser).trim();
 
-        const { firstName, fullName } = await fetchSapProfile({ systemId: sid, sapUser: connectedSapUser });
+        const { firstName, fullName } = await fetchSapProfile({
+          systemId: sid,
+          sapUser: connectedSapUser,
+        });
 
-        ensureSapActiveSystemStored(tileOrSystem, { sapUserOverride: connectedSapUser });
-        onSystemSelect?.(tileOrSystem);
+        const connectedSystem = {
+          ...tileOrSystem,
+          systemId: sid,
+          sapUser: connectedSapUser,
+          connected: true,
+          isConnected: true,
+          status: "connected",
+          active: true,
+        };
 
-        const next = { systemId: sid, sapUser: connectedSapUser, firstName, fullName };
+        ensureSapActiveSystemStored(connectedSystem, {
+          sapUserOverride: connectedSapUser,
+        });
+        onSystemSelect?.(connectedSystem);
+
+        const next = {
+          systemId: sid,
+          sapUser: connectedSapUser,
+          firstName,
+          fullName,
+        };
+
+        setLocalConnectedSession(next);
         setActiveSession?.(next);
 
         localStorage.setItem("sapActiveSession", JSON.stringify(next));
         window.dispatchEvent(new Event("sapActiveSessionChanged"));
 
-        localStorage.removeItem("sapConnected");
+        localStorage.setItem("sapConnected", "true");
 
-        if (typeof onConnected === "function") onConnected();
+        if (typeof onConnected === "function") {
+          await onConnected();
+        }
 
         if (typeof setConversations === "function") {
           setConversations((prev) => {
@@ -363,7 +563,11 @@ export default function ChatWindow({
           });
         }
 
-        toast.success(`Connected to ${tileOrSystem?.name || tileOrSystem?.description || sid} (${connectedSapUser})`);
+        toast.success(
+          `Connected to ${
+            tileOrSystem?.name || tileOrSystem?.description || sid
+          } (${connectedSapUser})`
+        );
       } catch (e) {
         console.error("Connect failed:", e);
         toast.error(e?.message || "Connect failed. Please login again.");
@@ -386,6 +590,102 @@ export default function ChatWindow({
     ]
   );
 
+  const handleDisconnectSystem = useCallback(async (system) => {
+  try {
+    const sid = normalizeSystemId(system?.systemId);
+
+    // optional backend disconnect API
+    await authFetch(`${apiBase}/sap/disconnect`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        systemId: sid,
+      }),
+    }).catch(() => {});
+
+    // clear local states
+    setLocalConnectedSession(null);
+
+    setActiveSession?.(null);
+
+    // clear storage
+    localStorage.removeItem("sapConnected");
+    localStorage.removeItem("sapActiveSession");
+    localStorage.removeItem("sapActiveSystem");
+
+    // notify app
+    window.dispatchEvent(new Event("sapActiveSessionChanged"));
+    window.dispatchEvent(new Event("sapConnectionChanged"));
+
+    toast.success(`${sid} disconnected`);
+  } catch (e) {
+    console.error("Disconnect failed:", e);
+    toast.error("Disconnect failed");
+  }
+},[apiBase, normalizeSystemId, setActiveSession]);
+
+  const handleSuggestionSend = useCallback(
+    (value) => {
+      console.log("[ChatWindow] suggestion send", {
+        rawValue: value,
+        activeSystemId,
+        activeSapUser,
+      });
+
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        if (value?.action?.type === "add_system") {
+          onOpenSapLogin?.(null);
+          return;
+        }
+
+        const safeOverrideText = String(
+          value?.overrideText || value?.text || value?.label || ""
+        ).trim();
+
+        const safeDisplayText = String(
+          value?.displayText || value?.text || value?.label || safeOverrideText
+        ).trim();
+
+        const safeBusinessScope = String(value?.businessScope || "").trim().toUpperCase();
+        const isBusinessScope =
+          safeBusinessScope === "ROW" || safeBusinessScope === "INDIA";
+
+        onSend?.(
+          buildSendPayload({
+            overrideText: safeOverrideText,
+            displayText: safeDisplayText,
+            businessScope: isBusinessScope ? safeBusinessScope : "",
+            pendingContext: value?.pendingContext ?? pendingAction ?? null,
+          })
+        );
+        return;
+      }
+
+      const text = String(value || "").trim();
+      if (!text) return;
+
+      if (text === "Add System") {
+        onOpenSapLogin?.(null);
+        return;
+      }
+
+      const upper = text.toUpperCase();
+      const isBusinessScope = upper === "ROW" || upper === "INDIA";
+
+      onSend?.(
+        buildSendPayload({
+          overrideText: text,
+          displayText: text,
+          businessScope: isBusinessScope ? upper : "",
+          pendingContext: pendingAction || null,
+        })
+      );
+    },
+    [buildSendPayload, onOpenSapLogin, onSend, pendingAction, activeSystemId, activeSapUser]
+  );
+
   const onComposerKeyDown = useCallback(
     (e) => {
       onKeyDown?.(e);
@@ -393,28 +693,49 @@ export default function ChatWindow({
 
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (!isConnected) return;
+        if (!canInteract) return;
         if (loading) return;
         if (!String(input || "").trim()) return;
-        onSend?.();
+        console.log("[ChatWindow] composer send", {
+          activeSystemId,
+          activeSapUser,
+          normalizedAvailableSystems,
+        });
+        onSend?.(
+          buildSendPayload({
+            overrideText: input,
+            displayText: input,
+          })
+        );
       }
     },
-    [onKeyDown, isConnected, loading, input, onSend]
+    [
+      onKeyDown,
+      canInteract,
+      loading,
+      input,
+      onSend,
+      buildSendPayload,
+      activeSystemId,
+      activeSapUser,
+      normalizedAvailableSystems,
+    ]
   );
 
   return (
     <main className="flex-1 flex flex-col overflow-hidden bg-white">
       <ChatHeader
         setSidebarOpen={setSidebarOpen}
+        onAddNewSystem={onOpenSapLogin}
+        showAddSystemButton={!isConnected}
         showSystemDropdown={showSystemDropdown}
         setShowSystemDropdown={setShowSystemDropdown}
         connectingSystemId={connectingSystemId}
         tiles={tiles}
         normalizeSystemId={normalizeSystemId}
         handleSystemSelect={handleSystemSelect}
-        onDisconnect={onDisconnect}
-        onAddNewSystem={onOpenSapLogin}
-        activeSession={activeSession}
+        onDisconnect={handleDisconnectSystem}
+        activeSession={effectiveSession}
         setActiveSession={setActiveSession}
       />
 
@@ -433,6 +754,7 @@ export default function ChatWindow({
         messagesElRef={messagesElRef}
         onMessagesScrollInternal={onMessagesScrollInternal}
         activeConv={activeConv}
+        activeSession={effectiveSession}
         msgLoadingMore={msgLoadingMore}
         editingIndex={editingIndex}
         editingText={editingText}
@@ -440,15 +762,15 @@ export default function ChatWindow({
         startEditMessage={startEditMessage}
         cancelEdit={cancelEdit}
         applyEditLocal={applyEditLocal}
-        onSend={onSend}
+        onSend={handleSuggestionSend}
+        pendingAction={pendingAction}
         onCopyAssistant={onCopyAssistant}
         copiedAtIndex={copiedAtIndex}
         loading={loading}
         bottomRef={bottomRef}
         showScrollDown={showScrollDown}
+        inlineForm={isConnected ? solmanCreateCrForm : null}
       />
-
-      {isConnected && solmanCreateCrForm}
 
       {isConnected && (
         <footer className="sticky bottom-0 bg-white px-4 py-3 border-t border-gray-200 flex-shrink-0">
@@ -457,25 +779,36 @@ export default function ChatWindow({
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
+                  if (!canInteract) return;
                   if (loading) return;
-                  onSend();
+                  if (!String(input || "").trim()) return;
+                  onSend?.(
+                    buildSendPayload({
+                      overrideText: input,
+                      displayText: input,
+                    })
+                  );
                 }}
               >
                 <div className="flex items-end gap-2">
                   <button
                     type="button"
                     onClick={onMicClick}
-                    disabled={!isConnected}
+                    disabled={!canInteract}
                     className={classNames(
                       "rounded-xl px-3 py-2 border transition flex items-center justify-center",
                       listening
                         ? "bg-rose-600 text-white border-rose-500 hover:bg-rose-700"
                         : "bg-white text-zinc-700 border-gray-300 hover:bg-gray-200",
-                      !isConnected && "opacity-50 cursor-not-allowed"
+                      !canInteract && "opacity-50 cursor-not-allowed"
                     )}
                     title={listening ? "Stop microphone" : "Start microphone"}
                   >
-                    {listening ? <FiMicOff className="text-lg" /> : <FiMic className="text-lg" />}
+                    {listening ? (
+                      <FiMicOff className="text-lg" />
+                    ) : (
+                      <FiMic className="text-lg" />
+                    )}
                   </button>
 
                   <textarea
@@ -484,8 +817,8 @@ export default function ChatWindow({
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={onComposerKeyDown}
                     rows={2}
-                    placeholder={isConnected ? "Start type a message… " : "Click Connect to start chatting…"}
-                    disabled={!isConnected}
+                    placeholder={canInteract ? "Start type a message… " : "Click Connect to start chatting…"}
+                    disabled={!canInteract}
                     className="flex-1 resize-none rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-zinc-800 placeholder:text-zinc-500 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-400/30 disabled:bg-gray-100 disabled:text-gray-400"
                   />
 
@@ -501,7 +834,7 @@ export default function ChatWindow({
                     </button>
                   ) : (
                     <button
-                      disabled={!isConnected || !String(input || "").trim()}
+                      disabled={!canInteract || !String(input || "").trim()}
                       className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center gap-2"
                       type="submit"
                       title="Send"

@@ -50,12 +50,21 @@ export const ROUTING_INTENT_REGISTRY = {
         formId: "solman_create_cr",
         executor: "solman.charm.createChangeRequest",
       },
+
       get_change_request_details: {
         label: "Get change request details",
         action: "execute_api",
-        requiredInputs: ["changeRequestId"],
-        entityHints: ["changeRequestId"],
+        requiredInputs: ["objectId"],
+        entityHints: ["objectId", "processType"],
         executor: "solman.charm.getChangeRequestDetails",
+      },
+
+      list_change_requests: {
+        label: "List change requests",
+        action: "execute_api",
+        requiredInputs: ["fromDate", "toDate"],
+        entityHints: ["fromDate", "toDate", "processType", "triggerAll"],
+        executor: "solman.charm.listChangeRequests",
       },
     },
 
@@ -72,9 +81,7 @@ export const ROUTING_INTENT_REGISTRY = {
 };
 
 export function getIntentDefinition({ system, module, intent }) {
-  return (
-    ROUTING_INTENT_REGISTRY?.[system]?.[module]?.[intent] || null
-  );
+  return ROUTING_INTENT_REGISTRY?.[system]?.[module]?.[intent] || null;
 }
 
 export function isSupportedIntent({ system, module, intent }) {

@@ -1,16 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { authFetch } from "../api/authFetch";
 
+function clean(v) {
+  return String(v || "").trim();
+}
+
 export default function SolmanCreateCrForm({
-  systemId = "HSM",
+  systemId = "",
   sapUser = "",
+  initialValues = {},
+  pendingAction = null,
   onSuccess,
   onCancel,
 }) {
   const [shortDesc, setShortDesc] = useState("");
-  const [deliveryResponsible, setDeliveryResponsible] = useState(sapUser || "");
-  const [developer, setDeveloper] = useState(sapUser || "");
-  const [tester, setTester] = useState(sapUser || "");
+  const [deliveryResponsible, setDeliveryResponsible] = useState(clean(sapUser));
+  const [developer, setDeveloper] = useState(clean(sapUser));
+  const [tester, setTester] = useState(clean(sapUser));
   const [workItemReference, setWorkItemReference] = useState("");
   const [landscape, setLandscape] = useState("");
   const [url, setUrl] = useState("");
@@ -18,71 +24,188 @@ export default function SolmanCreateCrForm({
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
 
   const apiBase =
     import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
 
+  useEffect(() => {
+    const values =
+      initialValues && typeof initialValues === "object" ? initialValues : {};
+
+    setShortDesc(clean(values.ShortDesc));
+    setDeliveryResponsible(
+      clean(values.DeliveryResponsible) || clean(sapUser)
+    );
+    setDeveloper(clean(values.Developer) || clean(sapUser));
+    setTester(clean(values.Tester) || clean(sapUser));
+    setWorkItemReference(clean(values.WorkItemReference));
+    setLandscape(clean(values.Landscape));
+
+    const firstUrl = Array.isArray(values.REQ_URL_NAV)
+      ? values.REQ_URL_NAV[0]
+      : null;
+
+    setUrl(clean(firstUrl?.URL));
+    setUrlName(clean(firstUrl?.URL_NAME));
+  }, [initialValues, sapUser]);
+
+  function clearFieldError(field) {
+    setFieldErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  }
+
+  function applyBackendFieldHints(message) {
+    const msg = clean(message).toLowerCase();
+    const next = {};
+
+    if (msg.includes("work item") && msg.includes("already exists")) {
+      next.WorkItemReference = "This work item reference already exists.";
+    }
+
+    setFieldErrors(next);
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
+    setFieldErrors({});
+
+    if (!clean(systemId)) {
+      setError("No active SAP system selected.");
+      return;
+    }
+
+    if (!clean(sapUser)) {
+      setError("No active SAP user found.");
+      return;
+    }
 
     if (
-      !shortDesc.trim() ||
-      !deliveryResponsible.trim() ||
-      !developer.trim() ||
-      !tester.trim() ||
-      !workItemReference.trim() ||
-      !landscape.trim()
+      !clean(shortDesc) ||
+      !clean(deliveryResponsible) ||
+      !clean(developer) ||
+      !clean(tester) ||
+      !clean(workItemReference) ||
+      !clean(landscape)
     ) {
       setError("Please fill all required fields.");
+
+      const next = {};
+      if (!clean(shortDesc)) next.ShortDesc = "Short Description is required.";
+      if (!clean(deliveryResponsible)) {
+        next.DeliveryResponsible = "Delivery Responsible is required.";
+      }
+      if (!clean(developer)) next.Developer = "Developer is required.";
+      if (!clean(tester)) next.Tester = "Tester is required.";
+      if (!clean(workItemReference)) {
+        next.WorkItemReference = "Work Item Reference is required.";
+      }
+      if (!clean(landscape)) next.Landscape = "Landscape is required.";
+      setFieldErrors(next);
+
       return;
     }
 
     const payload = {
-      ShortDesc: shortDesc.trim(),
-      DeliveryResponsible: deliveryResponsible.trim(),
-      Developer: developer.trim(),
-      Tester: tester.trim(),
-      WorkItemReference: workItemReference.trim(),
-      Landscape: landscape.trim(),
+      ShortDesc: clean(shortDesc),
+      DeliveryResponsible: clean(deliveryResponsible),
+      Developer: clean(developer),
+      Tester: clean(tester),
+      WorkItemReference: clean(workItemReference),
+      Landscape: clean(landscape),
     };
 
-    if (url.trim() && urlName.trim()) {
+    if (clean(url) && clean(urlName)) {
       payload.REQ_URL_NAV = [
         {
-          URL: url.trim(),
-          URL_NAME: urlName.trim(),
+          URL: clean(url),
+          URL_NAME: clean(urlName),
         },
       ];
     }
 
+    console.log("Submitting create change request", {
+      systemId: clean(systemId),
+      sapUser: clean(sapUser),
+      payload,
+    });
+
     setIsLoading(true);
 
     try {
-      const res = await authFetch(`${apiBase}/api/solman/change-request/create`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          systemId,
-          sapUser,
-          payload,
-        }),
-      });
+      const res = await authFetch(
+        `${apiBase}/chat/actions/solman/create-change-request`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            systemId: clean(systemId),
+            sapUser: clean(sapUser),
+            payload,
+          }),
+        }
+      );
 
       const data = await res.json().catch(() => ({}));
 
-      if (!res.ok || data?.ok !== true) {
-        throw new Error(data?.error || "Failed to create change request");
+      if (
+        !res.ok ||
+        data?.ok === false ||
+        data?.status === "execution_failed" ||
+        data?.status === "validation_failed"
+      ) {
+        const message =
+          data?.message ||
+          data?.error?.message ||
+          data?.error ||
+          "Failed to create change request";
+
+        setError(message);
+        applyBackendFieldHints(message);
+        return;
       }
 
-      onSuccess?.(data);
+      const result = data?.result || data;
+
+      onSuccess?.({
+        ...result,
+        executor: data?.executor || null,
+        message: data?.message || "Change request created successfully.",
+      });
     } catch (err) {
-      setError(err?.message || "Failed to create change request.");
+      const message = err?.message || "Failed to create change request.";
+      setError(message);
+      applyBackendFieldHints(message);
     } finally {
       setIsLoading(false);
     }
+  }
+
+  const missingFields = Array.isArray(pendingAction?.missingFields)
+    ? pendingAction.missingFields
+    : [];
+
+  function isMissing(field) {
+    return missingFields.includes(field);
+  }
+
+  function inputClass(field) {
+    if (fieldErrors[field]) {
+      return "w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 border-red-400 bg-red-50 focus:border-red-500 focus:ring-red-500/20";
+    }
+
+    if (isMissing(field)) {
+      return "w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 border-amber-400 bg-amber-50 focus:border-amber-500 focus:ring-amber-500/20";
+    }
+
+    return "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600 focus:ring-2 focus:ring-green-600/20";
   }
 
   return (
@@ -98,8 +221,14 @@ export default function SolmanCreateCrForm({
 
       <div className="p-4">
         {error && (
-          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
             {error}
+          </div>
+        )}
+
+        {missingFields.length > 0 && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Missing fields: {missingFields.join(", ")}
           </div>
         )}
 
@@ -111,10 +240,18 @@ export default function SolmanCreateCrForm({
             <input
               type="text"
               value={shortDesc}
-              onChange={(e) => setShortDesc(e.target.value)}
+              onChange={(e) => {
+                setShortDesc(e.target.value);
+                clearFieldError("ShortDesc");
+              }}
               placeholder="Enter short description"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600 focus:ring-2 focus:ring-green-600/20"
+              className={inputClass("ShortDesc")}
             />
+            {fieldErrors.ShortDesc && (
+              <p className="mt-1 text-xs text-red-600">
+                {fieldErrors.ShortDesc}
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -125,10 +262,18 @@ export default function SolmanCreateCrForm({
               <input
                 type="text"
                 value={deliveryResponsible}
-                onChange={(e) => setDeliveryResponsible(e.target.value)}
+                onChange={(e) => {
+                  setDeliveryResponsible(e.target.value);
+                  clearFieldError("DeliveryResponsible");
+                }}
                 placeholder="SAP user"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600 focus:ring-2 focus:ring-green-600/20"
+                className={inputClass("DeliveryResponsible")}
               />
+              {fieldErrors.DeliveryResponsible && (
+                <p className="mt-1 text-xs text-red-600">
+                  {fieldErrors.DeliveryResponsible}
+                </p>
+              )}
             </div>
 
             <div>
@@ -138,10 +283,18 @@ export default function SolmanCreateCrForm({
               <input
                 type="text"
                 value={developer}
-                onChange={(e) => setDeveloper(e.target.value)}
+                onChange={(e) => {
+                  setDeveloper(e.target.value);
+                  clearFieldError("Developer");
+                }}
                 placeholder="SAP user"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600 focus:ring-2 focus:ring-green-600/20"
+                className={inputClass("Developer")}
               />
+              {fieldErrors.Developer && (
+                <p className="mt-1 text-xs text-red-600">
+                  {fieldErrors.Developer}
+                </p>
+              )}
             </div>
 
             <div>
@@ -151,10 +304,18 @@ export default function SolmanCreateCrForm({
               <input
                 type="text"
                 value={tester}
-                onChange={(e) => setTester(e.target.value)}
+                onChange={(e) => {
+                  setTester(e.target.value);
+                  clearFieldError("Tester");
+                }}
                 placeholder="SAP user"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600 focus:ring-2 focus:ring-green-600/20"
+                className={inputClass("Tester")}
               />
+              {fieldErrors.Tester && (
+                <p className="mt-1 text-xs text-red-600">
+                  {fieldErrors.Tester}
+                </p>
+              )}
             </div>
 
             <div>
@@ -164,10 +325,18 @@ export default function SolmanCreateCrForm({
               <input
                 type="text"
                 value={workItemReference}
-                onChange={(e) => setWorkItemReference(e.target.value)}
+                onChange={(e) => {
+                  setWorkItemReference(e.target.value);
+                  clearFieldError("WorkItemReference");
+                }}
                 placeholder="e.g. 35645679"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600 focus:ring-2 focus:ring-green-600/20"
+                className={inputClass("WorkItemReference")}
               />
+              {fieldErrors.WorkItemReference && (
+                <p className="mt-1 text-xs text-red-600">
+                  {fieldErrors.WorkItemReference}
+                </p>
+              )}
             </div>
           </div>
 
@@ -178,10 +347,18 @@ export default function SolmanCreateCrForm({
             <input
               type="text"
               value={landscape}
-              onChange={(e) => setLandscape(e.target.value)}
+              onChange={(e) => {
+                setLandscape(e.target.value);
+                clearFieldError("Landscape");
+              }}
               placeholder="e.g. Z_DXB_ECC"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600 focus:ring-2 focus:ring-green-600/20"
+              className={inputClass("Landscape")}
             />
+            {fieldErrors.Landscape && (
+              <p className="mt-1 text-xs text-red-600">
+                {fieldErrors.Landscape}
+              </p>
+            )}
           </div>
 
           <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">

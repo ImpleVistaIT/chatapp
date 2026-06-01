@@ -4,6 +4,9 @@ import { extractDocQuery } from "../services/extractor/extractor.service.js";
 import { buildEntitySetQuery, normalizeNumericId } from "../services/odataQueryBuilder.js";
 import { fetchFromSap } from "../services/sap.service.js";
 import { getAllowedFieldsWithLabels } from "../services/allowlist.service.js";
+import { classifyPrompt } from "../services/routing/promptClassifier.service.js";
+import { resolveTargetSystem } from "../services/routing/systemContextResolver.service.js";
+import { resolveServiceIntent } from "../services/routing/serviceIntentResolver.service.js";
 
 import { ChatSession } from "../models/ChatSession.model.js";
 import { ChatMessage } from "../models/ChatMessage.model.js";
@@ -205,8 +208,6 @@ export async function listChatSessions(req, res) {
     const owner = getOwner(req);
 
     const systemId = normalizeSystemId(req.query?.systemId);
-    if (!systemId) return res.status(400).json({ ok: false, error: "systemId is required" });
-
     const sapUser = normalizeSapUser(req.query?.sapUser);
 
     const limitRaw = Number(req.query?.limit ?? 20);
@@ -214,7 +215,8 @@ export async function listChatSessions(req, res) {
 
     const before = req.query?.before ? new Date(String(req.query.before)) : null;
 
-    const q = { owner, systemId };
+    const q = { owner };
+    if (systemId) q.systemId = systemId;
     if (sapUser) q.sapUser = sapUser;
 
     if (before && !Number.isNaN(before.getTime())) {
@@ -343,11 +345,92 @@ export async function handleDocChat({ req, res, defaultDocType, docTypeFast }) {
   try {
     const owner = getOwner(req);
 
-    const { query, cursor, sessionId, systemId, sapUser } = req.body;
+    const { query, cursor, sessionId, systemId, sapUser, availableSystems } = req.body;
     if (!query) return res.status(400).json({ ok: false, error: "query is required" });
 
-    const sid = normalizeSystemId(systemId);
-    if (!sid) return res.status(400).json({ ok: false, error: "systemId is required" });
+    let sid = normalizeSystemId(systemId);
+    let systemResolution = null;
+
+    const classified = await classifyPrompt({
+      query,
+      sessionContext: null,
+    });
+
+    if (!sid) {
+      systemResolution = await resolveTargetSystem({
+        query,
+        classified,
+        requestedSystemId: systemId,
+        availableSystems: Array.isArray(availableSystems) ? availableSystems : [],
+      });
+
+      if (systemResolution.status === "disconnected") {
+        return res.status(200).json({
+          ok: true,
+          status: "disconnected_system",
+          message: `The system ${systemResolution.targetSystemId} is disconnected. Please connect it and try again.`,
+          missingFields: [],
+          systemResolution,
+        });
+      }
+
+      if (systemResolution.status === "ambiguous") {
+        return res.status(200).json({
+          ok: true,
+          status: "needs_input",
+          message:
+            systemResolution.candidates.length > 0
+              ? `I found multiple possible systems for this request: ${systemResolution.candidates.join(", ")}. Please specify which system to use.`
+              : "I could not determine which system to use. Please specify the system.",
+          missingFields: ["systemId"],
+          systemResolution,
+        });
+      }
+
+      if (systemResolution.status === "unknown") {
+        return res.status(200).json({
+          ok: true,
+          status: "needs_input",
+          message: "I could not determine the target system from your request. Please specify the system.",
+          missingFields: ["systemId"],
+          systemResolution,
+        });
+      }
+
+      sid = normalizeSystemId(systemResolution.targetSystemId);
+    }
+
+    const serviceIntent = await resolveServiceIntent({
+      owner: "local",
+      query,
+      systemIds: sid ? [sid] : [],
+      limitServices: 12,
+    });
+
+    console.log("[CHAT] resolved service intent:", serviceIntent);
+
+    if (serviceIntent?.matchFound && serviceIntent?.systemId) {
+      const intentSid = normalizeSystemId(serviceIntent.systemId);
+
+      if (intentSid && intentSid !== sid) {
+        console.log("[CHAT] system override from service intent", {
+          previousSystemId: sid,
+          intentSystemId: intentSid,
+        });
+        sid = intentSid;
+      }
+    }
+
+    if (!sid) {
+      return res.status(200).json({
+        ok: true,
+        status: "needs_input",
+        message: "I could not determine the target system from your request. Please specify the system.",
+        missingFields: ["systemId"],
+        systemResolution,
+        serviceIntent,
+      });
+    }
 
     const session = await getOrCreateSession({ owner, sessionId, systemId: sid, sapUser });
 
@@ -380,13 +463,20 @@ export async function handleDocChat({ req, res, defaultDocType, docTypeFast }) {
     const service = await SapServiceMap.findOne({
       owner: { $in: [owner, "local"] },
       systemId: sid,
-      serviceType: docTypeFast,
+      ...(serviceIntent?.serviceName && serviceIntent?.entitySet
+        ? {
+            serviceName: serviceIntent.serviceName,
+            entitySet: serviceIntent.entitySet,
+          }
+        : {
+            serviceType: docTypeFast,
+          }),
     }).lean();
 
     if (!service) {
       return res.status(400).json({
         ok: false,
-        error: `Service mapping not found for systemId=${sid} serviceType=${docTypeFast} (configure serviceName/entitySet/entityTypeName).`,
+        error: `Service mapping not found for systemId=${sid} ${serviceIntent?.serviceName ? `serviceName=${serviceIntent.serviceName} entitySet=${serviceIntent.entitySet}` : `serviceType=${docTypeFast}`} (configure serviceName/entitySet/entityTypeName).`,
       });
     }
 

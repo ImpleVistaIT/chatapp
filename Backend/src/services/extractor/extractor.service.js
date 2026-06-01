@@ -1,5 +1,5 @@
 import { ApiError } from "../../utils/errors.js";
-import { FIELD_HINTS } from "./fieldhints.js";
+import { FIELD_HINTS, FIELD_HINTS_PART2, FIELD_HINTS_PART3 } from "./fieldhints.js";
 
 import { extractDateFilters } from "../filters/dateFilters.js";
 import { extractNumericFilters } from "../filters/valueFilters.js";
@@ -13,6 +13,11 @@ import {
 import { FIELD_BUNDLES } from "./fieldBundles.js";
 import { INTENT_RULES } from "./intentRules.js";
 
+const ALL_FIELD_HINTS = [
+  ...(Array.isArray(FIELD_HINTS) ? FIELD_HINTS : []),
+  ...(Array.isArray(FIELD_HINTS_PART2) ? FIELD_HINTS_PART2 : []),
+  ...(Array.isArray(FIELD_HINTS_PART3) ? FIELD_HINTS_PART3 : []),
+];
 
 async function getFetch() {
   if (typeof fetch === "function") return fetch;
@@ -86,8 +91,11 @@ function normalizePoItem(poItem) {
 function extractDocNumberFallback(message) {
   const m = String(message || "");
 
-  const pref = m.match(/\b(po)\s*[:#\-()]?\s*(\d{8,12})\b/i);
+  const pref = m.match(/\b(po|purchase\s*order)\s*[:#\-()]?\s*(\d{8,12})\b/i);
   if (pref?.[2]) return pref[2];
+
+  const withArticle = m.match(/\b(the\s+)?(po|purchase\s*order)\s+(\d{8,12})\b/i);
+  if (withArticle?.[3]) return withArticle[3];
 
   const ten = m.match(/\b\d{10}\b/);
   if (ten) return ten[0];
@@ -203,7 +211,7 @@ function extractFieldsByHints(message, allowedFields) {
   const allowedSet = new Set((allowedFields || []).map((f) => String(f).toLowerCase()));
 
   const picked = [];
-  for (const h of FIELD_HINTS) {
+  for (const h of ALL_FIELD_HINTS) {
     const fieldLower = String(h.field).toLowerCase();
     if (!allowedSet.has(fieldLower)) continue;
     if ((h.terms || []).some((t) => q.includes(normalizeText(t)))) picked.push(h.field);
@@ -261,7 +269,7 @@ function getCandidateFields(message, allowedFields, limit = 30) {
     if (q.includes("weight") && low.includes("wt")) scores.set(f, (scores.get(f) || 0) + 2);
   }
 
-  for (const h of FIELD_HINTS) {
+  for (const h of ALL_FIELD_HINTS) {
     if (!scores.has(h.field)) continue;
     if ((h.terms || []).some((t) => q.includes(normalizeText(t)))) {
       scores.set(h.field, (scores.get(h.field) || 0) + 50);
@@ -443,9 +451,11 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
   const bundlePicked = extractFieldsByBundles(truncated, allowedFields);
 
   const qNorm = normalizeText(truncated);
-  const hasDocAndItem = Boolean(out.docNumber) && Boolean(out.docItem);
-  const wantsDetails = /\b(details?|info|information)\b/.test(qNorm);
-  const autoBundlePicked = hasDocAndItem && wantsDetails ? extractFieldsByBundles("details", allowedFields) : [];
+  const hasDocumentContext = Boolean(out.docNumber);
+  const wantsDetails = /\b(details?|info|information|full details|complete details|all details|show details)\b/.test(qNorm);
+  const autoBundlePicked = hasDocumentContext && wantsDetails
+    ? extractFieldsByBundles("details", allowedFields)
+    : [];
 
   const intent = detectIntent(truncated);
 
@@ -465,7 +475,7 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
   const userPickedAny = combined.length > 0;
 
   const isNextQuery = /\b(next|more|another|load)\b/i.test(qNorm);
-  const hasExplicitFieldRequest = /\b(price|net\s*price|amount|value|currency|date|created|vendor|supplier)\b/i.test(
+  const hasExplicitFieldRequest = /\b(price|net\s*price|amount|value|currency|date|created|vendor|supplier|volume|weight|quantity|unit|material|plant|storage|company\s*code)\b/i.test(
     qNorm
   );
 
@@ -498,6 +508,14 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
     return out;
   }
 
+  if (out.docNumber && (!out.fields || out.fields.length === 0)) {
+    const detailDefaults = extractFieldsByBundles("details", allowedFields);
+    if (detailDefaults.length > 0) {
+      out.fields = detailDefaults;
+      return out;
+    }
+  }
+
   const parsed = await callExtractorLLM({ message: truncated, allowedFields });
   if (!parsed) return out;
 
@@ -513,6 +531,13 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
   const allowedMap = new Map(allowedFields.map((f) => [String(f).toLowerCase(), f]));
   const fields = Array.isArray(parsed.fields) ? parsed.fields : [];
   out.fields = fields.map((f) => allowedMap.get(String(f).toLowerCase())).filter(Boolean);
+
+  if (out.docNumber && (!out.fields || out.fields.length === 0)) {
+    const detailDefaults = extractFieldsByBundles("details", allowedFields);
+    if (detailDefaults.length > 0) {
+      out.fields = detailDefaults;
+    }
+  }
 
   return out;
 }
