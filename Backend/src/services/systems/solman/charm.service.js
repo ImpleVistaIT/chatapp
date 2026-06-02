@@ -485,8 +485,18 @@ function matchesCreatedBy(item, requestedCreatedBy) {
       item?.CREATEDBY ||
       item?.CREATOR ||
       item?.AUTHOR ||
+      item?.CREATEDBYNAME ||
+      item?.CREATED_BY_NAME ||
+      item?.USER_NAME ||
+      item?.USERNAME ||
+      item?.SAP_USER ||
+      item?.LAST_CHANGED_BY ||
       ""
   );
+
+  if (!actual) {
+    return false;
+  }
 
   return actual === wanted;
 }
@@ -740,7 +750,12 @@ export async function listSolmanChangeRequestsByDateRange({
       top: built.top || top || null,
       skip: built.skip || 0,
       orderBy: built.orderBy,
-      nextSkip: (built.skip || 0) + results.length,
+      nextSkip:
+        (built.skip || 0) +
+        Math.max(
+          0,
+          Number.isFinite(Number(built.top || top)) ? Number(built.top || top) : results.length
+        ),
       count: results.length,
       results,
       raw,

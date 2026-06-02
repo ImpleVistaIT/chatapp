@@ -16,6 +16,7 @@ import {
 import { handleCreateCr } from "./solman.create-cr.handler.js";
 import { handleCrDetails } from "./solman.cr-details.handler.js";
 import { handleCrList } from "./solman.cr-list.handler.js";
+import { handleCrCreatedBy } from "./solman.cr-created-by.handler.js";
 import { handleDependencyCheck } from "./solman.dependency-check.handler.js";
 import { handleTransportDependency } from "./solman.transport-dependency.handler.js";
 import { handleTransportList } from "./solman.transport-list.handler.js";
@@ -71,6 +72,36 @@ function isTransportListIntent(classified, query = "") {
   }
 
   return hasCrReference(q) && hasTransportReference(q) && !hasDependencyReference(q);
+}
+
+function isCrCreatedByIntent(classified, query = "") {
+  const intent = cleanString(classified?.intent).toLowerCase();
+  const q = normalizeIntentQuery(query);
+
+  if (
+    intent === "list_change_requests_by_created_by" ||
+    intent === "get_change_requests_by_created_by" ||
+    intent === "show_cr_created_by" ||
+    intent === "show_cr_created_by_user" ||
+    intent === "show_my_cr" ||
+    intent === "show_my_crs" ||
+    intent === "my_change_requests"
+  ) {
+    return true;
+  }
+
+  return (
+    hasCrReference(q) &&
+    (/\bcreated by me\b/.test(q) ||
+      /\bcreated by myself\b/.test(q) ||
+      /\bshow my cr\b/.test(q) ||
+      /\bshow my crs\b/.test(q) ||
+      /\bmy cr\b/.test(q) ||
+      /\bmy crs\b/.test(q) ||
+      /\bmy change request\b/.test(q) ||
+      /\bmy change requests\b/.test(q) ||
+      /\bcreated by\s+[a-z0-9._-]+\b/i.test(q))
+  );
 }
 
 export async function handleSolmanChatStream({
@@ -184,6 +215,10 @@ export async function handleSolmanChatStream({
 
   if (isTransportListIntent(classified, query)) {
     return handleTransportList(context);
+  }
+
+  if (isCrCreatedByIntent(classified, query)) {
+    return handleCrCreatedBy(context);
   }
 
   if (classified?.intent === "get_change_request_details") {
