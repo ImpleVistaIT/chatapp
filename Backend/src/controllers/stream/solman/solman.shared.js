@@ -396,6 +396,56 @@ export function inferCrListIntent(classified, query = "") {
   return false;
 }
 
+export function inferCrCreatedByIntent(query = "", raw = {}) {
+  const q = cleanString(query).toLowerCase();
+
+  const inferred = inferCreatedByFilterFromQuery(query, raw);
+
+  if (inferred?.createdByMode === "self") {
+    return {
+      intent: "list_change_requests_by_created_by",
+      createdBy: "ME",
+      createdByMode: "self",
+    };
+  }
+
+  if (inferred?.createdByMode === "explicit" && inferred?.createdBy) {
+    return {
+      intent: "list_change_requests_by_created_by",
+      createdBy: inferred.createdBy,
+      createdByMode: "explicit",
+    };
+  }
+
+  if (
+    /\bcreated by me\b/.test(q) ||
+    /\bcreated by myself\b/.test(q) ||
+    /\bshow my cr\b/.test(q) ||
+    /\bshow my crs\b/.test(q) ||
+    /\bmy cr\b/.test(q) ||
+    /\bmy crs\b/.test(q) ||
+    /\bmy change request\b/.test(q) ||
+    /\bmy change requests\b/.test(q)
+  ) {
+    return {
+      intent: "list_change_requests_by_created_by",
+      createdBy: "ME",
+      createdByMode: "self",
+    };
+  }
+
+  const createdByMatch = q.match(/\bcreated by\s+([a-z0-9._-]+)\b/i);
+  if (createdByMatch) {
+    return {
+      intent: "list_change_requests_by_created_by",
+      createdBy: normalizeSapUsername(createdByMatch[1]),
+      createdByMode: "explicit",
+    };
+  }
+
+  return null;
+}
+
 export function pickCrListEntities(raw = {}, query = "") {
   const q = cleanString(query);
   const scope = resolveBusinessScope(q, raw);
@@ -407,6 +457,26 @@ export function pickCrListEntities(raw = {}, query = "") {
     raw.top ??
     raw.limit ??
     (isNextPageQuery(q) ? inferRequestedTop(q, 10) : inferRequestedTop(q, 10));
+
+  const rawCreatedBy = cleanString(
+    raw.createdBy ||
+      raw.CREATED_BY ||
+      raw.created_by ||
+      raw.creator ||
+      ""
+  );
+
+  const rawCreatedByMode = cleanString(raw.createdByMode || "");
+
+  const displayOffset =
+    raw.displayOffset != null && Number.isFinite(Number(raw.displayOffset))
+      ? Math.max(0, Number(raw.displayOffset))
+      : 0;
+
+  const nextDisplayOffset =
+    raw.nextDisplayOffset != null && Number.isFinite(Number(raw.nextDisplayOffset))
+      ? Math.max(0, Number(raw.nextDisplayOffset))
+      : displayOffset;
 
   return {
     businessScope: scope?.label || cleanString(raw.businessScope || raw.scope || ""),
@@ -420,8 +490,8 @@ export function pickCrListEntities(raw = {}, query = "") {
       ? raw.excludeStatuses
       : inferredStatus.excludeStatuses,
     statusMode: cleanString(raw.statusMode || inferredStatus.statusMode || ""),
-    createdBy: cleanString(inferredCreatedBy.createdBy || ""),
-    createdByMode: cleanString(inferredCreatedBy.createdByMode || ""),
+    createdBy: cleanString(rawCreatedBy || inferredCreatedBy.createdBy || ""),
+    createdByMode: cleanString(rawCreatedByMode || inferredCreatedBy.createdByMode || ""),
     dateText: cleanString(raw.dateText || raw.dateRangeText || q),
     top: requestedTop,
     skip: inferRequestedSkip(raw, q),
@@ -429,6 +499,8 @@ export function pickCrListEntities(raw = {}, query = "") {
       raw.nextSkip != null && Number.isFinite(Number(raw.nextSkip))
         ? Math.max(0, Number(raw.nextSkip))
         : 0,
+    displayOffset,
+    nextDisplayOffset,
     orderBy: cleanString(raw.orderBy || "CREATED_ON desc") || "CREATED_ON desc",
   };
 }
@@ -509,7 +581,12 @@ export function formatCrListReply(rows = [], params = {}) {
   const body = rows
     .map((item, index) =>
       [
-        padCell(String((params?.skip || 0) + index + 1), widths.no),
+        padCell(
+          String(
+            ((params?.displayOffset ?? params?.skip) || 0) + index + 1
+          ),
+          widths.no
+        ),
         padCell(getCrNumber(item), widths.cr),
         padCell(item?.STATUS || "-", widths.status),
         padCell(formatDisplayDate(item?.CREATED_ON), widths.createdOn),

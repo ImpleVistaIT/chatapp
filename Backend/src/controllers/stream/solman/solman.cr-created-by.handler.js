@@ -3,7 +3,7 @@ import {
   buildCrSuggestions,
   cleanString,
   formatCrListReply,
-  isNextPageQuery,
+  inferCreatedByFilterFromQuery,
   persistAssistantAndTouchSession,
   pickCrListEntities,
   toCrDetailsArray,
@@ -21,26 +21,28 @@ function resolveCurrentSolmanUsername(context) {
   ).toUpperCase();
 }
 
-function getCrUniqueKey(item = {}) {
+function normalizeCreatedByForComparison(value = "") {
+  return cleanString(value).toUpperCase();
+}
+
+function getCrNumber(item = {}) {
   return cleanString(item?.OBJECT_ID || item?.OBJ_ID || "");
 }
 
-function dedupeByCrNumber(rows = []) {
+function dedupeRowsByCrNumber(rows = []) {
   const seen = new Set();
-  const deduped = [];
 
-  for (const row of Array.isArray(rows) ? rows : []) {
-    const key = getCrUniqueKey(row);
-    if (!key) continue;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(row);
-  }
+  return rows.filter((item) => {
+    const crNumber = getCrNumber(item);
+    if (!crNumber) return true;
 
-  return deduped;
+    if (seen.has(crNumber)) return false;
+    seen.add(crNumber);
+    return true;
+  });
 }
 
-export async function handleCrList(context) {
+export async function handleCrCreatedBy(context) {
   const {
     sse,
     owner,
@@ -54,11 +56,35 @@ export async function handleCrList(context) {
   } = context;
 
   const listInput = pickCrListEntities(classified?.entities || {}, query);
+  const inferredCreatedBy = inferCreatedByFilterFromQuery(
+    query,
+    classified?.entities || {}
+  );
 
-  let resolvedCreatedBy = cleanString(listInput.createdBy || "");
+  const originalQuery =
+    cleanString(classified?.entities?.dateText) ||
+    cleanString(listInput.dateText) ||
+    cleanString(query);
 
-  if (listInput.createdByMode === "self") {
+  let resolvedCreatedBy = cleanString(
+    listInput.createdBy || inferredCreatedBy.createdBy || ""
+  );
+
+  let createdByMode = cleanString(
+    listInput.createdByMode || inferredCreatedBy.createdByMode || ""
+  );
+
+  if (!createdByMode && resolvedCreatedBy) {
+    createdByMode = "explicit";
+  }
+
+  const isSelfRequest =
+    createdByMode === "self" ||
+    normalizeCreatedByForComparison(resolvedCreatedBy) === "ME";
+
+  if (isSelfRequest) {
     resolvedCreatedBy = resolveCurrentSolmanUsername(context);
+    createdByMode = "self";
 
     if (!resolvedCreatedBy) {
       const message =
@@ -71,12 +97,13 @@ export async function handleCrList(context) {
         summary: "Unable to resolve current logged-in Solman username.",
         extracted: {
           system: "solman",
-          intent: "list_change_requests",
+          intent: "list_change_requests_by_created_by",
+          pending: true,
           filters: {
             businessScope: listInput.businessScope,
             processType: listInput.processType,
             status: listInput.status,
-            dateText: listInput.dateText,
+            dateText: originalQuery,
             triggerAll: listInput.triggerAll || "X",
             top: listInput.top,
             skip: listInput.skip,
@@ -86,15 +113,15 @@ export async function handleCrList(context) {
             toDate: listInput.toDate,
             statusMode: listInput.statusMode,
             excludeStatuses: listInput.excludeStatuses,
-            createdBy: listInput.createdBy || "",
-            createdByMode: listInput.createdByMode || "",
+            createdBy: "ME",
+            createdByMode: "self",
           },
         },
         data: null,
         responseMeta: {
           ok: false,
           kind: "stream",
-          executor: "solman.list_change_requests",
+          executor: "solman.list_change_requests_by_created_by",
           systemId: effectiveSystemId,
           sapUser: effectiveSapUser,
           status: "execution_failed",
@@ -120,13 +147,13 @@ export async function handleCrList(context) {
       summary: "Asked user to choose a landscape for listing change requests.",
       extracted: {
         system: "solman",
-        intent: "list_change_requests",
+        intent: "list_change_requests_by_created_by",
         pending: true,
         filters: {
           businessScope: listInput.businessScope,
           processType: listInput.processType,
           status: listInput.status,
-          dateText: listInput.dateText,
+          dateText: originalQuery,
           triggerAll: listInput.triggerAll || "X",
           top: listInput.top,
           skip: listInput.skip,
@@ -137,7 +164,7 @@ export async function handleCrList(context) {
           statusMode: listInput.statusMode,
           excludeStatuses: listInput.excludeStatuses,
           createdBy: resolvedCreatedBy || "",
-          createdByMode: listInput.createdByMode || "",
+          createdByMode,
         },
       },
       data: {
@@ -151,13 +178,13 @@ export async function handleCrList(context) {
         },
         pendingAction: {
           system: "solman",
-          intent: "list_change_requests",
-          query,
+          intent: "list_change_requests_by_created_by",
+          query: originalQuery,
           filters: {
             businessScope: listInput.businessScope,
             processType: listInput.processType,
             status: listInput.status,
-            dateText: listInput.dateText,
+            dateText: originalQuery,
             triggerAll: listInput.triggerAll || "X",
             top: listInput.top,
             skip: listInput.skip,
@@ -168,14 +195,14 @@ export async function handleCrList(context) {
             statusMode: listInput.statusMode,
             excludeStatuses: listInput.excludeStatuses,
             createdBy: resolvedCreatedBy || "",
-            createdByMode: listInput.createdByMode || "",
+            createdByMode,
           },
         },
       },
       responseMeta: {
         ok: false,
         kind: "stream",
-        executor: "solman.list_change_requests",
+        executor: "solman.list_change_requests_by_created_by",
         systemId: effectiveSystemId,
         sapUser: effectiveSapUser,
         status: "needs_input",
@@ -197,13 +224,13 @@ export async function handleCrList(context) {
       },
       pendingAction: {
         system: "solman",
-        intent: "list_change_requests",
-        query,
+        intent: "list_change_requests_by_created_by",
+        query: originalQuery,
         filters: {
           businessScope: listInput.businessScope,
           processType: listInput.processType,
           status: listInput.status,
-          dateText: listInput.dateText,
+          dateText: originalQuery,
           triggerAll: listInput.triggerAll || "X",
           top: listInput.top,
           skip: listInput.skip,
@@ -214,16 +241,20 @@ export async function handleCrList(context) {
           statusMode: listInput.statusMode,
           excludeStatuses: listInput.excludeStatuses,
           createdBy: resolvedCreatedBy || "",
-          createdByMode: listInput.createdByMode || "",
+          createdByMode,
         },
       },
     });
+
     return sse.end();
   }
 
   sse.send("phase", {
     phase: "executing",
-    message: "Fetching change requests from Solution Manager...",
+    message:
+      createdByMode === "self"
+        ? "Fetching your change requests from Solution Manager..."
+        : "Fetching change requests created by the specified user from Solution Manager...",
   });
 
   const result = await step("listSolmanChangeRequestsByDateRange", () =>
@@ -237,7 +268,7 @@ export async function handleCrList(context) {
       status: listInput.status || "",
       excludeStatuses: listInput.excludeStatuses || [],
       statusMode: listInput.statusMode || "",
-      dateText: listInput.dateText || query,
+      dateText: originalQuery,
       createdBy: resolvedCreatedBy || "",
       top: listInput.top ?? 10,
       skip: listInput.skip || 0,
@@ -255,7 +286,7 @@ export async function handleCrList(context) {
       summary: "Fetching change requests failed.",
       extracted: {
         system: "solman",
-        intent: "list_change_requests",
+        intent: "list_change_requests_by_created_by",
         filters: {
           businessScope: listInput.businessScope,
           processType: listInput.processType,
@@ -266,11 +297,12 @@ export async function handleCrList(context) {
           statusMode: listInput.statusMode,
           excludeStatuses: listInput.excludeStatuses || [],
           createdBy: resolvedCreatedBy || "",
-          createdByMode: listInput.createdByMode || "",
+          createdByMode,
           top: listInput.top ?? 10,
           skip: listInput.skip || 0,
           nextSkip: listInput.nextSkip || 0,
           orderBy: listInput.orderBy || "CREATED_ON desc",
+          dateText: originalQuery,
         },
       },
       data: {
@@ -279,7 +311,7 @@ export async function handleCrList(context) {
       responseMeta: {
         ok: false,
         kind: "stream",
-        executor: "solman.list_change_requests",
+        executor: "solman.list_change_requests_by_created_by",
         systemId: effectiveSystemId,
         sapUser: effectiveSapUser,
         status: "execution_failed",
@@ -295,116 +327,30 @@ export async function handleCrList(context) {
     return sse.end();
   }
 
-  const rawRows = toCrDetailsArray(result);
-  const rows = dedupeByCrNumber(rawRows);
+  let rows = toCrDetailsArray(result);
+  const rawRowCount = Array.isArray(rows) ? rows.length : 0;
+  rows = dedupeRowsByCrNumber(rows);
+
+  if (isSelfRequest && rows.length === 0 && Array.isArray(result?.result?.results)) {
+    rows = dedupeRowsByCrNumber(result.result.results);
+  }
+
   const responseTop = result?.result?.top ?? listInput.top ?? 10;
   const responseSkip = result?.result?.skip ?? listInput.skip ?? 0;
-  const rawRowCount = Array.isArray(rawRows) ? rawRows.length : 0;
-  const normalizedTop = Math.max(0, Number(responseTop) || 0);
-  const responseNextSkip =
-    result?.result?.nextSkip ??
-    responseSkip + (normalizedTop > 0 ? normalizedTop : rows.length);
-  const hasMore = normalizedTop > 0 ? rawRowCount >= normalizedTop : rawRowCount > 0;
-  const noMoreMessage = "No more change requests found.";
-  const isNextPageRequest = isNextPageQuery(query);
   const responseDisplayOffset = Math.max(
     0,
     Number(listInput.displayOffset ?? responseSkip) || 0
   );
 
-  if (isNextPageRequest && rows.length === 0) {
-    const emptyPagination = {
-      top: responseTop,
-      skip: responseSkip,
-      nextSkip: responseNextSkip,
-      orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
-      hasMore: false,
-    };
+  const responseNextSkip = Number.isFinite(Number(result?.result?.nextSkip))
+    ? Number(result.result.nextSkip)
+    : responseSkip + responseTop;
 
-    await persistAssistantAndTouchSession({
-      owner,
-      sessionId: session._id,
-      text: noMoreMessage,
-      summary: noMoreMessage,
-      extracted: {
-        system: "solman",
-        intent: "list_change_requests",
-        filters: {
-          businessScope: listInput.businessScope,
-          processType: result?.result?.processType || listInput.processType,
-          triggerAll: result?.result?.triggerAll || listInput.triggerAll,
-          fromDate: result?.result?.fromDate || listInput.fromDate,
-          toDate: result?.result?.toDate || listInput.toDate,
-          status: result?.result?.status || listInput.status,
-          statusMode: result?.result?.statusMode || listInput.statusMode,
-          excludeStatuses:
-            result?.result?.excludeStatuses || listInput.excludeStatuses || [],
-          createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
-          createdByMode: listInput.createdByMode || "",
-          top: responseTop,
-          skip: responseSkip,
-          nextSkip: responseNextSkip,
-          orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
-          dateText: listInput.dateText || query,
-        },
-      },
-      data: [],
-      responseMeta: {
-        ok: true,
-        kind: "stream",
-        executor: "solman.list_change_requests",
-        systemId: effectiveSystemId,
-        sapUser: effectiveSapUser,
-        pagination: emptyPagination,
-        pendingAction: {
-          system: "solman",
-          intent: "list_change_requests",
-          query: listInput.dateText || query,
-          filters: {
-            businessScope: listInput.businessScope,
-            processType: result?.result?.processType || listInput.processType,
-            status: result?.result?.status || listInput.status,
-            dateText: listInput.dateText || query,
-            triggerAll: result?.result?.triggerAll || listInput.triggerAll || "X",
-            top: responseTop,
-            skip: responseSkip,
-            nextSkip: responseNextSkip,
-            displayOffset: responseDisplayOffset,
-            nextDisplayOffset: responseDisplayOffset + rows.length,
-            orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
-            fromDate: result?.result?.fromDate || listInput.fromDate,
-            toDate: result?.result?.toDate || listInput.toDate,
-            statusMode: result?.result?.statusMode || listInput.statusMode,
-            excludeStatuses:
-              result?.result?.excludeStatuses || listInput.excludeStatuses || [],
-            createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
-            createdByMode: listInput.createdByMode || "",
-          },
-        },
-      },
-    });
+  const hasMoreRows = rawRowCount >= Math.max(1, Number(responseTop) || 10);
+  const noMoreMessage = "No more change requests found.";
+  const isNextPageRequest = /\b(?:show\s+)?next\s+\d+\b/i.test(cleanString(query));
 
-    sse.send("reply", {
-      ok: true,
-      sessionId: String(session._id),
-      systemId: effectiveSystemId,
-      sapUser: effectiveSapUser,
-      reply: noMoreMessage,
-      summary: noMoreMessage,
-      data: [],
-      pagination: emptyPagination,
-      suggestions: [
-        `Show ${listInput.businessScope ? `${listInput.businessScope} ` : ""}CR list this week`
-          .replace(/\s+/g, " ")
-          .trim(),
-      ],
-    });
-
-    sse.send("done", { ok: true });
-    return sse.end();
-  }
-
-  let reply = formatCrListReply(rows, {
+  const reply = formatCrListReply(rows, {
     businessScope: listInput.businessScope,
     fromDate: result?.result?.fromDate || listInput.fromDate,
     toDate: result?.result?.toDate || listInput.toDate,
@@ -416,19 +362,20 @@ export async function handleCrList(context) {
     displayOffset: responseDisplayOffset,
   });
 
-  if (!hasMore && rows.length > 0) {
-    reply = `${reply}\n\n${noMoreMessage}`;
-  }
+  const summaryMessage =
+    rows.length > 0
+      ? `Fetched ${rows.length} change request(s).`
+      : "No change requests found.";
 
   const persistedPendingAction = {
     system: "solman",
-    intent: "list_change_requests",
-    query: listInput.dateText || query,
+    intent: "list_change_requests_by_created_by",
+    query: originalQuery || query,
     filters: {
       businessScope: listInput.businessScope,
       processType: result?.result?.processType || listInput.processType,
       status: result?.result?.status || listInput.status,
-      dateText: listInput.dateText || query,
+      dateText: originalQuery || query,
       triggerAll: result?.result?.triggerAll || listInput.triggerAll || "X",
       top: responseTop,
       skip: responseSkip,
@@ -441,18 +388,82 @@ export async function handleCrList(context) {
       statusMode: result?.result?.statusMode || listInput.statusMode,
       excludeStatuses: result?.result?.excludeStatuses || listInput.excludeStatuses || [],
       createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
-      createdByMode: listInput.createdByMode || "",
+      createdByMode,
     },
   };
+
+  if (isNextPageRequest && rows.length === 0) {
+    const emptyPagination = {
+      top: responseTop,
+      skip: responseSkip,
+      nextSkip: responseNextSkip,
+      orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
+      hasMoreRows: false,
+    };
+
+    await persistAssistantAndTouchSession({
+      owner,
+      sessionId: session._id,
+      text: noMoreMessage,
+      summary: noMoreMessage,
+      extracted: {
+        system: "solman",
+        intent: "list_change_requests_by_created_by",
+        filters: {
+          businessScope: listInput.businessScope,
+          processType: result?.result?.processType || listInput.processType,
+          triggerAll: result?.result?.triggerAll || listInput.triggerAll,
+          fromDate: result?.result?.fromDate || listInput.fromDate,
+          toDate: result?.result?.toDate || listInput.toDate,
+          status: result?.result?.status || listInput.status,
+          statusMode: result?.result?.statusMode || listInput.statusMode,
+          excludeStatuses:
+            result?.result?.excludeStatuses || listInput.excludeStatuses || [],
+          createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+          createdByMode,
+          top: responseTop,
+          skip: responseSkip,
+          nextSkip: responseNextSkip,
+          orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
+          dateText: originalQuery || query,
+        },
+      },
+      data: [],
+      responseMeta: {
+        ok: true,
+        kind: "stream",
+        executor: "solman.list_change_requests_by_created_by",
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
+        pagination: emptyPagination,
+        pendingAction: persistedPendingAction,
+      },
+    });
+
+    sse.send("reply", {
+      ok: true,
+      sessionId: String(session._id),
+      systemId: effectiveSystemId,
+      sapUser: effectiveSapUser,
+      reply: noMoreMessage,
+      summary: noMoreMessage,
+      data: [],
+      pagination: emptyPagination,
+      suggestions: buildCrSuggestions(originalQuery || query, listInput.businessScope, []),
+    });
+
+    sse.send("done", { ok: true });
+    return sse.end();
+  }
 
   await persistAssistantAndTouchSession({
     owner,
     sessionId: session._id,
     text: reply,
-    summary: result?.message || `Fetched ${rows.length} change request(s).`,
+    summary: summaryMessage,
     extracted: {
       system: "solman",
-      intent: "list_change_requests",
+      intent: "list_change_requests_by_created_by",
       filters: {
         businessScope: listInput.businessScope,
         processType: result?.result?.processType || listInput.processType,
@@ -464,29 +475,31 @@ export async function handleCrList(context) {
         excludeStatuses:
           result?.result?.excludeStatuses || listInput.excludeStatuses || [],
         createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
-        createdByMode: listInput.createdByMode || "",
+        createdByMode,
         top: responseTop,
         skip: responseSkip,
         nextSkip: responseNextSkip,
-        displayOffset: responseDisplayOffset,
-        nextDisplayOffset: responseDisplayOffset + rows.length,
+          displayOffset: responseDisplayOffset,
+          nextDisplayOffset: responseDisplayOffset + rows.length,
         orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
-        dateText: listInput.dateText || query,
+        dateText: originalQuery,
       },
     },
     data: rows,
     responseMeta: {
       ok: true,
       kind: "stream",
-      executor: "solman.list_change_requests",
+      executor: "solman.list_change_requests_by_created_by",
       systemId: effectiveSystemId,
       sapUser: effectiveSapUser,
       pagination: {
         top: responseTop,
         skip: responseSkip,
         nextSkip: responseNextSkip,
+        displayOffset: responseDisplayOffset,
+        nextDisplayOffset: responseDisplayOffset + rows.length,
         orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
-        hasMore,
+        hasMoreRows,
       },
       pendingAction: persistedPendingAction,
     },
@@ -498,17 +511,17 @@ export async function handleCrList(context) {
     systemId: effectiveSystemId,
     sapUser: effectiveSapUser,
     reply,
-    summary: result?.message || `Fetched ${rows.length} change request(s).`,
+    summary: summaryMessage,
     data: rows,
     pagination: {
       top: responseTop,
       skip: responseSkip,
       nextSkip: responseNextSkip,
       orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
-      hasMore,
+      hasMoreRows,
     },
     suggestions: buildCrSuggestions(
-      query,
+      originalQuery || query,
       listInput.businessScope,
       rows
     ),
