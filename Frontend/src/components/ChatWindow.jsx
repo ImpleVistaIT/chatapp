@@ -728,6 +728,37 @@ const isConnected = useMemo(() => {
     ]
   );
 
+  const handleReconnectSuggestion = useCallback(
+    async (systemId) => {
+      const sid = normalizeSystemId(systemId);
+      if (!sid) {
+        onOpenSapLogin?.(null);
+        return;
+      }
+
+      const candidate = (Array.isArray(tiles) ? tiles : []).find(
+        (tile) => normalizeSystemId(tile?.systemId || tile?.name) === sid
+      );
+
+      if (!candidate) {
+        onOpenSapLogin?.(null);
+        return;
+      }
+
+      const sapUser = String(
+        candidate?.sapUser || candidate?.system?.sapUser || candidate?.user || ""
+      ).trim();
+
+      if (!sapUser) {
+        onOpenSapLogin?.(candidate);
+        return;
+      }
+
+      await handleSystemSelect(candidate);
+    },
+    [handleSystemSelect, normalizeSystemId, onOpenSapLogin, tiles]
+  );
+
   const onComposerKeyDown = useCallback(
     (e) => {
       onKeyDown?.(e);
@@ -790,6 +821,7 @@ const isConnected = useMemo(() => {
         systemList={systemList}
         tiles={tiles}
         onAddNewSystem={() => onOpenSapLogin?.(null)}
+        onReconnectSystem={handleReconnectSuggestion}
         statusText={statusText}
         normalizeSystemId={normalizeSystemId}
         handleSystemSelect={handleSystemSelect}

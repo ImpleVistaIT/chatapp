@@ -1022,6 +1022,18 @@ export default function Chat() {
           },
         ]);
       } else if (payload?.status === "disconnected_system") {
+        const targetSystemId = String(
+          payload?.action?.systemId || payload?.systemResolution?.targetSystemId || ""
+        )
+          .trim()
+          .toUpperCase();
+
+        const reconnectAction = {
+          type: "reconnect_system",
+          systemId: targetSystemId || null,
+          label: targetSystemId ? `Connect ${targetSystemId}` : "Connect system",
+        };
+
         updateConversationById(errorConvId, (m) => [
           ...m,
           {
@@ -1033,6 +1045,13 @@ export default function Chat() {
                   ? ` ${payload.systemResolution.targetSystemId}`
                   : ""
               } is disconnected. Please connect that system and try again.`,
+            suggestions: [
+              {
+                label: reconnectAction.label,
+                action: reconnectAction,
+              },
+            ],
+            action: reconnectAction,
           },
         ]);
       } else {

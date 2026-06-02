@@ -494,12 +494,19 @@ export async function handleChatStream(req, res) {
 
     const useSolman = forcedSolman || classified?.system === "solman";
 
-    if (systemResolution.status === "disconnected" && !useSolman) {
+    if (systemResolution.status === "disconnected") {
       sse.send("error", {
         message: `The system ${
           systemResolution.targetSystemId || "target"
         } is disconnected. Please connect it and try again.`,
         status: "disconnected_system",
+        action: {
+          type: "reconnect_system",
+          label: systemResolution.targetSystemId
+            ? `Connect ${systemResolution.targetSystemId}`
+            : "Connect system",
+          systemId: systemResolution.targetSystemId || null,
+        },
         systemResolution,
       });
       return sse.end();
