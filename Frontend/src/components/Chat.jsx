@@ -159,7 +159,6 @@ function getCurrentConnectedSystem({ activeSession, selectedSystem, availableSys
   const selectedId = normalizeSystemId(selectedSystem?.systemId);
   const activeSapUser = String(activeSession?.sapUser || "").trim();
 
-  // Allow immediate requests right after a successful connect before tiles refresh.
   if (activeId && activeSapUser) {
     return {
       systemId: activeId,
@@ -219,10 +218,6 @@ export default function Chat() {
     }
   })();
 
-  //---------------------------------------------//
-  // UI state
-  //---------------------------------------------//
-
   const [sapView, setSapView] = useState(() => {
     try {
       const force = localStorage.getItem("forceSapLogin") === "1";
@@ -235,10 +230,6 @@ export default function Chat() {
   const [statusText, setStatusText] = useState("");
   const [showSolmanCrForm, setShowSolmanCrForm] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
-
-  //---------------------------------------------//
-  // Active SAP session state
-  //---------------------------------------------//
 
   const [activeSession, setActiveSession] = useState(() => {
     try {
@@ -255,10 +246,6 @@ export default function Chat() {
       localStorage.removeItem("sapActiveSession");
     }
   }, [activeSession]);
-
-  //---------------------------------------------//
-  // SAP systems and tiles
-  //---------------------------------------------//
 
   const [systems, setSystems] = useState([]);
   const [tiles, setTiles] = useState([]);
@@ -447,10 +434,6 @@ export default function Chat() {
     }
   }, [tiles, activeSession, selectedSystem]);
 
-  //---------------------------------------------//
-  // Conversation state
-  //---------------------------------------------//
-
   const [conversations, setConversations] = useState(() => [
     {
       id: "draft",
@@ -491,10 +474,6 @@ export default function Chat() {
 
   const [copiedAtIndex, setCopiedAtIndex] = useState(null);
 
-  //---------------------------------------------//
-  // Refs
-  //---------------------------------------------//
-
   const abortRef = useRef(null);
   const sendingRef = useRef(false);
   const bottomRef = useRef(null);
@@ -503,10 +482,6 @@ export default function Chat() {
   const baseRef = useRef("");
   const interimRef = useRef("");
   const cursorRef = useRef(null);
-
-  //---------------------------------------------//
-  // Derived data
-  //---------------------------------------------//
 
   const activeConv = useMemo(() => {
     const found = conversations.find((c) => c.id === activeId);
@@ -569,10 +544,6 @@ export default function Chat() {
     selectedSystem?.systemId,
   ]);
 
-  //---------------------------------------------//
-  // Effects for active conversation
-  //---------------------------------------------//
-
   useEffect(() => {
     if (!isMongoId(activeId)) return;
 
@@ -622,10 +593,6 @@ export default function Chat() {
     setSidebarOpen(false);
   }, [activeId]);
 
-  //---------------------------------------------//
-  // Basic UI helpers
-  //---------------------------------------------//
-
   const onStop = useCallback(() => {
     try {
       abortRef.current?.abort();
@@ -650,10 +617,6 @@ export default function Chat() {
     updateConversationById(activeId, updater);
   }
 
-  //---------------------------------------------//
-  // Sidebar actions
-  //---------------------------------------------//
-
   function handleDelete(id) {
     setConversations((prev) => prev.filter((c) => c.id !== id));
     if (id === activeId) setActiveId("draft");
@@ -671,10 +634,6 @@ export default function Chat() {
     setEditingChatId(null);
     setEditingTitle("");
   }
-
-  //---------------------------------------------//
-  // New chat / edit message logic
-  //---------------------------------------------//
 
   function onNewChat() {
     setActiveId("draft");
@@ -742,10 +701,6 @@ export default function Chat() {
     return newText;
   }
 
-  //---------------------------------------------//
-  // Local draft-to-real-session sync logic
-  //---------------------------------------------//
-
   const ensureSessionExistsLocally = useCallback((sessionId, firstUserText) => {
     if (!isMongoId(sessionId)) return;
 
@@ -756,16 +711,19 @@ export default function Chat() {
 
       const hasDraft = prev.some((c) => c.id === "draft");
       if (hasDraft) {
-        return prev.map((c) => (c.id === "draft" ? { ...c, id: sessionId, title, updatedAt: Date.now() } : c));
+        return prev.map((c) => {
+          if (c.id !== "draft") return c;
+
+          const nextTitle =
+            c.title && c.title !== "New chat" ? c.title : title;
+
+          return { ...c, id: sessionId, title: nextTitle, updatedAt: Date.now() };
+        });
       }
 
       return [{ id: sessionId, title, messages: [], updatedAt: Date.now() }, ...prev];
     });
   }, []);
-
-  //---------------------------------------------//
-  // Main send logic
-  //---------------------------------------------//
 
   async function onSend({
     overrideText,
@@ -774,6 +732,7 @@ export default function Chat() {
     forcedSystemId = null,
     businessScope = "",
     pendingContext = null,
+    sessionId = null,
   } = {}) {
     const requestText =
       typeof overrideText === "string"
@@ -831,48 +790,6 @@ export default function Chat() {
         ? explicitSystemId
         : "";
 
-    if (explicitSystemId && !matchedRequestedSystem && !fallbackConnectedSystemId) {
-      updateConversationById(activeId, (m) => [
-        ...m,
-        { role: "user", text: uiText },
-        {
-          role: "assistant",
-          text: `The requested system ${explicitSystemId} is not available right now. Please wait a moment and try again.`,
-        },
-      ]);
-      setInput("");
-      return;
-    }
-
-    if (
-      explicitSystemId &&
-      matchedRequestedSystem &&
-      !isSystemConnectedNow(explicitSystemId) &&
-      !fallbackConnectedSystemId
-    ) {
-      updateConversationById(activeId, (m) => [
-        ...m,
-        { role: "user", text: uiText },
-        {
-          role: "assistant",
-          text: `The requested system ${explicitSystemId} is disconnected. Please connect that system and try again.`,
-        },
-      ]);
-      setInput("");
-      return;
-    }
-
-    if (!canSendMessage) {
-      updateConversationById(activeId, (m) => [
-        ...m,
-        {
-          role: "assistant",
-          text: "Please connect that system and try again.",
-        },
-      ]);
-      return;
-    }
-
     const effectiveAvailableSystems = (() => {
       if (!optimisticActiveId || !optimisticSapUser) return availableSystems;
 
@@ -913,11 +830,19 @@ export default function Chat() {
       : effectiveAvailableSystems;
 
     sendingRef.current = true;
-
     baseRef.current = "";
     interimRef.current = "";
 
     const currentConvId = activeId;
+    const sessionIdToSend = isMongoId(sessionId)
+      ? sessionId
+      : isMongoId(currentConvId)
+        ? currentConvId
+        : null;
+
+    const upperText = String(text || "").trim().toUpperCase();
+    const isFollowupChoice = upperText === "ROW" || upperText === "INDIA";
+    const isPendingFollowup = Boolean(pendingContext || pendingAction);
 
     if (!fromEdit) {
       updateConversationById(currentConvId, (m) => [...m, { role: "user", text: uiText }]);
@@ -925,9 +850,15 @@ export default function Chat() {
       setConversations((prev) =>
         prev.map((c) => {
           if (c.id !== currentConvId) return c;
+
+          if (isFollowupChoice || isPendingFollowup) {
+            return c;
+          }
+
           if (c.title === "New chat" || c.title === "SAP MM Chat") {
             return { ...c, title: generateTitle(text) };
           }
+
           return c;
         })
       );
@@ -945,34 +876,13 @@ export default function Chat() {
       const isNextQuery = /\b(next|more|another|load|show\s+more)\b/i.test(text);
       if (!isNextQuery) cursorRef.current = null;
 
-      const sessionIdToSend = isMongoId(currentConvId) ? currentConvId : null;
-
       setStatusText("Interpreting your query...");
 
       let streamedPayload = null;
 
-      console.log("[Chat onSend] system resolution input", {
-        explicitSystemId,
-        safeExplicitSystemId,
-        activeSessionSystemId: activeSession?.systemId || null,
-        activeSessionSapUser: activeSession?.sapUser || null,
-        selectedSystemId: selectedSystem?.systemId || null,
-        fallbackConnectedSystemId,
-        fallbackSapUser,
-        availableSystems: availableSystems.map((s) => ({
-          systemId: s.systemId,
-          connected: s.connected,
-          status: s.status,
-          sapUser: s.sapUser || "",
-        })),
-      });
-
       await sendChatMessageStream(text, {
         apiBase,
-        systemId:
-          safeExplicitSystemId ||
-          fallbackConnectedSystemId ||
-          null,
+        systemId: safeExplicitSystemId || fallbackConnectedSystemId || null,
         sapUser: fallbackSapUser || null,
         sessionId: sessionIdToSend,
         availableSystems:
@@ -1003,12 +913,14 @@ export default function Chat() {
         if (currentConvId === "draft") {
           ensureSessionExistsLocally(data.sessionId, text);
 
-          const newTitle = generateTitle(text);
-          authFetch(`${apiBase}/chat/sessions/${data.sessionId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title: newTitle }),
-          }).catch(() => {});
+          if (!isFollowupChoice && !isPendingFollowup) {
+            const newTitle = generateTitle(text);
+            authFetch(`${apiBase}/chat/sessions/${data.sessionId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ title: newTitle }),
+            }).catch(() => {});
+          }
         }
 
         setActiveId(data.sessionId);
@@ -1030,105 +942,104 @@ export default function Chat() {
 
       cursorRef.current = data?.cursor || null;
     } catch (e) {
-      if (e?.name === "AbortError") {
-        updateConversationById(currentConvId, (m) => [
+      const payload = e?.payload || null;
+      const payloadSessionId = isMongoId(payload?.sessionId) ? payload.sessionId : null;
+      const errorConvId = payloadSessionId || currentConvId;
+
+      if (payloadSessionId && currentConvId === "draft") {
+        ensureSessionExistsLocally(payloadSessionId, text);
+        setActiveId(payloadSessionId);
+        window.dispatchEvent(new Event("chatSessionsChanged"));
+      }
+
+      if (
+        payload?.action?.type === "open_form" &&
+        payload?.action?.formId === "solman_create_cr"
+      ) {
+        setPendingAction(payload?.pendingAction || null);
+        setShowSolmanCrForm(true);
+
+        updateConversationById(errorConvId, (m) => [
           ...m,
-          { role: "assistant", text: "Stopped generating." },
+          {
+            role: "assistant",
+            text: payload?.message || "Please complete the required change request details.",
+          },
+        ]);
+      } else if (payload?.action?.type === "add_system") {
+        updateConversationById(errorConvId, (m) => [
+          ...m,
+          {
+            role: "assistant",
+            text:
+              payload?.message ||
+              "This system isn’t added yet. Please add it to continue.",
+            suggestions: [payload?.action?.label || "Add System"],
+            action: payload?.action || null,
+          },
+        ]);
+      } else if (
+        payload?.status === "needs_input" &&
+        Array.isArray(payload?.missingFields) &&
+        payload.missingFields.includes("processType")
+      ) {
+        setPendingAction(payload?.pendingAction || null);
+
+        const options = Array.isArray(payload?.action?.options)
+          ? payload.action.options.map((x) => x?.label || x?.value).filter(Boolean)
+          : ["ROW", "INDIA"];
+
+        updateConversationById(errorConvId, (m) => [
+          ...m,
+          {
+            role: "assistant",
+            text:
+              payload?.message ||
+              "Which landscape would you like to view the Change Requests from?",
+            suggestions: options,
+            pendingAction: payload?.pendingAction || null,
+          },
+        ]);
+      } else if (
+        payload?.status === "needs_input" &&
+        Array.isArray(payload?.missingFields) &&
+        payload.missingFields.includes("systemId")
+      ) {
+        const candidates = Array.isArray(payload?.systemResolution?.candidates)
+          ? payload.systemResolution.candidates
+          : [];
+
+        updateConversationById(errorConvId, (m) => [
+          ...m,
+          {
+            role: "assistant",
+            text: payload?.message || "Please specify which system to use.",
+            ...(candidates.length > 0
+              ? {
+                  suggestions: candidates.map((id) => `Use ${id}`),
+                }
+              : {}),
+          },
+        ]);
+      } else if (payload?.status === "disconnected_system") {
+        updateConversationById(errorConvId, (m) => [
+          ...m,
+          {
+            role: "assistant",
+            text:
+              payload?.message ||
+              `The requested system${
+                payload?.systemResolution?.targetSystemId
+                  ? ` ${payload.systemResolution.targetSystemId}`
+                  : ""
+              } is disconnected. Please connect that system and try again.`,
+          },
         ]);
       } else {
-        const payload = e?.payload || null;
-
-        if (
-          payload?.action?.type === "open_form" &&
-          payload?.action?.formId === "solman_create_cr"
-        ) {
-          setPendingAction(payload?.pendingAction || null);
-          setShowSolmanCrForm(true);
-
-          updateConversationById(currentConvId, (m) => [
-            ...m,
-            {
-              role: "assistant",
-              text:
-                payload?.message ||
-                "Please complete the required change request details.",
-            },
-          ]);
-        } else if (payload?.action?.type === "add_system") {
-          updateConversationById(currentConvId, (m) => [
-            ...m,
-            {
-              role: "assistant",
-              text:
-                payload?.message ||
-                "This system isn’t added yet. Please add it to continue.",
-              suggestions: [payload?.action?.label || "Add System"],
-              action: payload?.action || null,
-            },
-          ]);
-        } else if (
-          payload?.status === "needs_input" &&
-          Array.isArray(payload?.missingFields) &&
-          payload.missingFields.includes("processType")
-        ) {
-          setPendingAction(payload?.pendingAction || null);
-
-          const options = Array.isArray(payload?.action?.options)
-            ? payload.action.options.map((x) => x?.label || x?.value).filter(Boolean)
-            : ["ROW", "INDIA"];
-
-          updateConversationById(currentConvId, (m) => [
-            ...m,
-            {
-              role: "assistant",
-              text:
-                payload?.message ||
-                "Which landscape would you like to view the Change Requests from?",
-              suggestions: options,
-              pendingAction: payload?.pendingAction || null,
-            },
-          ]);
-        } else if (
-          payload?.status === "needs_input" &&
-          Array.isArray(payload?.missingFields) &&
-          payload.missingFields.includes("systemId")
-        ) {
-          const candidates = Array.isArray(payload?.systemResolution?.candidates)
-            ? payload.systemResolution.candidates
-            : [];
-
-          updateConversationById(currentConvId, (m) => [
-            ...m,
-            {
-              role: "assistant",
-              text: payload?.message || "Please specify which system to use.",
-              ...(candidates.length > 0
-                ? {
-                    suggestions: candidates.map((id) => `Use ${id}`),
-                  }
-                : {}),
-            },
-          ]);
-        } else if (payload?.status === "disconnected_system") {
-          updateConversationById(currentConvId, (m) => [
-            ...m,
-            {
-              role: "assistant",
-              text:
-                payload?.message ||
-                `The requested system${
-                  payload?.systemResolution?.targetSystemId
-                    ? ` ${payload.systemResolution.targetSystemId}`
-                    : ""
-                } is disconnected. Please connect that system and try again.`,
-            },
-          ]);
-        } else {
-          updateConversationById(currentConvId, (m) => [
-            ...m,
-            { role: "assistant", text: `Error: ${e.message}` },
-          ]);
-        }
+        updateConversationById(errorConvId, (m) => [
+          ...m,
+          { role: "assistant", text: `Error: ${e.message}` },
+        ]);
       }
     } finally {
       setLoading(false);
@@ -1137,10 +1048,6 @@ export default function Chat() {
       setStatusText("");
     }
   }
-
-  //---------------------------------------------//
-  // Keyboard shortcuts
-  //---------------------------------------------//
 
   function onKeyDown(e) {
     if (editingIndex != null) {
@@ -1158,10 +1065,6 @@ export default function Chat() {
       }
     }
   }
-
-  //---------------------------------------------//
-  // Speech-to-text logic
-  //---------------------------------------------//
 
   const { supported, listening, start, stop } = useSpeechToText({
     onText: (text, meta) => {
@@ -1209,10 +1112,6 @@ export default function Chat() {
     focusInput();
   }
 
-  //---------------------------------------------//
-  // Copy and scroll logic
-  //---------------------------------------------//
-
   async function onCopyAssistant(idx, text) {
     const ok = await copyToClipboard(text);
     if (!ok) return;
@@ -1226,10 +1125,6 @@ export default function Chat() {
     const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     setShowScrollDown(!isNearBottom);
   }
-
-  //---------------------------------------------//
-  // SolMan CR details fetch after create form success
-  //---------------------------------------------//
 
   async function handleViewCrStatus({ objectId, processType = "YMHF" }) {
     if (!activeSession?.systemId) {
@@ -1300,10 +1195,6 @@ export default function Chat() {
       ]);
     }
   }
-
-  //---------------------------------------------//
-  // SAP login/connect/disconnect logic
-  //---------------------------------------------//
 
   const handleConnectedFromSapLogin = async (payload) => {
     try {
@@ -1403,10 +1294,6 @@ export default function Chat() {
     onNewChat();
   }, []);
 
-  //---------------------------------------------//
-  // SolMan create form block
-  //---------------------------------------------//
-
   const solmanCreateCrForm = showSolmanCrForm ? (
     <div className="px-4 pb-4">
       <SolmanCreateCrForm
@@ -1439,10 +1326,6 @@ export default function Chat() {
       />
     </div>
   ) : null;
-
-  //---------------------------------------------//
-  // Render
-  //---------------------------------------------//
 
   return (
     <div className="fixed inset-0 bg-[#f7f7f8] text-zinc-800">
@@ -1499,6 +1382,7 @@ export default function Chat() {
             supported={supported}
             showScrollDown={showScrollDown}
             activeConv={activeConv}
+            sessionId={isMongoId(activeConv?.id) ? activeConv.id : null}
             editingIndex={editingIndex}
             editingText={editingText}
             statusText={statusText}

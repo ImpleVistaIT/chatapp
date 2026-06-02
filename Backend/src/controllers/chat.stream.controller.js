@@ -321,7 +321,6 @@ export async function handleChatStream(req, res) {
       pendingSystem === "solman" &&
       pendingIntent === "list_change_requests" &&
       (
-        Boolean(cleanString(effectivePendingAction?.filters?.processType)) ||
         queryIsNextPage ||
         (queryIsLandscapeOnly && Boolean(restoredProcessType)) ||
         Boolean(effectivePendingAction?.pending)
