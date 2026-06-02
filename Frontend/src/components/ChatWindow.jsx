@@ -20,6 +20,44 @@ function normalizeBool(value, fallback = false) {
   return fallback;
 }
 
+function mapSuggestionsFromMessage(message = {}) {
+  if (Array.isArray(message?.suggestions) && message.suggestions.length > 0) {
+    return message.suggestions;
+  }
+
+  const actionOptions = message?.data?.action?.options;
+  if (Array.isArray(actionOptions) && actionOptions.length > 0) {
+    return actionOptions
+      .map((option) => {
+        if (typeof option === "string") return option;
+        if (option && typeof option === "object") {
+          return option.label || option.value || "";
+        }
+        return "";
+      })
+      .filter(Boolean);
+  }
+
+  if (
+    message?.role === "assistant" &&
+    message?.data?.missingFields?.includes?.("processType")
+  ) {
+    return ["ROW", "INDIA"];
+  }
+
+  return [];
+}
+
+function mapDbMessageToUi(message = {}) {
+  return {
+    role: message?.role,
+    text: message?.text,
+    summary: message?.summary,
+    data: message?.data,
+    suggestions: mapSuggestionsFromMessage(message),
+  };
+}
+
 export default function ChatWindow({
   loading,
   input,
@@ -29,6 +67,7 @@ export default function ChatWindow({
   statusText,
 
   activeConv,
+  sessionId = null,
   editingIndex,
   editingText,
   copiedAtIndex,
@@ -150,6 +189,12 @@ export default function ChatWindow({
   const activeSystemId = normalizeSystemId(effectiveSession?.systemId || "");
   const activeSapUser = String(effectiveSession?.sapUser || "").trim();
 
+  const resolvedSessionId = useMemo(() => {
+    if (sessionId) return sessionId;
+    const id = activeConv?.id;
+    return typeof id === "string" ? id : null;
+  }, [sessionId, activeConv?.id]);
+
   const buildSendPayload = useCallback(
     (overrides = {}) => {
       const {
@@ -162,10 +207,11 @@ export default function ChatWindow({
         availableSystems: normalizedAvailableSystems,
         systemId: activeSystemId || "",
         sapUser: overrideSapUser ?? activeSapUser ?? "",
+        sessionId: resolvedSessionId,
         ...rest,
       };
     },
-    [normalizedAvailableSystems, activeSystemId, activeSapUser]
+    [normalizedAvailableSystems, activeSystemId, activeSapUser, resolvedSessionId]
   );
 
   const hasConnectedSystems = useMemo(() => {
@@ -218,12 +264,7 @@ const isConnected = useMemo(() => {
 
   const isMongoId = useCallback((v) => /^[a-f0-9]{24}$/i.test(String(v || "")), []);
 
-  const sessionId = useMemo(() => {
-    const id = activeConv?.id;
-    return typeof id === "string" ? id : null;
-  }, [activeConv?.id]);
-
-  const canFetchDbMessages = Boolean(sessionId && isMongoId(sessionId));
+  const canFetchDbMessages = Boolean(resolvedSessionId && isMongoId(resolvedSessionId));
 
   const systemList = useMemo(() => {
     if (Array.isArray(systems) && systems.length > 0) return systems;
@@ -323,7 +364,7 @@ const isConnected = useMemo(() => {
         sid = "";
       }
 
-      const url = new URL(`${apiBase}/chat/sessions/${sessionId}/messages`);
+      const url = new URL(`${apiBase}/chat/sessions/${resolvedSessionId}/messages`);
       url.searchParams.set("limit", "20");
       if (sid) url.searchParams.set("systemId", sid);
 
@@ -336,13 +377,7 @@ const isConnected = useMemo(() => {
       const items = Array.isArray(payload.items) ? payload.items : [];
       const nextBefore = payload.nextBefore || null;
 
-      const uiMessages = items.map((m) => ({
-        role: m.role,
-        text: m.text,
-        summary: m.summary,
-        data: m.data,
-        suggestions: m.suggestions,
-      }));
+      const uiMessages = items.map(mapDbMessageToUi);
 
       if (typeof setConversations === "function" && activeConv?.id) {
         setConversations((prev) =>
@@ -369,7 +404,7 @@ const isConnected = useMemo(() => {
     bottomRef,
     canFetchDbMessages,
     normalizeSystemId,
-    sessionId,
+    resolvedSessionId,
     setConversations,
     activeConv?.id,
   ]);
@@ -393,7 +428,7 @@ const isConnected = useMemo(() => {
         sid = "";
       }
 
-      const url = new URL(`${apiBase}/chat/sessions/${sessionId}/messages`);
+      const url = new URL(`${apiBase}/chat/sessions/${resolvedSessionId}/messages`);
       url.searchParams.set("limit", "20");
       url.searchParams.set("before", msgNextBefore);
       if (sid) url.searchParams.set("systemId", sid);
@@ -407,13 +442,7 @@ const isConnected = useMemo(() => {
       const items = Array.isArray(payload.items) ? payload.items : [];
       const nextBefore = payload.nextBefore || null;
 
-      const uiMessages = items.map((m) => ({
-        role: m.role,
-        text: m.text,
-        summary: m.summary,
-        data: m.data,
-        suggestions: m.suggestions,
-      }));
+      const uiMessages = items.map(mapDbMessageToUi);
 
       prependActiveMessages(uiMessages);
 
@@ -438,7 +467,7 @@ const isConnected = useMemo(() => {
     msgNextBefore,
     normalizeSystemId,
     prependActiveMessages,
-    sessionId,
+    resolvedSessionId,
   ]);
 
   useEffect(() => {
@@ -632,6 +661,8 @@ const isConnected = useMemo(() => {
         rawValue: value,
         activeSystemId,
         activeSapUser,
+        sessionId: resolvedSessionId,
+        activeConvId: activeConv?.id,
       });
 
       if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -658,6 +689,7 @@ const isConnected = useMemo(() => {
             displayText: safeDisplayText,
             businessScope: isBusinessScope ? safeBusinessScope : "",
             pendingContext: value?.pendingContext ?? pendingAction ?? null,
+            sessionId: resolvedSessionId,
           })
         );
         return;
@@ -680,10 +712,51 @@ const isConnected = useMemo(() => {
           displayText: text,
           businessScope: isBusinessScope ? upper : "",
           pendingContext: pendingAction || null,
+          sessionId: resolvedSessionId,
         })
       );
     },
-    [buildSendPayload, onOpenSapLogin, onSend, pendingAction, activeSystemId, activeSapUser]
+    [
+      buildSendPayload,
+      onOpenSapLogin,
+      onSend,
+      pendingAction,
+      activeSystemId,
+      activeSapUser,
+      resolvedSessionId,
+      activeConv?.id,
+    ]
+  );
+
+  const handleReconnectSuggestion = useCallback(
+    async (systemId) => {
+      const sid = normalizeSystemId(systemId);
+      if (!sid) {
+        onOpenSapLogin?.(null);
+        return;
+      }
+
+      const candidate = (Array.isArray(tiles) ? tiles : []).find(
+        (tile) => normalizeSystemId(tile?.systemId || tile?.name) === sid
+      );
+
+      if (!candidate) {
+        onOpenSapLogin?.(null);
+        return;
+      }
+
+      const sapUser = String(
+        candidate?.sapUser || candidate?.system?.sapUser || candidate?.user || ""
+      ).trim();
+
+      if (!sapUser) {
+        onOpenSapLogin?.(candidate);
+        return;
+      }
+
+      await handleSystemSelect(candidate);
+    },
+    [handleSystemSelect, normalizeSystemId, onOpenSapLogin, tiles]
   );
 
   const onComposerKeyDown = useCallback(
@@ -700,11 +773,13 @@ const isConnected = useMemo(() => {
           activeSystemId,
           activeSapUser,
           normalizedAvailableSystems,
+          sessionId: resolvedSessionId,
         });
         onSend?.(
           buildSendPayload({
             overrideText: input,
             displayText: input,
+            sessionId: resolvedSessionId,
           })
         );
       }
@@ -719,6 +794,7 @@ const isConnected = useMemo(() => {
       activeSystemId,
       activeSapUser,
       normalizedAvailableSystems,
+      resolvedSessionId,
     ]
   );
 
@@ -745,6 +821,7 @@ const isConnected = useMemo(() => {
         systemList={systemList}
         tiles={tiles}
         onAddNewSystem={() => onOpenSapLogin?.(null)}
+        onReconnectSystem={handleReconnectSuggestion}
         statusText={statusText}
         normalizeSystemId={normalizeSystemId}
         handleSystemSelect={handleSystemSelect}
@@ -786,6 +863,7 @@ const isConnected = useMemo(() => {
                     buildSendPayload({
                       overrideText: input,
                       displayText: input,
+                      sessionId: resolvedSessionId,
                     })
                   );
                 }}

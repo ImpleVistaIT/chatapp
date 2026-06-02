@@ -130,6 +130,7 @@ export async function handleTransportList(context) {
 
     sse.send("error", {
       ok: false,
+      sessionId: String(session._id),
       status: "needs_input",
       message,
       missingFields: ["objectId"],

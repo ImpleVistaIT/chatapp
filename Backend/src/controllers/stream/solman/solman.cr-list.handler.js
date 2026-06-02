@@ -164,6 +164,7 @@ export async function handleCrList(context) {
 
     sse.send("error", {
       ok: false,
+      sessionId: String(session._id),
       status: "needs_input",
       message,
       missingFields: ["processType"],

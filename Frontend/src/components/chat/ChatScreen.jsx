@@ -40,6 +40,7 @@ export default function ChatScreen({
 
   tiles = [],
   onAddNewSystem,
+  onReconnectSystem,
 
   messagesElRef,
   onMessagesScrollInternal,
@@ -129,6 +130,17 @@ export default function ChatScreen({
   const handleSuggestion = (value) => {
     if (value && typeof value === "object" && !Array.isArray(value)) {
       if (value?.action?.type === "add_system") {
+        onAddNewSystem?.();
+        return;
+      }
+
+      if (value?.action?.type === "reconnect_system") {
+        const sid = String(value?.action?.systemId || "").trim().toUpperCase();
+        if (sid) {
+          onReconnectSystem?.(sid, value);
+          return;
+        }
+
         onAddNewSystem?.();
         return;
       }
