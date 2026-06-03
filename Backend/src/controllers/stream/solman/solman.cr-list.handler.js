@@ -1,6 +1,7 @@
 import { listSolmanChangeRequestsByDateRange } from "../../../services/systems/solman/charm.service.js";
 import {
   buildCrSuggestions,
+  buildStatusDistributionChart,
   cleanString,
   formatCrListReply,
   isNextPageQuery,
@@ -9,6 +10,9 @@ import {
   toCrDetailsArray,
 } from "./solman.shared.js";
 import { step } from "../stream.shared.js";
+
+const LIST_CHART_PAGE_SIZE = 200;
+const LIST_CHART_MAX_PAGES = 500;
 
 function resolveCurrentSolmanUsername(context) {
   return cleanString(
@@ -38,6 +42,40 @@ function dedupeByCrNumber(rows = []) {
   }
 
   return deduped;
+}
+
+function shouldIncludeChartForCrList(query = "") {
+  const q = cleanString(query).toLowerCase();
+
+  if (!q) return false;
+
+  const explicitAnalyticsTerms = [
+    "status distribution",
+    "status breakdown",
+    "status analytics",
+    "status chart",
+    "pie chart",
+    "donut chart",
+    "percentage distribution",
+    "grouped by status",
+    "group by status",
+    "cr status distribution",
+    "status percentage distribution",
+  ];
+
+  if (explicitAnalyticsTerms.some((term) => q.includes(term))) {
+    return false;
+  }
+
+  return (
+    q.includes("show cr status") ||
+    q.includes("show crs") ||
+    q.includes("list change requests") ||
+    q.includes("show change requests") ||
+    q.includes("cr list") ||
+    q.includes("list crs") ||
+    q.includes("change request list")
+  );
 }
 
 export async function handleCrList(context) {
@@ -311,6 +349,123 @@ export async function handleCrList(context) {
     0,
     Number(listInput.displayOffset ?? responseSkip) || 0
   );
+  const shouldBuildChart = rows.length > 0 && shouldIncludeChartForCrList(query);
+  let chart = null;
+
+  if (shouldBuildChart) {
+    const chartFromDate = result?.result?.fromDate || listInput.fromDate || "";
+    const chartToDate = result?.result?.toDate || listInput.toDate || "";
+
+    const fullChartFetch = await step("fetchAllCrRowsForListChart", () =>
+      fetchAllCrRowsForListChart({
+        system,
+        sapAuth,
+        listInput,
+        resolvedCreatedBy,
+        query,
+        fromDate: chartFromDate,
+        toDate: chartToDate,
+      })
+    );
+
+    if (fullChartFetch?.ok !== false) {
+      const chartRows = dedupeByCrNumber(fullChartFetch?.rows || []);
+
+      chart = buildStatusDistributionChart(chartRows, {
+        title: "CR Status Distribution",
+        filters: {
+          businessScope: listInput.businessScope,
+          processType: result?.result?.processType || listInput.processType,
+          triggerAll: result?.result?.triggerAll || listInput.triggerAll || "X",
+          fromDate: chartFromDate,
+          toDate: chartToDate,
+          status: result?.result?.status || listInput.status,
+          statusMode: result?.result?.statusMode || listInput.statusMode,
+          createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+        },
+      });
+
+      chart.pagesFetched = Number(fullChartFetch?.pages || 0);
+      if (fullChartFetch?.truncated) {
+        chart.truncated = true;
+      }
+    }
+  }
+
+  const responseData = {
+    rows,
+    ...(chart ? { chart } : {}),
+  };
+
+  if (rows.length === 0 && !isNextPageRequest) {
+    const noResultsMessage = "No change requests found.";
+
+    await persistAssistantAndTouchSession({
+      owner,
+      sessionId: session._id,
+      text: noResultsMessage,
+      summary: noResultsMessage,
+      extracted: {
+        system: "solman",
+        intent: "list_change_requests",
+        filters: {
+          businessScope: listInput.businessScope,
+          processType: result?.result?.processType || listInput.processType,
+          triggerAll: result?.result?.triggerAll || listInput.triggerAll || "X",
+          fromDate: result?.result?.fromDate || listInput.fromDate,
+          toDate: result?.result?.toDate || listInput.toDate,
+          status: result?.result?.status || listInput.status,
+          statusMode: result?.result?.statusMode || listInput.statusMode,
+          excludeStatuses:
+            result?.result?.excludeStatuses || listInput.excludeStatuses || [],
+          createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+          createdByMode: listInput.createdByMode || "",
+          top: responseTop,
+          skip: responseSkip,
+          nextSkip: responseNextSkip,
+          orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
+          dateText: listInput.dateText || query,
+        },
+      },
+      data: responseData,
+      responseMeta: {
+        ok: true,
+        kind: "stream",
+        executor: "solman.list_change_requests",
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
+        pagination: {
+          top: responseTop,
+          skip: responseSkip,
+          nextSkip: responseNextSkip,
+          orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
+          hasMore: false,
+        },
+      },
+    });
+
+    sse.send("reply", {
+      ok: true,
+      sessionId: String(session._id),
+      systemId: effectiveSystemId,
+      sapUser: effectiveSapUser,
+      reply: noResultsMessage,
+      summary: noResultsMessage,
+      data: responseData,
+      pagination: {
+        top: responseTop,
+        skip: responseSkip,
+        nextSkip: responseNextSkip,
+        orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
+        hasMore: false,
+      },
+      suggestions: buildCrSuggestions(query, listInput.businessScope, rows),
+      ...(chart ? { chart } : {}),
+    });
+
+    sse.send("done", { ok: true });
+    return sse.end();
+  }
 
   if (isNextPageRequest && rows.length === 0) {
     const emptyPagination = {
@@ -348,7 +503,7 @@ export async function handleCrList(context) {
           dateText: listInput.dateText || query,
         },
       },
-      data: [],
+      data: responseData,
       responseMeta: {
         ok: true,
         kind: "stream",
@@ -391,7 +546,7 @@ export async function handleCrList(context) {
       sapUser: effectiveSapUser,
       reply: noMoreMessage,
       summary: noMoreMessage,
-      data: [],
+      data: responseData,
       pagination: emptyPagination,
       suggestions: [
         `Show ${listInput.businessScope ? `${listInput.businessScope} ` : ""}CR list this week`
@@ -474,7 +629,7 @@ export async function handleCrList(context) {
         dateText: listInput.dateText || query,
       },
     },
-    data: rows,
+    data: responseData,
     responseMeta: {
       ok: true,
       kind: "stream",
@@ -499,7 +654,7 @@ export async function handleCrList(context) {
     sapUser: effectiveSapUser,
     reply,
     summary: result?.message || `Fetched ${rows.length} change request(s).`,
-    data: rows,
+    data: responseData,
     pagination: {
       top: responseTop,
       skip: responseSkip,
@@ -512,8 +667,80 @@ export async function handleCrList(context) {
       listInput.businessScope,
       rows
     ),
+    ...(chart ? { chart } : {}),
   });
 
   sse.send("done", { ok: true });
   return sse.end();
+}
+
+function toSapPageCount(result) {
+  const rawRows = result?.result?.raw?.d?.results;
+  return Array.isArray(rawRows) ? rawRows.length : 0;
+}
+
+function normalizeOrderByForStablePaging(orderBy = "") {
+  const value = cleanString(orderBy) || "CREATED_ON desc";
+  const lower = value.toLowerCase();
+
+  if (lower.includes("object_id")) return value;
+
+  return `${value},OBJECT_ID desc`;
+}
+
+async function fetchAllCrRowsForListChart({
+  system,
+  sapAuth,
+  listInput,
+  resolvedCreatedBy,
+  query,
+  fromDate,
+  toDate,
+}) {
+  const aggregated = [];
+  let currentSkip = 0;
+  let pages = 0;
+
+  while (pages < LIST_CHART_MAX_PAGES) {
+    const pageResult = await listSolmanChangeRequestsByDateRange({
+      system,
+      sapAuth,
+      processType: listInput.processType,
+      triggerAll: listInput.triggerAll || "X",
+      fromDate: fromDate || "",
+      toDate: toDate || "",
+      status: listInput.status || "",
+      excludeStatuses: listInput.excludeStatuses || [],
+      statusMode: listInput.statusMode || "",
+      dateText: listInput.dateText || query,
+      createdBy: resolvedCreatedBy || "",
+      top: LIST_CHART_PAGE_SIZE,
+      skip: currentSkip,
+      orderBy: normalizeOrderByForStablePaging(listInput.orderBy),
+    });
+
+    if (pageResult?.ok === false) {
+      return pageResult;
+    }
+
+    const pageRows = toCrDetailsArray(pageResult);
+    if (Array.isArray(pageRows) && pageRows.length > 0) {
+      aggregated.push(...pageRows);
+    }
+
+    pages += 1;
+
+    if (toSapPageCount(pageResult) < LIST_CHART_PAGE_SIZE) {
+      break;
+    }
+
+    currentSkip += LIST_CHART_PAGE_SIZE;
+  }
+
+  return {
+    ok: true,
+    rows: aggregated,
+    pages,
+    truncated: pages >= LIST_CHART_MAX_PAGES,
+  };
 }
