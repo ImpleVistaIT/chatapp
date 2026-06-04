@@ -7,6 +7,10 @@ import { getAllowedFieldsWithLabels } from "../services/allowlist.service.js";
 import { classifyPrompt } from "../services/routing/promptClassifier.service.js";
 import { resolveTargetSystem } from "../services/routing/systemContextResolver.service.js";
 import { resolveServiceIntent } from "../services/routing/serviceIntentResolver.service.js";
+import {
+  buildLowConfidenceFallbackPayload,
+  shouldReturnLowConfidenceFallback,
+} from "../services/routing/routingConfidencePolicy.service.js";
 
 import { ChatSession } from "../models/ChatSession.model.js";
 import { ChatMessage } from "../models/ChatMessage.model.js";
@@ -355,7 +359,11 @@ export async function handleDocChat({ req, res, defaultDocType, docTypeFast }) {
       query,
       sessionContext: null,
     });
+    console.log("CLASSIFIED =", JSON.stringify(classified, null, 2));
 
+    if (!classified || shouldReturnLowConfidenceFallback(classified, query)) {
+      return res.status(200).json(buildLowConfidenceFallbackPayload(classified));
+    }
     if (!sid) {
       systemResolution = await resolveTargetSystem({
         query,
@@ -620,6 +628,16 @@ export async function handleDocChat({ req, res, defaultDocType, docTypeFast }) {
       : null;
 
     console.log("🔴 FILTERS SENT TO SAP:", JSON.stringify(extracted.filters, null, 2));
+
+    // Force latest PO ordering
+if (extracted.latestMode === true) {
+  extracted.orderBy = [
+    {
+      field: "PoDocDate",
+      dir: "desc",
+    },
+  ];
+}
 
     const relativePath = buildStructuredEntitySetQuery({
       entitySet: service.entitySet,

@@ -904,6 +904,10 @@ export default function Chat() {
       const data = streamedPayload;
       if (!data) throw new Error("No reply received from stream");
 
+      const assistantText = String(
+        data?.reply ?? data?.text ?? data?.message ?? ""
+      ).trim() || "I didn't understand your request. Could you please rephrase it?";
+
       setPendingAction(null);
 
       const targetConvId =
@@ -931,7 +935,7 @@ export default function Chat() {
         ...m,
         {
           role: "assistant",
-          text: data.reply ?? "",
+          text: assistantText,
           suggestions: data.suggestions,
           summary: data.summary || "",
           summaryStatus: data.summary ? "done" : "pending",

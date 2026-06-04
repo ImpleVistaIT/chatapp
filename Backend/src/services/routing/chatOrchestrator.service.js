@@ -4,6 +4,10 @@ import { resolveRoutingAction } from "./actionResolver.service.js";
 import { executeResolvedAction } from "./executor.service.js";
 import { resolveTargetSystem } from "./systemContextResolver.service.js";
 import {
+  buildLowConfidenceFallbackPayload,
+  shouldReturnLowConfidenceFallback,
+} from "./routingConfidencePolicy.service.js";
+import {
   buildPendingAction,
   mergePendingActionData,
   updatePendingActionMissingFields,
@@ -79,6 +83,10 @@ export async function orchestrateChatRequest({
     query: effectiveQuery,
     sessionContext,
   });
+
+  if (shouldReturnLowConfidenceFallback(classified, effectiveQuery)) {
+    return buildLowConfidenceFallbackPayload(classified);
+  }
 
   const availableSystems = Array.isArray(req?.body?.availableSystems)
     ? req.body.availableSystems

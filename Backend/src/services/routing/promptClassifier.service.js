@@ -70,6 +70,9 @@ function normalizeDateYYYYMMDD(value) {
 
 function extractCrNumber(query) {
   const q = String(query || "");
+  const compactCr = q.match(/\bcr\s*[-_]?\s*(\d{3,20})\b/i);
+  if (compactCr) return compactCr[1];
+
   const match = q.match(/\b(?:cr|change request)\s*(?:number\s*)?(\d{6,20})\b/i);
   if (match) return match[1];
 
@@ -298,7 +301,7 @@ function keywordFallback(query) {
     system: "ambiguous",
     module: "unknown",
     intent: "unknown",
-    confidence: 0.4,
+    confidence: 0.2,
     reason: "No strong routing signal found",
     source: "keyword",
     entities: {},

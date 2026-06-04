@@ -1,5 +1,9 @@
 import { classifyPrompt } from "../services/routing/promptClassifier.service.js";
 import { resolveTargetSystem } from "../services/routing/systemContextResolver.service.js";
+import {
+  buildLowConfidenceFallbackPayload,
+  shouldReturnLowConfidenceFallback,
+} from "../services/routing/routingConfidencePolicy.service.js";
 import { SapCredential } from "../models/SapCredential.model.js";
 import { ChatMessage } from "../models/ChatMessage.model.js";
 import { SapConnection } from "../models/SapConnection.model.js";
@@ -513,6 +517,20 @@ export async function handleChatStream(req, res) {
         sessionContext: null,
       })
     );
+
+    if (shouldReturnLowConfidenceFallback(classified, query)) {
+      const fallback = buildLowConfidenceFallbackPayload(classified);
+      sse.send("reply", {
+        text: fallback.message,
+        status: fallback.status,
+        extracted: classified,
+      });
+      sse.send("done", {
+        ok: true,
+        status: fallback.status,
+      });
+      return sse.end();
+    }
 
     const forcedSolman =
       isSolmanCrQuery(query) ||

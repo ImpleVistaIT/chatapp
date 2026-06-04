@@ -58,9 +58,11 @@ export function extractCount(message) {
 export function extractOrderBy(message, allowedFields, defaultDateField = "PoDocDate") {
   const m = normalizeText(message);
   const orderBy = [];
+  const allowedSet = new Set((allowedFields || []).map((f) => String(f).toLowerCase()));
 
   const latest = /\b(latest|newest|recent|recently)\b/.test(m);
   const oldest = /\b(oldest)\b/.test(m);
+  const hasPoContext = /\b(po|purchase\s*order[s]?)\b/.test(m);
 
   const highest = /\b(highest|maximum|max)\b/.test(m);
   const lowest = /\b(lowest|minimum|min)\b/.test(m);
@@ -84,9 +86,20 @@ export function extractOrderBy(message, allowedFields, defaultDateField = "PoDoc
   }
 
   if (latest) {
-    orderBy.push({ field: defaultDateField, dir: "desc" });
+    // For PO lists, PoNo is usually monotonic and gives better "latest" behavior.
+    if (hasPoContext && allowedSet.has("pono")) {
+      orderBy.push({ field: "PoNo", dir: "desc" });
+    }
+    if (allowedSet.has(String(defaultDateField).toLowerCase())) {
+      orderBy.push({ field: defaultDateField, dir: "desc" });
+    }
   } else if (oldest) {
-    orderBy.push({ field: defaultDateField, dir: "asc" });
+    if (hasPoContext && allowedSet.has("pono")) {
+      orderBy.push({ field: "PoNo", dir: "asc" });
+    }
+    if (allowedSet.has(String(defaultDateField).toLowerCase())) {
+      orderBy.push({ field: defaultDateField, dir: "asc" });
+    }
   }
 
   const hintedField = resolveFieldFromHints(m, allowedFields);

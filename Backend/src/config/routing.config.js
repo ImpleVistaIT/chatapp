@@ -2,6 +2,7 @@ export const ROUTING_CONFIG = {
   defaultSystem: "s4hana",
 
   confidence: {
+    low: Number(process.env.ROUTER_CONFIDENCE_LOW || 0.35),
     high: Number(process.env.ROUTER_CONFIDENCE_HIGH || 0.8),
     medium: Number(process.env.ROUTER_CONFIDENCE_MEDIUM || 0.6),
   },

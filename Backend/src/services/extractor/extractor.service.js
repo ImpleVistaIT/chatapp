@@ -364,6 +364,7 @@ function pickPoDateField(message, allowedFields) {
 
   const createdCandidates = ["CrtDate", "CreatedOn"];
   const documentCandidates = ["PoDocDate", "DocDate", "DocumentDate"];
+  const hasLatestWords = /\b(latest|newest|recent|recently|most\s+recent)\b/.test(q);
 
   if (/\b(created|created on|created in|creation)\b/.test(q)) {
     for (const c of createdCandidates) {
@@ -377,7 +378,14 @@ function pickPoDateField(message, allowedFields) {
     }
   }
 
-  for (const c of [...createdCandidates, ...documentCandidates]) {
+  // For "latest/recent" PO queries, users typically mean latest by document date.
+  if (hasLatestWords) {
+    for (const c of [...documentCandidates, ...createdCandidates]) {
+      if (set.has(String(c).toLowerCase())) return c;
+    }
+  }
+
+  for (const c of [...documentCandidates, ...createdCandidates]) {
     if (set.has(String(c).toLowerCase())) return c;
   }
 
@@ -434,6 +442,7 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
     limit: null,
     skip: null,
     listMode: null,
+    latestMode: false,  
     count: false,
   };
 
@@ -442,6 +451,10 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
   out.filters.push(...extractUserCreatedFilters(truncated, allowedFields));
 
   out.orderBy = extractOrderBy(truncated, allowedFields, poDateField) || [];
+  if (Array.isArray(out.orderBy) && out.orderBy.length > 0) {
+    const allowedSet = new Set((allowedFields || []).map((f) => String(f).toLowerCase()));
+    out.orderBy = out.orderBy.filter((o) => allowedSet.has(String(o?.field || "").toLowerCase()));
+  }
   out.limit = extractLimit(truncated);
   out.skip = extractSkip(truncated);
   out.count = extractCount(truncated);
@@ -461,9 +474,19 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
 
   if (intent && !out.docNumber) {
     out.listMode = intent.listMode || null;
+  if (intent.listMode === "latest_po") {
+  out.latestMode = true;
+  }
 
-    if ((!out.orderBy || out.orderBy.length === 0) && Array.isArray(intent.defaultOrderBy)) {
-      out.orderBy = intent.defaultOrderBy;
+    if (!out.orderBy || out.orderBy.length === 0) {
+      if (out.listMode === "latest_po") {
+        out.orderBy = [{ field: poDateField, dir: "desc" }];
+      } else if (Array.isArray(intent.defaultOrderBy)) {
+        const allowedSet = new Set((allowedFields || []).map((f) => String(f).toLowerCase()));
+        out.orderBy = intent.defaultOrderBy.filter((o) =>
+          allowedSet.has(String(o?.field || "").toLowerCase())
+        );
+      }
     }
 
     if (out.limit == null && Number.isFinite(Number(intent.defaultLimit))) {
@@ -554,6 +577,7 @@ export async function extractPoQuery({ query, allowedFields, fieldLabels }) {
     limit: r.limit,
     skip: r.skip,
     listMode: r.listMode,
+    latestMode: r.latestMode, // NEW
     docType: r.docType,
     docNumber: r.docNumber,
     docItem: r.docItem,
