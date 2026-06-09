@@ -31,6 +31,18 @@ function isLandscapeOnlyQuery(query) {
   return q === "ROW" || q === "INDIA";
 }
 
+export function isValidSolmanPendingAction(pendingAction) {
+  const system = cleanString(pendingAction?.system).toLowerCase();
+  const intent = cleanString(pendingAction?.intent).toLowerCase();
+  const filters = pendingAction?.filters;
+
+  if (system !== "solman") return false;
+  if (!intent) return false;
+  if (!filters || typeof filters !== "object" || Array.isArray(filters)) return false;
+
+  return ["list_change_requests", "list_change_requests_by_created_by"].includes(intent);
+}
+
 function scopeToProcessType(scope) {
   const s = cleanString(scope).toUpperCase();
   if (s === "ROW") return "YMHF";
@@ -49,9 +61,16 @@ function isSolmanCrQuery(query) {
     /\bchange request\b/.test(q) ||
     /\bchange requests\b/.test(q) ||
     /\bcr list\b/.test(q) ||
+    /\blist change requests\b/.test(q) ||
+    /\bshow cr status\b/.test(q) ||
     /\bstatus of cr\b/.test(q) ||
     /\bstatus of each change request\b/.test(q) ||
     /\bshow the status of the cr\b/.test(q) ||
+    /\bstatus distribution\b/.test(q) ||
+    /\bstatus breakdown\b/.test(q) ||
+    /\bstatus analytics\b/.test(q) ||
+    /\bpie chart\b/.test(q) ||
+    /\bdonut chart\b/.test(q) ||
     /\bopen cr\b/.test(q) ||
     /\bclosed cr\b/.test(q) ||
     /\bapproved cr\b/.test(q) ||
@@ -76,9 +95,16 @@ function isSolmanCrQuery(query) {
     /\bchange request\b/,
     /\bchange requests\b/,
     /\bcr list\b/,
+    /\blist change requests\b/,
+    /\bshow cr status\b/,
     /\bstatus of cr\b/,
     /\bstatus of each change request\b/,
     /\bshow the status of the cr\b/,
+    /\bstatus distribution\b/,
+    /\bstatus breakdown\b/,
+    /\bstatus analytics\b/,
+    /\bpie chart\b/,
+    /\bdonut chart\b/,
     /\bopen cr\b/,
     /\bclosed cr\b/,
     /\bapproved cr\b/,
@@ -353,18 +379,25 @@ export async function handleChatStream(req, res) {
       "list_change_requests_by_created_by",
     ]);
 
-    const hasValidPagination =
-      Number.isFinite(Number(effectivePendingAction?.filters?.skip)) ||
-      Number.isFinite(Number(effectivePendingAction?.filters?.nextSkip));
-
     const shouldRestorePendingSolman =
       Boolean(effectivePendingAction) &&
       pendingSystem === "solman" &&
       supportedPendingIntents.has(pendingIntent) &&
-      (
-        queryIsNextPage ||
-        (queryIsLandscapeOnly && hasValidPagination)
-      );
+      (queryIsNextPage || queryIsLandscapeOnly);
+
+    if (
+      effectivePendingAction &&
+      (queryIsNextPage || queryIsLandscapeOnly) &&
+      !isValidSolmanPendingAction(effectivePendingAction)
+    ) {
+      sse.send("error", {
+        message:
+          "The pending SolMan action is invalid or expired. Please start the request again.",
+        status: "invalid_pending_action_state",
+        pendingAction: null,
+      });
+      return sse.end();
+    }
 
     if (shouldRestorePendingSolman) {
       const pendingFilters = effectivePendingAction?.filters || {};

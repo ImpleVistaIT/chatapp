@@ -17,6 +17,8 @@ export const ROUTING_INTENTS = [
   "check_approvals",
   "create_change_request",
   "get_change_request_details",
+  "list_change_requests",
+  "cr_status_distribution",
   "create_transport",
   "unknown",
 ];

@@ -357,9 +357,7 @@ export function inferCrListIntent(classified, query = "") {
     /\bchange request\b/.test(q) ||
     /\bchange requests\b/.test(q) ||
     /\bcr list\b/.test(q) ||
-    /\bstatus of cr\b/.test(q) ||
-    /\bstatus of each change request\b/.test(q) ||
-    /\bshow the status of the cr\b/.test(q) ||
+      /\bshow cr status\b/.test(q) ||
     /\bopen cr\b/.test(q) ||
     /\bapproved cr\b/.test(q) ||
     /\brejected cr\b/.test(q) ||
@@ -678,4 +676,63 @@ export async function persistAssistantAndTouchSession({
       { $set: { updatedAt: new Date() } }
     )
   );
+}
+
+// =========================
+// CR Status Analytics Helpers
+// =========================
+
+export function normalizeStatusValue(value = "") {
+  return cleanString(value).toLowerCase().replace(/\s+/g, " ");
+}
+
+export function getCrStatus(item = {}) {
+  return cleanString(
+    item?.STATUS ||
+      item?.STATU ||
+      item?.CR_STATUS ||
+      item?.CHANGEREQUEST_STATUS ||
+      item?.STATUS_TEXT ||
+      item?.STATUSNAME ||
+      item?.STATE ||
+      ""
+  );
+}
+
+export function groupCrStatusCounts(rows = []) {
+  const map = new Map();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const status = normalizeStatusValue(getCrStatus(row));
+    const key = status || "unknown";
+    map.set(key, (map.get(key) || 0) + 1);
+  }
+
+  return Array.from(map.entries()).map(([status, count]) => ({
+    status,
+    count,
+  }));
+}
+
+export function calculatePercentage(count, total) {
+  if (!total || total <= 0) return 0;
+  return Math.round((count / total) * 100);
+}
+
+export function buildStatusDistributionChart(rows = [], meta = {}) {
+  const totalCRs = Array.isArray(rows) ? rows.length : 0;
+  const grouped = groupCrStatusCounts(rows);
+
+  return {
+    type: "status_distribution",
+    chartType: "donut",
+    title: meta.title || "CR Status Distribution",
+    totalCRs,
+    filters: meta.filters || {},
+    data: grouped.map((item) => ({
+      status: item.status,
+      count: item.count,
+      percentage: calculatePercentage(item.count, totalCRs),
+    })),
+  };
 }
