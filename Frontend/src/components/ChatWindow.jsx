@@ -25,6 +25,10 @@ function mapSuggestionsFromMessage(message = {}) {
     return message.suggestions;
   }
 
+  if (Array.isArray(message?.data?.suggestions) && message.data.suggestions.length > 0) {
+    return message.data.suggestions;
+  }
+
   const actionOptions = message?.data?.action?.options;
   if (Array.isArray(actionOptions) && actionOptions.length > 0) {
     return actionOptions
@@ -54,6 +58,9 @@ function mapDbMessageToUi(message = {}) {
     text: message?.text,
     summary: message?.summary,
     data: message?.data,
+    chart: message?.chart || message?.data?.chart || (message?.data?.type === "status_distribution" ? message.data : null),
+    extracted: message?.extracted || null,
+    responseMeta: message?.responseMeta || null,
     suggestions: mapSuggestionsFromMessage(message),
   };
 }
@@ -80,6 +87,7 @@ export default function ChatWindow({
   onKeyDown,
   onMicClick,
   onCopyAssistant,
+  onDownloadAssistant,
   startEditMessage,
   cancelEdit,
   applyEditLocal,
@@ -93,6 +101,7 @@ export default function ChatWindow({
   setConversations = null,
   setActiveId = null,
   onConnected = null,
+  onToast = null,
 
   tiles = [],
 
@@ -842,6 +851,8 @@ const isConnected = useMemo(() => {
         onSend={handleSuggestionSend}
         pendingAction={pendingAction}
         onCopyAssistant={onCopyAssistant}
+        onDownloadAssistant={onDownloadAssistant}
+        onToast={onToast}
         copiedAtIndex={copiedAtIndex}
         loading={loading}
         bottomRef={bottomRef}

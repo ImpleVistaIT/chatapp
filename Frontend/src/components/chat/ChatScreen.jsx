@@ -1,10 +1,12 @@
 import MessageBubble from "../MessageBubble";
 import toast from "react-hot-toast";
-import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   FiCopy,
   FiCheck,
   FiEdit2,
+  FiDownload,
   FiRefreshCw,
   FiChevronDown,
 } from "react-icons/fi";
@@ -55,6 +57,8 @@ export default function ChatScreen({
   onSend,
   pendingAction,
   onCopyAssistant,
+  onDownloadAssistant,
+  onToast,
 
   loading,
   bottomRef,
@@ -64,13 +68,92 @@ export default function ChatScreen({
 }) {
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [regeneratingIndex, setRegeneratingIndex] = useState(null);
+  const [downloadMenuIndex, setDownloadMenuIndex] = useState(null);
+  const [downloadMenuStyle, setDownloadMenuStyle] = useState(null);
+  const downloadButtonRefs = useRef(new Map());
 
   const safeOnSend = typeof onSend === "function" ? onSend : null;
   const safeOnCopyAssistant = typeof onCopyAssistant === "function" ? onCopyAssistant : null;
+  const safeOnDownloadAssistant = typeof onDownloadAssistant === "function" ? onDownloadAssistant : null;
+  const safeOnToast = typeof onToast === "function" ? onToast : null;
   const safeStartEditMessage = typeof startEditMessage === "function" ? startEditMessage : null;
   const safeCancelEdit = typeof cancelEdit === "function" ? cancelEdit : null;
   const safeApplyEditLocal = typeof applyEditLocal === "function" ? applyEditLocal : null;
   const safeSetEditingText = typeof setEditingText === "function" ? setEditingText : null;
+
+  useEffect(() => {
+    if (downloadMenuIndex === null) {
+      setDownloadMenuStyle(null);
+      return;
+    }
+
+    const updateMenuPosition = () => {
+      const trigger = downloadButtonRefs.current.get(downloadMenuIndex);
+      if (!trigger) {
+        setDownloadMenuStyle(null);
+        return;
+      }
+
+      const rect = trigger.getBoundingClientRect();
+      const menuWidth = 256;
+      const menuHeight = 118;
+      const gap = 10;
+      const padding = 12;
+
+      let left = rect.right - menuWidth;
+      if (left < padding) left = padding;
+      if (left + menuWidth > window.innerWidth - padding) {
+        left = Math.max(padding, window.innerWidth - padding - menuWidth);
+      }
+
+      let top = rect.top - menuHeight - gap;
+      if (top < padding) {
+        top = rect.bottom + gap;
+      }
+
+      const maxTop = window.innerHeight - padding - menuHeight;
+      if (top > maxTop) top = Math.max(padding, maxTop);
+
+      setDownloadMenuStyle({
+        position: "fixed",
+        top: `${top}px`,
+        left: `${left}px`,
+        width: `${menuWidth}px`,
+        zIndex: 9999,
+      });
+    };
+
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+    };
+  }, [downloadMenuIndex]);
+
+  useEffect(() => {
+    if (downloadMenuIndex === null) return;
+
+    const handlePointerDown = (event) => {
+      const trigger = downloadButtonRefs.current.get(downloadMenuIndex);
+      const clickedTrigger = Boolean(trigger && trigger.contains(event.target));
+      const clickedMenu = Boolean(event.target?.closest?.('[data-download-menu="true"]'));
+
+      if (!clickedTrigger && !clickedMenu) {
+        setDownloadMenuIndex(null);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+    };
+  }, [downloadMenuIndex]);
 
   const tileList = Array.isArray(tiles) ? tiles : [];
 
@@ -125,6 +208,27 @@ export default function ChatScreen({
     setTimeout(() => {
       setRegeneratingIndex(null);
     }, 1500);
+  };
+
+  const handleDownloadChoice = (group, mode) => {
+    setDownloadMenuIndex(null);
+    if (!safeOnDownloadAssistant) {
+      safeOnToast?.({
+        type: "error",
+        title: "Download unavailable",
+        message: "Download is not available right now.",
+      });
+      return;
+    }
+
+    safeOnToast?.({
+      type: "info",
+      title: "Preparing download",
+      message: mode === "current" ? "Building current section PDF..." : "Fetching entire dataset for PDF...",
+      duration: 1200,
+    });
+
+    safeOnDownloadAssistant({ group, mode });
   };
 
   const handleSuggestion = (value) => {
@@ -314,6 +418,7 @@ export default function ChatScreen({
                               text={msg?.text}
                               summary={msg?.summary}
                               data={msg?.data}
+                              chart={msg?.chart}
                               suggestions={msg?.suggestions}
                               showAvatar={subIdx === 0}
                               onSuggestionClick={(value) => {
@@ -324,7 +429,7 @@ export default function ChatScreen({
                         ))}
                       </div>
 
-                      <div className="mt-2 flex items-center gap-2 ml-12">
+                      <div className="relative z-[9999] mt-2 flex items-center gap-2 ml-12">
                         <button
                           type="button"
                           onClick={() => {
@@ -353,6 +458,60 @@ export default function ChatScreen({
                             className={regeneratingIndex === idx ? "animate-spin" : ""}
                           />
                         </button>
+
+                        <div className="relative z-[9999]">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDownloadMenuIndex(downloadMenuIndex === idx ? null : idx)
+                            }
+                            ref={(node) => {
+                              if (node) {
+                                downloadButtonRefs.current.set(idx, node);
+                              } else {
+                                downloadButtonRefs.current.delete(idx);
+                              }
+                            }}
+                            className="relative z-[9999] flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                            title="Download"
+                          >
+                            <FiDownload size={15} />
+                          </button>
+                        </div>
+
+                        {downloadMenuIndex === idx &&
+                          downloadMenuStyle &&
+                          typeof document !== "undefined" &&
+                          createPortal(
+                            <div
+                              data-download-menu="true"
+                              className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-[0_20px_50px_rgba(0,0,0,0.15)]"
+                              style={downloadMenuStyle}
+                            >
+                              <div className="px-4 py-3 border-b border-gray-100">
+                                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                                  Download Options
+                                </p>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadChoice(m, "current")}
+                                className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                              >
+                                Download current section
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadChoice(m, "entire")}
+                                className="flex w-full items-center gap-3 border-t border-gray-100 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                              >
+                                Download entire data
+                              </button>
+                            </div>,
+                            document.body
+                          )}
                       </div>
                     </div>
                   )}

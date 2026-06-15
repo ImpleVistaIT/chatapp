@@ -10,6 +10,16 @@ function cleanString(v) {
   return String(v || "").trim();
 }
 
+function resolveCurrentSolmanUsername(connection) {
+  return cleanString(
+    connection?.sapAuth?.username ||
+      connection?.sapAuth?.user ||
+      connection?.sapAuth?.sapUser ||
+      connection?.sapAuth?.USER ||
+      ""
+  ).toUpperCase();
+}
+
 function validateCreateChangeRequestInput(body) {
   if (!cleanString(body?.systemId)) {
     return "systemId is required.";
@@ -141,6 +151,11 @@ export const listSolmanChangeRequests = createSapActionHandler({
       sapUser: body.sapUser,
     });
 
+    let createdBy = cleanString(body.createdBy || "");
+    if (cleanString(body.createdByMode).toLowerCase() === "self") {
+      createdBy = resolveCurrentSolmanUsername(connection);
+    }
+
     return await listSolmanChangeRequestsByDateRange({
       system: connection.system,
       sapAuth: connection.sapAuth,
@@ -148,16 +163,37 @@ export const listSolmanChangeRequests = createSapActionHandler({
       fromDate: body.fromDate,
       toDate: body.toDate,
       triggerAll: body.triggerAll || "X",
+      createdBy,
+      createdByMode: body.createdByMode || "",
+      status: body.status || "",
+      statusMode: body.statusMode || "",
+      excludeStatuses: Array.isArray(body.excludeStatuses) ? body.excludeStatuses : [],
+      top: body.top ?? null,
+      skip: body.skip ?? 0,
+      orderBy: body.orderBy || "CREATED_ON desc",
     });
   },
 
   mapSuccessResult: (result) => ({
-    processType: result.processType,
-    fromDate: result.fromDate,
-    toDate: result.toDate,
-    triggerAll: result.triggerAll,
-    count: result.count,
-    results: result.results,
-    raw: result.raw,
+    processType: result?.result?.processType || result?.processType,
+    fromDate: result?.result?.fromDate || result?.fromDate,
+    toDate: result?.result?.toDate || result?.toDate,
+    triggerAll: result?.result?.triggerAll || result?.triggerAll,
+    createdBy: result?.result?.createdBy || result?.createdBy || "",
+    count: result?.result?.count ?? result?.count ?? 0,
+    results: Array.isArray(result?.result?.results)
+      ? result.result.results
+      : Array.isArray(result?.results)
+        ? result.results
+        : [],
+    raw: result?.result?.raw || result?.raw || null,
+    status: result?.result?.status || result?.status || "",
+    statusMode: result?.result?.statusMode || result?.statusMode || "",
+    excludeStatuses:
+      result?.result?.excludeStatuses || result?.excludeStatuses || [],
+    top: result?.result?.top ?? result?.top ?? null,
+    skip: result?.result?.skip ?? result?.skip ?? 0,
+    orderBy: result?.result?.orderBy || result?.orderBy || "CREATED_ON desc",
+    nextSkip: result?.result?.nextSkip ?? result?.nextSkip ?? 0,
   }),
 });

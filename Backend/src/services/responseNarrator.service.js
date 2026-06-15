@@ -44,12 +44,18 @@ function getSentenceCount(text) {
   return cleaned.split(/(?<=[.!?])\s+/).filter(Boolean).length;
 }
 
-function buildSecondSentence({ entityLabel, count, extracted, columns }) {
+function buildSecondSentence({ entityLabel, count, totalCount, extracted, columns }) {
   const contextText = buildContextText(extracted);
   const colsText = Array.isArray(columns) && columns.length ? columns.slice(0, 4).join(", ") : "the main result fields";
+  const visibleCount = Number.isFinite(Number(count)) ? Number(count) : 0;
+  const fullCount = Number.isFinite(Number(totalCount)) ? Number(totalCount) : visibleCount;
 
-  if (Number(count) === 0) {
+  if (visibleCount === 0) {
     return `Please try a more specific request so I can find the ${entityLabel} you need.`;
+  }
+
+  if (fullCount > visibleCount) {
+    return `It looks like a match for ${contextText}. I’m showing ${visibleCount} out of ${fullCount} records, including ${colsText}.`;
   }
 
   return `It looks like a match for ${contextText}. The main details are shown in the results, including ${colsText}.`;
@@ -77,21 +83,24 @@ function buildContextText(extracted = {}) {
   return filters.length ? filters.join(", ") : "based on the request";
 }
 
-function buildSummaryPrompt({ entityLabel, count, extracted, sample, columns }) {
+function buildSummaryPrompt({ entityLabel, count, totalCount, extracted, sample, columns }) {
   const colsText = Array.isArray(columns) && columns.length ? columns.join(", ") : "the key fields in the results";
   const sampleJson = JSON.stringify(Array.isArray(sample) ? sample.slice(0, 5) : [], null, 2);
   const contextText = buildContextText(extracted);
+  const visibleCount = Number.isFinite(Number(count)) ? Number(count) : 0;
+  const fullCount = Number.isFinite(Number(totalCount)) ? Number(totalCount) : visibleCount;
 
   return `You are a helpful SAP chatbot.
 Write exactly 2 short plain-English sentences in one paragraph.
 Keep it simple, clear, and natural.
 Do not use headings, bullets, markdown, or technical wording.
 Sentence 1 should say what was found.
-Sentence 2 should add a helpful detail about the result.
+Sentence 2 should mention how many records are being shown out of the total returned when that is relevant.
 Do not say only "Here are X ...".
 
 Entity: ${entityLabel}
-Count: ${count}
+Shown Count: ${visibleCount}
+Total Count: ${fullCount}
 Context: ${contextText}
 
 Sample rows (JSON, up to 5):
@@ -100,14 +109,20 @@ ${sampleJson}
 Return only the 2 sentences.`.trim();
 }
 
-function buildFallbackSummary({ entityLabel, count, extracted, columns }) {
+function buildFallbackSummary({ entityLabel, count, totalCount, extracted, columns }) {
   const contextText = buildContextText(extracted);
+  const visibleCount = Number.isFinite(Number(count)) ? Number(count) : 0;
+  const fullCount = Number.isFinite(Number(totalCount)) ? Number(totalCount) : visibleCount;
 
-  if (Number(count) === 0) {
+  if (visibleCount === 0) {
     return `I couldn’t find any ${entityLabel} ${contextText}. Please try a more specific request so I can narrow it down.`;
   }
 
-  return `I found ${count} ${entityLabel} ${contextText}. The main details are shown in the results below.`;
+  if (fullCount > visibleCount) {
+    return `I found ${visibleCount} ${entityLabel} ${contextText}, and I’m showing ${visibleCount} out of ${fullCount} returned records below.`;
+  }
+
+  return `I found ${visibleCount} ${entityLabel} ${contextText}. The main details are shown in the results below.`;
 }
 
 function extractTextFromGeminiResponse(data) {
@@ -124,7 +139,7 @@ function extractTextFromGeminiResponse(data) {
   return cleanString(candidate?.content?.text || data?.text || data?.response || "");
 }
 
-async function generateSummaryFromGoogleAiStudio({ entityLabel, count, extracted, sample = [], columns = [] }) {
+async function generateSummaryFromGoogleAiStudio({ entityLabel, count, totalCount, extracted, sample = [], columns = [] }) {
   const apiKey =
     process.env.GOOGLE_AI_STUDIO_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
 
@@ -134,7 +149,7 @@ async function generateSummaryFromGoogleAiStudio({ entityLabel, count, extracted
 
   const model = process.env.GEMINI_SUMMARY_MODEL || process.env.GOOGLE_AI_STUDIO_MODEL || "gemini-1.5-flash";
   const timeoutMs = Number(process.env.GEMINI_SUMMARY_TIMEOUT_MS || 1800);
-  const prompt = buildSummaryPrompt({ entityLabel, count, extracted, sample, columns });
+  const prompt = buildSummaryPrompt({ entityLabel, count, totalCount, extracted, sample, columns });
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -185,11 +200,13 @@ async function generateSummaryFromGoogleAiStudio({ entityLabel, count, extracted
   }
 }
 
-export async function generateSummaryLLM({ entityLabel, count, extracted, sample = [], columns = [] }) {
-  const fallback = buildFallbackSummary({ entityLabel, count, extracted, columns });
+export async function generateSummaryLLM({ entityLabel, count, totalCount = null, extracted, sample = [], columns = [] }) {
+  const visibleCount = Number.isFinite(Number(count)) ? Number(count) : 0;
+  const fullCount = Number.isFinite(Number(totalCount)) ? Number(totalCount) : visibleCount;
+  const fallback = buildFallbackSummary({ entityLabel, count: visibleCount, totalCount: fullCount, extracted, columns });
 
   try {
-    const out = await generateSummaryFromGoogleAiStudio({ entityLabel, count, extracted, sample, columns });
+    const out = await generateSummaryFromGoogleAiStudio({ entityLabel, count: visibleCount, totalCount: fullCount, extracted, sample, columns });
     const cleaned = String(out?.summary || "").trim();
 
     if (!cleaned) {
@@ -200,7 +217,7 @@ export async function generateSummaryLLM({ entityLabel, count, extracted, sample
       return cleaned;
     }
 
-    const secondSentence = buildSecondSentence({ entityLabel, count, extracted, columns });
+    const secondSentence = buildSecondSentence({ entityLabel, count: visibleCount, totalCount: fullCount, extracted, columns });
     return `${cleaned.replace(/[.?!]?\s*$/, ".")} ${secondSentence}`.trim();
   } catch (err) {
     console.error("Google AI Studio summary error:", err);

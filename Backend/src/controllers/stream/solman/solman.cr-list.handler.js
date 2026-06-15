@@ -350,8 +350,9 @@ export async function handleCrList(context) {
     0,
     Number(listInput.displayOffset ?? responseSkip) || 0
   );
-  const shouldBuildChart = rows.length > 0 && shouldIncludeChartForCrList(query);
+  const shouldBuildChart = rows.length > 0;
   let chart = null;
+  let totalRows = rows.length;
 
   if (shouldBuildChart) {
     const chartFromDate = result?.result?.fromDate || listInput.fromDate || "";
@@ -371,6 +372,7 @@ export async function handleCrList(context) {
 
     if (fullChartFetch?.ok !== false) {
       const chartRows = dedupeByCrNumber(fullChartFetch?.rows || []);
+      totalRows = Math.max(totalRows, chartRows.length);
 
       chart = buildStatusDistributionChart(chartRows, {
         title: "CR Status Distribution",
@@ -390,6 +392,24 @@ export async function handleCrList(context) {
       if (fullChartFetch?.truncated) {
         chart.truncated = true;
       }
+    }
+  }
+
+  if (rows.length > 0 && totalRows === rows.length) {
+    const fullRowsFetch = await step("fetchAllCrRowsForListSummary", () =>
+      fetchAllCrRowsForListChart({
+        system,
+        sapAuth,
+        listInput,
+        resolvedCreatedBy,
+        query,
+        fromDate: result?.result?.fromDate || listInput.fromDate,
+        toDate: result?.result?.toDate || listInput.toDate,
+      })
+    );
+
+    if (fullRowsFetch?.ok !== false) {
+      totalRows = Math.max(totalRows, dedupeByCrNumber(fullRowsFetch?.rows || []).length);
     }
   }
 
@@ -429,6 +449,7 @@ export async function handleCrList(context) {
         },
       },
       data: responseData,
+      suggestions: buildCrSuggestions(query, listInput.businessScope, rows),
       responseMeta: {
         ok: true,
         kind: "stream",
@@ -505,6 +526,11 @@ export async function handleCrList(context) {
         },
       },
       data: responseData,
+      suggestions: [
+        `Show ${listInput.businessScope ? `${listInput.businessScope} ` : ""}CR list this week`
+          .replace(/\s+/g, " ")
+          .trim(),
+      ],
       responseMeta: {
         ok: true,
         kind: "stream",
@@ -582,6 +608,7 @@ export async function handleCrList(context) {
           generateSummaryLLM({
             entityLabel: "change requests",
             count: rows.length,
+            totalCount: totalRows,
             extracted: {
               businessScope: listInput.businessScope,
               processType: result?.result?.processType || listInput.processType,
@@ -651,6 +678,7 @@ export async function handleCrList(context) {
       },
     },
     data: responseData,
+    suggestions: buildCrSuggestions(query, listInput.businessScope, rows),
     responseMeta: {
       ok: true,
       kind: "stream",
@@ -675,6 +703,30 @@ export async function handleCrList(context) {
     sapUser: effectiveSapUser,
     reply,
     summary,
+    extracted: {
+      system: "solman",
+      intent: "list_change_requests",
+      filters: {
+        businessScope: listInput.businessScope,
+        processType: result?.result?.processType || listInput.processType,
+        triggerAll: result?.result?.triggerAll || listInput.triggerAll,
+        fromDate: result?.result?.fromDate || listInput.fromDate,
+        toDate: result?.result?.toDate || listInput.toDate,
+        status: result?.result?.status || listInput.status,
+        statusMode: result?.result?.statusMode || listInput.statusMode,
+        excludeStatuses:
+          result?.result?.excludeStatuses || listInput.excludeStatuses || [],
+        createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+        createdByMode: listInput.createdByMode || "",
+        top: responseTop,
+        skip: responseSkip,
+        nextSkip: responseNextSkip,
+        displayOffset: responseDisplayOffset,
+        nextDisplayOffset: responseDisplayOffset + rows.length,
+        orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
+        dateText: listInput.dateText || query,
+      },
+    },
     data: responseData,
     pagination: {
       top: responseTop,

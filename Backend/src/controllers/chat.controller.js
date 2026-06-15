@@ -275,7 +275,16 @@ export async function listChatMessages(req, res) {
     const items = await ChatMessage.find(q)
       .sort({ createdAt: -1 })
       .limit(limit + 1)
-      .select({ role: 1, text: 1, summary: 1, data: 1, suggestions: 1, createdAt: 1 })
+      .select({
+        role: 1,
+        text: 1,
+        summary: 1,
+        data: 1,
+        suggestions: 1,
+        extracted: 1,
+        responseMeta: 1,
+        createdAt: 1,
+      })
       .lean();
 
     const hasMore = items.length > limit;
@@ -291,6 +300,8 @@ export async function listChatMessages(req, res) {
         summary: m.summary || null,
         data: m.data || null,
         suggestions: Array.isArray(m.suggestions) ? m.suggestions : [],
+        extracted: m.extracted || null,
+        responseMeta: m.responseMeta || null,
         createdAt: m.createdAt || null,
       })),
     });

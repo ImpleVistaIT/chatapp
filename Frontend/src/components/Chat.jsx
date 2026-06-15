@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSpeechToText } from "../hooks/useSpeechToText";
 import { sendChatMessageStream } from "../api/chatApiStream";
-import { getSolmanChangeRequestDetails } from "../api/solmanApi";
+import { getSolmanChangeRequestDetails, listSolmanChangeRequests } from "../api/solmanApi";
+import {
+  buildExportSummary,
+  buildRowsFromChartOrTable,
+  downloadChatSectionPdf,
+} from "../utils/downloadChatPdf";
 
 import Sidebar from "./Sidebar";
 import ChatWindow from "./ChatWindow";
@@ -206,7 +211,7 @@ function getCurrentConnectedSystem({ activeSession, selectedSystem, availableSys
 // Main component
 //---------------------------------------------//
 
-export default function Chat() {
+export default function Chat({ onToast = null } = {}) {
   const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
 
   const userName = (() => {
@@ -936,6 +941,10 @@ export default function Chat() {
           summary: data.summary || "",
           summaryStatus: data.summary ? "done" : "pending",
           data: data.data || null,
+          chart: data.chart || (data?.type === "status_distribution" ? data : null),
+          extracted: data.extracted || null,
+          responseMeta: data.responseMeta || null,
+          query: text,
           pagination: data.pagination || null,
         },
       ]);
@@ -1137,6 +1146,213 @@ export default function Chat() {
 
     setCopiedAtIndex(idx);
     setTimeout(() => setCopiedAtIndex(null), 1200);
+  }
+
+  function getAssistantDownloadContext(group) {
+    if (!group || !Array.isArray(group.messages) || group.messages.length === 0) {
+      return { rowMessage: null, filterMessage: null };
+    }
+
+    const messages = [...group.messages];
+
+    const withRowsOrChart = messages.find((msg) => {
+      if (!msg) return false;
+      const payloadRows = buildRowsFromChartOrTable(msg?.data);
+      const hasRows = Array.isArray(payloadRows) && payloadRows.length > 0;
+      const hasChart = Boolean(msg?.chart || msg?.data?.chart);
+      return hasRows || hasChart;
+    });
+
+    const withFilters = messages.find((msg) => {
+      if (!msg) return false;
+
+      const filters = msg?.extracted?.filters || {};
+      return Boolean(filters.fromDate && filters.toDate);
+    });
+
+    return {
+      rowMessage: withRowsOrChart || withFilters || messages[messages.length - 1] || null,
+      filterMessage: withFilters || withRowsOrChart || messages[messages.length - 1] || null,
+    };
+  }
+
+  function getAssistantMessageForDownload(group, mode = "current") {
+    const { rowMessage, filterMessage } = getAssistantDownloadContext(group);
+
+    if (mode === "entire") {
+      return filterMessage || rowMessage;
+    }
+
+    return rowMessage || filterMessage;
+  }
+
+  function normalizeSolmanRows(result, fallback = []) {
+    if (Array.isArray(result?.results)) return result.results;
+    if (Array.isArray(result?.result?.results)) return result.result.results;
+    if (Array.isArray(result?.result?.rows)) return result.result.rows;
+    if (Array.isArray(result?.rows)) return result.rows;
+    if (Array.isArray(result?.data)) return result.data;
+    if (Array.isArray(result?.result?.data)) return result.result.data;
+    if (Array.isArray(fallback)) return fallback;
+    return [];
+  }
+
+  function buildChartFromRows(rows = []) {
+    const counts = new Map();
+
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const status = String(row?.STATUS || row?.status || "Unknown").trim() || "Unknown";
+      counts.set(status, (counts.get(status) || 0) + 1);
+    }
+
+    const total = [...counts.values()].reduce((sum, value) => sum + value, 0);
+
+    return {
+      type: "status_distribution",
+      chartType: "donut",
+      title: "Status Distribution",
+      totalCRs: total,
+      data: [...counts.entries()].map(([status, count]) => ({
+        status,
+        count,
+        percentage: total > 0 ? Math.round((count / total) * 100) : 0,
+      })),
+    };
+  }
+
+  async function fetchEntireSolmanData(message, fallbackFilters = {}) {
+    const filters = {
+      ...(fallbackFilters || {}),
+      ...(message?.extracted?.filters || {}),
+    };
+    let storedActiveSystem = null;
+    try {
+      storedActiveSystem = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
+    } catch {
+      storedActiveSystem = null;
+    }
+
+    const exportSystemId = String(
+      message?.responseMeta?.systemId ||
+        message?.data?.responseMeta?.systemId ||
+        message?.data?.systemId ||
+        activeSession?.systemId ||
+        storedActiveSystem?.systemId ||
+        ""
+    ).trim();
+    const exportSapUser = String(
+      message?.responseMeta?.sapUser ||
+        message?.data?.responseMeta?.sapUser ||
+        message?.data?.sapUser ||
+        activeSession?.sapUser ||
+        storedActiveSystem?.sapUser ||
+        ""
+    ).trim();
+
+    if (!exportSystemId || !exportSapUser) {
+      throw new Error("Active SAP connection is required for full export.");
+    }
+
+    if (!filters.fromDate || !filters.toDate) {
+      throw new Error("This export needs a date range to fetch the full result set.");
+    }
+
+    const baseRequest = {
+      systemId: exportSystemId,
+      sapUser: exportSapUser,
+      processType: filters.processType || "YMHF",
+      businessScope: filters.businessScope || "",
+      fromDate: filters.fromDate,
+      toDate: filters.toDate,
+      triggerAll: filters.triggerAll || "X",
+      status: filters.status || "",
+      statusMode: filters.statusMode || "",
+      excludeStatuses: Array.isArray(filters.excludeStatuses) ? filters.excludeStatuses : [],
+      dateText: filters.dateText || "",
+      top: null,
+      createdBy: filters.createdBy || "",
+      createdByMode: filters.createdByMode || "",
+    };
+
+    if (filters.fromDate && filters.toDate) {
+      const result = await listSolmanChangeRequests(baseRequest);
+      return normalizeSolmanRows(result, message?.data);
+    }
+
+    return Array.isArray(message?.data) ? message.data : [];
+  }
+
+  function showDownloadToast(type, title, message) {
+    if (typeof onToast !== "function") return;
+    onToast({ type, title, message, duration: type === "info" ? 1200 : 2500 });
+  }
+
+  async function onDownloadAssistant({ group, mode }) {
+    const message = getAssistantMessageForDownload(group, mode);
+    const { rowMessage, filterMessage } = getAssistantDownloadContext(group);
+    if (!message) {
+      showDownloadToast("error", "Download failed", "No export data found for this response.");
+      return;
+    }
+
+    const isCurrent = mode === "current";
+    showDownloadToast(
+      "info",
+      "Preparing download",
+      isCurrent ? "Building current section PDF..." : "Fetching entire dataset for PDF..."
+    );
+
+    try {
+      const sectionRows = buildRowsFromChartOrTable(rowMessage?.data || message?.data);
+      const chartData = message?.chart || message?.data?.chart || rowMessage?.chart || rowMessage?.data?.chart || null;
+      const filters = (filterMessage?.extracted?.filters || message?.extracted?.filters || {});
+
+      if (isCurrent) {
+        downloadChatSectionPdf({
+          title: "SAP Chat Export",
+          sectionLabel: "Current section",
+          summary: rowMessage?.summary || rowMessage?.text || message?.summary || message?.text || "",
+          rows: sectionRows,
+          chartData: chartData || buildChartFromRows(sectionRows),
+          filters,
+          includeResultTable: true,
+          filename: "sap-current-section.pdf",
+        });
+        showDownloadToast("success", "Download ready", "Current section PDF has been downloaded.");
+        return;
+      }
+
+      const fullRows = await fetchEntireSolmanData(filterMessage || message, filters);
+
+      if (!Array.isArray(fullRows) || fullRows.length === 0) {
+        throw new Error("Could not fetch the entire result set for this export.");
+      }
+
+      const fullChart = chartData || buildChartFromRows(fullRows);
+      const summary = buildExportSummary({
+        summary: "",
+        totalCount: fullRows.length,
+        filters,
+      });
+
+      downloadChatSectionPdf({
+        title: "SAP Chat Export",
+        sectionLabel: "Entire data",
+        summary,
+        rows: fullRows,
+        chartData: fullChart,
+        filters,
+        filename: "sap-entire-data.pdf",
+      });
+
+      showDownloadToast(
+        "success",
+        "Download ready",
+        `Entire data PDF downloaded with ${fullRows.length} record(s).`
+      );
+    } catch (err) {
+      showDownloadToast("error", "Download failed", err?.message || "Download failed.");
+    }
   }
 
   function onMessagesScroll(e) {
@@ -1416,6 +1632,8 @@ export default function Chat() {
             onKeyDown={onKeyDown}
             onMicClick={onMicClick}
             onCopyAssistant={onCopyAssistant}
+            onDownloadAssistant={onDownloadAssistant}
+            onToast={onToast}
             startEditMessage={startEditMessage}
             cancelEdit={cancelEdit}
             applyEditLocal={applyEditLocal}

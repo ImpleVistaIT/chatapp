@@ -10,6 +10,22 @@ function isKeyValueLine(line) {
   return /.+:\s+.+/.test(line);
 }
 
+function isMetadataLine(line) {
+  const t = String(line || "").trim();
+  if (!t) return true;
+
+  return (
+    /^Found\s+\d+\s+change request\(s\)\./i.test(t) ||
+    /^Landscape:\s*/i.test(t) ||
+    /^Date Range:\s*/i.test(t) ||
+    /^Offset:\s*/i.test(t) ||
+    /^Created By:\s*/i.test(t) ||
+    /^Status Filter:\s*/i.test(t) ||
+    /^No more change requests found\.?$/i.test(t) ||
+    /^No change requests found\.?$/i.test(t)
+  );
+}
+
 // ✅ split key/value tokens from ONE-LINE pipe responses into separate "lines"
 function splitKeyValueTokens(text = "") {
   return String(text)
@@ -27,26 +43,41 @@ function normalizeFieldName(fieldName) {
 }
 
 function parseKeyValue(text) {
-  // ✅ support both newline key/value AND one-line pipe key/value
-  const rawLines = splitNonEmptyLines(text);
-  const lines =
-    rawLines.length === 1 && rawLines[0].includes("|")
-      ? splitKeyValueTokens(rawLines[0])
-      : rawLines;
+  const blocks = String(text || "")
+    .replace(/\r/g, "")
+    .split(/\n\s*\n/g)
+    .map((block) => block.trim())
+    .filter(Boolean);
 
-  const row = {};
+  const rows = [];
 
-  for (const line of lines) {
-    const idx = line.indexOf(":");
-    if (idx === -1) continue;
-    const key = normalizeFieldName(line.slice(0, idx).trim());
-    const value = line.slice(idx + 1).trim();
-    if (key) row[key] = value || "-";
+  for (const block of blocks) {
+    const row = {};
+    const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+
+    for (const line of lines) {
+      if (isMetadataLine(line)) continue;
+      const idx = line.indexOf(":");
+      if (idx === -1) continue;
+      const key = normalizeFieldName(line.slice(0, idx).trim());
+      const value = line.slice(idx + 1).trim();
+      if (key) row[key] = value || "-";
+    }
+
+    if (Object.keys(row).length > 0) {
+      rows.push(row);
+    }
   }
 
-  const columns = Object.keys(row);
-  if (columns.length >= 1) {
-    return { columns, rows: [row] };
+  if (rows.length >= 1) {
+    const columns = Array.from(
+      rows.reduce((set, row) => {
+        Object.keys(row).forEach((key) => set.add(key));
+        return set;
+      }, new Set())
+    );
+
+    return { columns, rows };
   }
   return null;
 }

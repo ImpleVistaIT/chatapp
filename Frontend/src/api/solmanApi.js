@@ -63,7 +63,11 @@ export async function listSolmanChangeRequests({
   toDate,
   triggerAll = "X",
   status = "",
+  statusMode = "",
+  excludeStatuses = [],
   dateText = "",
+  createdBy = "",
+  createdByMode = "",
   top = null,
 }) {
   const res = await authFetch(
@@ -82,7 +86,11 @@ export async function listSolmanChangeRequests({
         toDate,
         triggerAll,
         status,
+        statusMode,
+        excludeStatuses,
         dateText,
+        createdBy,
+        createdByMode,
         top,
       }),
     }

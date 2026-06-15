@@ -117,6 +117,37 @@ function buildStatusChart(chart) {
   }
 }
 
+function buildStatusChartFromRows(data) {
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  if (rows.length === 0) return null;
+
+  const counts = new Map();
+
+  for (const row of rows) {
+    const status = String(row?.STATUS || row?.status || "").trim();
+    if (!status) continue;
+    counts.set(status, (counts.get(status) || 0) + 1);
+  }
+
+  if (counts.size === 0) return null;
+
+  const totalCRs = rows.length;
+
+  return {
+    normalized: {
+      type: "status_distribution",
+      chartType: "donut",
+      title: "CR Status Distribution",
+      totalCRs,
+      data: [...counts.entries()].map(([status, count]) => ({
+        status,
+        count,
+        percentage: Math.round((count / totalCRs) * 100),
+      })),
+    },
+  };
+}
+
 export default function MessageBubble({
   role,
   text,
@@ -143,7 +174,7 @@ export default function MessageBubble({
 
   let table = buildStructuredTable(data);
   const chartSource = chart || data?.chart || data;
-  const chartView = buildStatusChart(chartSource);
+  const chartView = buildStatusChart(chartSource) || buildStatusChartFromRows(data);
 
   if (!table) {
     try {

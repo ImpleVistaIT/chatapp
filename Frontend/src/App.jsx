@@ -31,6 +31,7 @@ export default function App() {
         />
       ) : (
         <Chat
+          onToast={setToast}
           onOpenLogin={() => setShowSapLogin(true)}
         />
       )}

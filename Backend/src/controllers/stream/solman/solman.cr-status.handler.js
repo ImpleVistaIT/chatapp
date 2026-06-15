@@ -1,5 +1,6 @@
 import { listSolmanChangeRequestsByDateRange } from "../../../services/systems/solman/charm.service.js";
 import {
+  buildCrSuggestions,
   buildStatusDistributionChart,
   cleanString,
   inferCreatedByFilterFromQuery,
@@ -346,6 +347,7 @@ export async function handleCrStatusDistribution(context) {
       },
     },
     data: reply,
+    suggestions: buildCrSuggestions(query, listInput.businessScope, rows),
     responseMeta: {
       ok: true,
       kind: "chart",
@@ -364,6 +366,7 @@ export async function handleCrStatusDistribution(context) {
     systemId: effectiveSystemId,
     sapUser: effectiveSapUser,
     ...reply,
+    suggestions: buildCrSuggestions(query, listInput.businessScope, rows),
     summary,
   });
 

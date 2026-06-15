@@ -604,7 +604,7 @@ export async function handleChatStream(req, res) {
         queryIsNextPage
           ? effectivePendingAction?.query || "show cr list"
           : queryIsLandscapeOnly
-            ? effectivePendingAction?.query || "show cr list"
+            ? effectiveQuery || effectivePendingAction?.query || "show cr list"
             : effectiveQuery || effectivePendingAction?.query
       );
 
