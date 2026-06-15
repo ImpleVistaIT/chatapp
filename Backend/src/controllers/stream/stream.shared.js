@@ -241,6 +241,7 @@ export async function saveAssistantMessage({
   sapRequest = null,
   data = null,
   responseMeta = null,
+  suggestions = [],
 }) {
   return ChatMessage.create({
     owner,
@@ -252,6 +253,7 @@ export async function saveAssistantMessage({
     sapRequest,
     data,
     responseMeta,
+    suggestions: Array.isArray(suggestions) ? suggestions : [],
   });
 }
 
@@ -276,7 +278,7 @@ function formatFieldName(fieldName) {
     .join(" ");
 }
 
-export function buildGenericTableReply({ title = "Results", rows = [], fields = [] }) {
+export function buildGenericTableReply({ title = "Results", rows = [], fields = [], startIndex = 1 }) {
   if (!Array.isArray(rows) || rows.length === 0) return "No results found.";
 
   const first = rows[0] && typeof rows[0] === "object" ? rows[0] : {};
@@ -293,7 +295,8 @@ export function buildGenericTableReply({ title = "Results", rows = [], fields = 
   const cols = Array.from(new Set([...mandatoryIds, ...baseOrCommon]));
 
   const headerRow = ["#", ...cols.map((c) => formatFieldName(c))].join(" | ");
-  const dataRows = rows.map((r, i) => [i + 1, ...cols.map((k) => na(r?.[k]))].join(" | "));
+  const baseIndex = Number.isFinite(Number(startIndex)) ? Math.max(1, Number(startIndex)) : 1;
+  const dataRows = rows.map((r, i) => [baseIndex + i, ...cols.map((k) => na(r?.[k]))].join(" | "));
 
   return `${title} (returned ${rows.length})\n\n${headerRow}\n${dataRows.join("\n")}`;
 }

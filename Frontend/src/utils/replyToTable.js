@@ -34,18 +34,19 @@ function parseKeyValue(text) {
       ? splitKeyValueTokens(rawLines[0])
       : rawLines;
 
-  const rows = [];
+  const row = {};
 
   for (const line of lines) {
     const idx = line.indexOf(":");
     if (idx === -1) continue;
     const key = normalizeFieldName(line.slice(0, idx).trim());
     const value = line.slice(idx + 1).trim();
-    if (key && value) rows.push({ Field: key, Value: value });
+    if (key) row[key] = value || "-";
   }
 
-  if (rows.length >= 2) {
-    return { columns: ["Field", "Value"], rows };
+  const columns = Object.keys(row);
+  if (columns.length >= 1) {
+    return { columns, rows: [row] };
   }
   return null;
 }
@@ -233,27 +234,22 @@ export function replyToTable(replyText) {
     const parts = splitKeyValueTokens(lines[0]);
     const kvParts = parts.filter(isKeyValueLine);
 
-    if (kvParts.length >= 2) {
-      const rows = kvParts
-        .map((p) => {
-          const idx = p.indexOf(":");
-          const key = normalizeFieldName(
-            p.slice(0, idx).trim()
-          );
+    if (kvParts.length >= 1) {
+      const row = {};
 
-          const value =
-            p.slice(idx + 1).trim() || "-";
+      for (const p of kvParts) {
+        const idx = p.indexOf(":");
+        const key = normalizeFieldName(p.slice(0, idx).trim());
+        const value = p.slice(idx + 1).trim() || "-";
 
-          return key
-            ? { Field: key, Value: value }
-            : null;
-        })
-        .filter(Boolean);
+        if (key) row[key] = value;
+      }
 
-      if (rows.length >= 2) {
+      const columns = Object.keys(row);
+      if (columns.length >= 1) {
         return {
-          columns: ["Field", "Value"],
-          rows,
+          columns,
+          rows: [row],
         };
       }
     }

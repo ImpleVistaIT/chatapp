@@ -5,14 +5,6 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
   const safeColumns = Array.isArray(columns) ? columns : [];
   const safeRows = Array.isArray(rows) ? rows : [];
 
-  const isSingleRow = safeRows.length === 1;
-
-  const isSingleRecordVertical =
-    !forceGrid &&
-    !isFallback &&
-    isSingleRow &&
-    safeColumns.length > 2;
-
   const labelMap = {
     "#": "Serial No",
     PoNo: "PO Number",
@@ -27,44 +19,6 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
     NetPrice: "Net Price",
     CurKey: "Currency",
   };
-
-  if (isSingleRecordVertical) {
-    const row = safeRows[0];
-
-    return (
-      <div className="w-full max-w-full overflow-x-auto">
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="bg-green-300 text-black">
-              <th className="text-left px-3 py-2 border border-green-200">
-                Fields
-              </th>
-              <th className="text-left px-3 py-2 border border-green-200">
-                Values
-              </th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {safeColumns.map((col, idx) => (
-              <tr
-                key={idx}
-                className="bg-green-100 text-green-800 border-t border-green-200"
-              >
-                <td className="px-3 py-2 font-semibold w-[45%] border border-green-200">
-                  {labelMap[col] || col}
-                </td>
-
-                <td className="px-3 py-2 break-words border border-green-200">
-                  {String(row?.[idx] ?? row?.[col] ?? "")}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
 
   return (
     <div className="w-full p-1">

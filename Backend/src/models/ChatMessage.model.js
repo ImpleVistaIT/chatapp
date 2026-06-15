@@ -14,6 +14,7 @@ const ChatMessageSchema = new mongoose.Schema(
     extracted: { type: Object, default: null },
     sapRequest: { type: String, default: "" },
     responseMeta: { type: Object, default: null },
+    suggestions: { type: [mongoose.Schema.Types.Mixed], default: [] },
 
     // ✅ store last returned rows for follow-up questions
     data: { type: mongoose.Schema.Types.Mixed, default: null },

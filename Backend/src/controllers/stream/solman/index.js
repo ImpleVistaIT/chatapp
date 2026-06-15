@@ -17,6 +17,7 @@ import { handleCreateCr } from "./solman.create-cr.handler.js";
 import { handleCrDetails } from "./solman.cr-details.handler.js";
 import { handleCrList } from "./solman.cr-list.handler.js";
 import { handleCrCreatedBy } from "./solman.cr-created-by.handler.js";
+import { handleCrStatusDistribution } from "./solman.cr-status.handler.js";
 import { handleDependencyCheck } from "./solman.dependency-check.handler.js";
 import { handleTransportDependency } from "./solman.transport-dependency.handler.js";
 import { handleTransportList } from "./solman.transport-list.handler.js";
@@ -101,6 +102,36 @@ function isCrCreatedByIntent(classified, query = "") {
       /\bmy change request\b/.test(q) ||
       /\bmy change requests\b/.test(q) ||
       /\bcreated by\s+[a-z0-9._-]+\b/i.test(q))
+  );
+}
+
+function isCrStatusDistributionIntent(classified, query = "") {
+  const intent = cleanString(classified?.intent).toLowerCase();
+  const q = normalizeIntentQuery(query);
+
+  if (
+    intent === "cr_status_distribution" ||
+    intent === "status_distribution" ||
+    intent === "cr_status_chart" ||
+    intent === "cr_status_analytics"
+  ) {
+    return true;
+  }
+
+  return (
+    /\bstatus distribution\b/.test(q) ||
+    /\bstatus breakdown\b/.test(q) ||
+    /\bstatus analytics\b/.test(q) ||
+    /\bstatus chart\b/.test(q) ||
+    /\bpercentage distribution\b/.test(q) ||
+    /\bpie chart\b/.test(q) ||
+    /\bdonut chart\b/.test(q) ||
+    /\bgrouped by status\b/.test(q) ||
+    /\bgroup by status\b/.test(q) ||
+    /\bcr statuses\b/.test(q) ||
+    /\bcr status distribution\b/.test(q) ||
+    /\bshow crs grouped by status\b/.test(q) ||
+    /\bdisplay status percentage distribution\b/.test(q)
   );
 }
 
@@ -219,6 +250,10 @@ export async function handleSolmanChatStream({
 
   if (isCrCreatedByIntent(classified, query)) {
     return handleCrCreatedBy(context);
+  }
+
+  if (isCrStatusDistributionIntent(classified, query)) {
+    return handleCrStatusDistribution(context);
   }
 
   if (classified?.intent === "get_change_request_details") {

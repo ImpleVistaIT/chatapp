@@ -102,9 +102,11 @@ export function extractDateFilters(message, field = "PoDocDate") {
     /\b(yesterday|today|last\s+week|previous\s+week|last\s+month|previous\s+month|last\s+year|previous\s+year)\b/.test(
       m
     );
+  const relativeDaysMatch = m.match(/\b(last|past|previous)\s+(\d{1,3})\s+days?\b/);
+  const hasRelativeDays = Boolean(relativeDaysMatch);
   const hasDateWords = /\b(created|create|creation|crtdate|crtd|date|dated|document\s+date|po\s+date)\b/.test(m);
 
-  if (!(hasDateWords || hasExplicitIsoDate || hasSlashDate || hasYearOnly || hasMonthName || hasRelative)) {
+  if (!(hasDateWords || hasExplicitIsoDate || hasSlashDate || hasYearOnly || hasMonthName || hasRelative || hasRelativeDays)) {
     return [];
   }
 
@@ -182,6 +184,16 @@ export function extractDateFilters(message, field = "PoDocDate") {
   if (/\blast\s+week\b/.test(m) || /\bprevious\s+week\b/.test(m)) return range(addDaysLocal(today, -7), today);
   if (/\blast\s+month\b/.test(m) || /\bprevious\s+month\b/.test(m)) return range(addDaysLocal(today, -30), today);
   if (/\blast\s+year\b/.test(m) || /\bprevious\s+year\b/.test(m)) return range(addDaysLocal(today, -365), today);
+
+  if (relativeDaysMatch) {
+    const dayCount = Number(relativeDaysMatch[2]);
+    if (Number.isFinite(dayCount) && dayCount > 0) {
+      const capped = Math.min(dayCount, 365);
+      const start = addDaysLocal(today, -(capped - 1));
+      const endExclusive = addDaysLocal(today, 1);
+      return range(start, endExclusive);
+    }
+  }
 
   const tokens = tokenize(m);
   const monthToken = tokens.find((t) => monthNameToIndex0(t) != null);

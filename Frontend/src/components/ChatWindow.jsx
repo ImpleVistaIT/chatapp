@@ -579,7 +579,7 @@ const isConnected = useMemo(() => {
                     role: "assistant",
                     text: "Hi, Welcome to ImpleVista AI. How may I assist you?",
                     suggestions: [
-                      "Show latest purchase orders",
+                      "show cr status",
                       "Show PO created in January 2026",
                       "Show details of PO 4500001933",
                     ],

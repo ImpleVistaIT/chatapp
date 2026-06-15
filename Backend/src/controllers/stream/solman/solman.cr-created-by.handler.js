@@ -8,6 +8,7 @@ import {
   pickCrListEntities,
   toCrDetailsArray,
 } from "./solman.shared.js";
+import { generateSummaryLLM } from "../../../services/responseNarrator.service.js";
 import { step } from "../stream.shared.js";
 
 function resolveCurrentSolmanUsername(context) {
@@ -364,7 +365,22 @@ export async function handleCrCreatedBy(context) {
 
   const summaryMessage =
     rows.length > 0
-      ? `Fetched ${rows.length} change request(s).`
+      ? await step("generateSummaryLLM", () =>
+          generateSummaryLLM({
+            entityLabel: "change requests",
+            count: rows.length,
+            extracted: {
+              businessScope: listInput.businessScope,
+              processType: result?.result?.processType || listInput.processType,
+              createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+              status: result?.result?.status || listInput.status,
+              dateFrom: result?.result?.fromDate || listInput.fromDate,
+              dateTo: result?.result?.toDate || listInput.toDate,
+            },
+            sample: rows.slice(0, 5),
+            columns: Object.keys(rows[0] || {}).slice(0, 8),
+          })
+        )
       : "No change requests found.";
 
   const persistedPendingAction = {

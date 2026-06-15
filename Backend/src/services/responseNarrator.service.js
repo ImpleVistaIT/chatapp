@@ -1,10 +1,29 @@
+function cleanString(value) {
+  return String(value || "").trim();
+}
+
+function formatFriendlyDate(value) {
+  const s = cleanString(value);
+  if (!s) return "";
+
+  const compact = s.replace(/[^0-9]/g, "");
+  if (/^\d{8}$/.test(compact)) {
+    return `${compact.slice(0, 4)}/${compact.slice(4, 6)}/${compact.slice(6, 8)}`;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return s.replaceAll("-", "/");
+  }
+
+  return s;
+}
+
 function sanitizeSummary(out) {
   let s = String(out || "").trim();
   if (!s) return "";
 
-  const badLine = /(you are a strict sap assistant|absolute rules:|your task:|format:|example:|now answer:|now return only|sentence 1:|sentence 2:)/i;
+  const badLine = /(you are a strict sap assistant|do not use headings|do not invent fields|sentence 1:|sentence 2:|return only the 2 sentences)/i;
 
-  // remove instruction/prompt echo lines
   s = s
     .split("\n")
     .map((line) => line.trim())
@@ -15,68 +34,176 @@ function sanitizeSummary(out) {
 
   if (!s) return "";
 
-  // keep only 2 sentences max
   const sentences = s.split(/(?<=[.!?])\s+/).filter(Boolean);
   return sentences.slice(0, 2).join(" ").trim();
 }
 
-export async function generateSummaryLLM({ entityLabel, count, extracted, sample = [], columns = [] }) {
+function getSentenceCount(text) {
+  const cleaned = String(text || "").trim();
+  if (!cleaned) return 0;
+  return cleaned.split(/(?<=[.!?])\s+/).filter(Boolean).length;
+}
+
+function buildSecondSentence({ entityLabel, count, extracted, columns }) {
+  const contextText = buildContextText(extracted);
+  const colsText = Array.isArray(columns) && columns.length ? columns.slice(0, 4).join(", ") : "the main result fields";
+
+  if (Number(count) === 0) {
+    return `Please try a more specific request so I can find the ${entityLabel} you need.`;
+  }
+
+  return `It looks like a match for ${contextText}. The main details are shown in the results, including ${colsText}.`;
+}
+
+function buildContextText(extracted = {}) {
   const filters = [];
 
-  if (extracted?.docNumber) filters.push(`for document number ${extracted.docNumber}`);
-  if (extracted?.dateFrom) filters.push(`from ${extracted.dateFrom}`);
-  if (extracted?.dateTo) filters.push(`to ${extracted.dateTo}`);
+  const businessScope = cleanString(extracted?.businessScope || extracted?.scope || extracted?.region);
+  const processType = cleanString(extracted?.processType || extracted?.PROCESS_TYPE);
+  const createdBy = cleanString(extracted?.createdBy || extracted?.created_by || extracted?.UserCreated);
+  const status = cleanString(extracted?.status || extracted?.STATUS);
+  const fromDate = formatFriendlyDate(extracted?.dateFrom || extracted?.fromDate || extracted?.date_start);
+  const toDate = formatFriendlyDate(extracted?.dateTo || extracted?.toDate || extracted?.date_end);
+  const docNumber = cleanString(extracted?.docNumber || extracted?.PurchaseOrder || extracted?.objectId);
 
-  const filterText = filters.length ? filters.join(", ") : "based on your request";
+  if (businessScope) filters.push(`scope ${businessScope}`);
+  if (processType) filters.push(`process type ${processType}`);
+  if (createdBy) filters.push(`created by ${createdBy}`);
+  if (status) filters.push(`status ${status}`);
+  if (fromDate) filters.push(`from ${fromDate}`);
+  if (toDate) filters.push(`to ${toDate}`);
+  if (docNumber) filters.push(`document ${docNumber}`);
 
-  const colsText =
-    Array.isArray(columns) && columns.length ? columns.join(", ") : "(use only fields present in the sample)";
+  return filters.length ? filters.join(", ") : "based on the request";
+}
 
+function buildSummaryPrompt({ entityLabel, count, extracted, sample, columns }) {
+  const colsText = Array.isArray(columns) && columns.length ? columns.join(", ") : "the key fields in the results";
   const sampleJson = JSON.stringify(Array.isArray(sample) ? sample.slice(0, 5) : [], null, 2);
+  const contextText = buildContextText(extracted);
 
-  const prompt = `
-You are a strict SAP assistant.
-Return ONLY 2 professional sentences. No headings, no bullets, no extra text.
-
-Sentence 1: State what was retrieved (use Entity + Count + Context).
-Sentence 2: State what key fields are included (use ONLY these columns: ${colsText}). Do not invent fields.
+  return `You are a helpful SAP chatbot.
+Write exactly 2 short plain-English sentences in one paragraph.
+Keep it simple, clear, and natural.
+Do not use headings, bullets, markdown, or technical wording.
+Sentence 1 should say what was found.
+Sentence 2 should add a helpful detail about the result.
+Do not say only "Here are X ...".
 
 Entity: ${entityLabel}
 Count: ${count}
-Context: ${filterText}
+Context: ${contextText}
 
 Sample rows (JSON, up to 5):
 ${sampleJson}
 
-Now answer:
-`.trim();
+Return only the 2 sentences.`.trim();
+}
 
-  const fallback =
-    `Here are the latest ${count} ${entityLabel} ${filterText}. ` +
-    `These include the key fields shown in the results (${colsText}).`;
+function buildFallbackSummary({ entityLabel, count, extracted, columns }) {
+  const contextText = buildContextText(extracted);
+
+  if (Number(count) === 0) {
+    return `I couldn’t find any ${entityLabel} ${contextText}. Please try a more specific request so I can narrow it down.`;
+  }
+
+  return `I found ${count} ${entityLabel} ${contextText}. The main details are shown in the results below.`;
+}
+
+function extractTextFromGeminiResponse(data) {
+  const candidate = data?.candidates?.[0];
+  const parts = candidate?.content?.parts;
+
+  if (Array.isArray(parts)) {
+    return parts
+      .map((part) => cleanString(part?.text))
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  return cleanString(candidate?.content?.text || data?.text || data?.response || "");
+}
+
+async function generateSummaryFromGoogleAiStudio({ entityLabel, count, extracted, sample = [], columns = [] }) {
+  const apiKey =
+    process.env.GOOGLE_AI_STUDIO_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
+
+  if (!apiKey) {
+    return { ok: false, summary: "", reason: "missing_api_key" };
+  }
+
+  const model = process.env.GEMINI_SUMMARY_MODEL || process.env.GOOGLE_AI_STUDIO_MODEL || "gemini-1.5-flash";
+  const timeoutMs = Number(process.env.GEMINI_SUMMARY_TIMEOUT_MS || 1800);
+  const prompt = buildSummaryPrompt({ entityLabel, count, extracted, sample, columns });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(process.env.OLLAMA_URL || "http://localhost:11434/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: process.env.OLLAMA_SUMMARY_MODEL || "tinyllama",
-        prompt,
-        stream: false,
-        options: {
-          num_predict: 60,
-          temperature: 0.2,
-          top_p: 0.9,
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      }),
-    });
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            topP: 0.9,
+            maxOutputTokens: 96,
+          },
+        }),
+      }
+    );
 
-    const data = await res.json();
-    const cleaned = sanitizeSummary(data?.response);
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      return {
+        ok: false,
+        summary: "",
+        reason: data?.error?.message || `GEMINI_HTTP_${res.status}`,
+      };
+    }
 
-    return cleaned || fallback;
+    const cleaned = sanitizeSummary(extractTextFromGeminiResponse(data));
+    if (!cleaned) {
+      return { ok: false, summary: "", reason: "empty_response" };
+    }
+
+    return { ok: true, summary: cleaned, reason: null };
   } catch (err) {
-    console.error("LLM summary error:", err);
+    return {
+      ok: false,
+      summary: "",
+      reason: err?.name === "AbortError" ? "timeout" : err?.message || String(err),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function generateSummaryLLM({ entityLabel, count, extracted, sample = [], columns = [] }) {
+  const fallback = buildFallbackSummary({ entityLabel, count, extracted, columns });
+
+  try {
+    const out = await generateSummaryFromGoogleAiStudio({ entityLabel, count, extracted, sample, columns });
+    const cleaned = String(out?.summary || "").trim();
+
+    if (!cleaned) {
+      return fallback;
+    }
+
+    if (getSentenceCount(cleaned) >= 2) {
+      return cleaned;
+    }
+
+    const secondSentence = buildSecondSentence({ entityLabel, count, extracted, columns });
+    return `${cleaned.replace(/[.?!]?\s*$/, ".")} ${secondSentence}`.trim();
+  } catch (err) {
+    console.error("Google AI Studio summary error:", err);
     return fallback;
   }
 }

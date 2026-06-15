@@ -66,6 +66,26 @@ export const ROUTING_INTENT_REGISTRY = {
         entityHints: ["fromDate", "toDate", "processType", "triggerAll"],
         executor: "solman.charm.listChangeRequests",
       },
+
+      cr_status_distribution: {
+        label: "CR status distribution",
+        action: "execute_api",
+        requiredInputs: [],
+        entityHints: [
+          "processType",
+          "fromDate",
+          "toDate",
+          "businessScope",
+          "createdBy",
+          "createdByMode",
+          "status",
+          "statusMode",
+          "excludeStatuses",
+          "triggerAll",
+          "dateText",
+        ],
+        executor: "solman.charm.crStatusDistribution",
+      },
     },
 
     transport: {

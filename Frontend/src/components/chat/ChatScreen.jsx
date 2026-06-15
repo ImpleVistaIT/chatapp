@@ -228,7 +228,7 @@ export default function ChatScreen({
                 <div key={idx} className="group">
                   {isUser && !isEditing && (
                     <div className="flex flex-col items-end">
-                      <MessageBubble role={m.role} text={m.text} />
+                      <MessageBubble role={m.role} text={m.text} summary={m.summary} />
 
                       <div className="mt-1 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity pr-2">
                         <button
@@ -312,6 +312,7 @@ export default function ChatScreen({
                             <MessageBubble
                               role={msg?.role}
                               text={msg?.text}
+                              summary={msg?.summary}
                               data={msg?.data}
                               suggestions={msg?.suggestions}
                               showAvatar={subIdx === 0}

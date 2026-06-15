@@ -9,6 +9,7 @@ import {
   extractSkip,
   extractCount,
 } from "../filters/sortAndLimit.js";
+import { normalizePromptWithLlm } from "../routing/promptNormalization.service.js";
 
 import { FIELD_BUNDLES } from "./fieldBundles.js";
 import { INTENT_RULES } from "./intentRules.js";
@@ -41,11 +42,92 @@ function safeJsonFromText(text) {
 }
 
 function normalizeText(s) {
-  return String(s || "")
+  const text = String(s || "")
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+  if (!text) return text;
+
+  // Lightweight typo normalization for common action verbs in PO prompts.
+  const typoMap = new Map([
+    ["shew", "show"],
+    ["shwo", "show"],
+    ["sho", "show"],
+    ["lsit", "list"],
+    ["purhcase", "purchase"],
+    ["puchase", "purchase"],
+    ["orde", "order"],
+    ["ordr", "order"],
+  ]);
+
+  return text
+    .split(" ")
+    .map((t) => typoMap.get(t) || t)
+    .join(" ");
+}
+
+const PO_SIGNAL_REGEX =
+  /\b(po|pos|purchase\s*order|purchase\s*orders|document|documents|vendor|supplier|material|item|line\s*item|created|creation|date|month|year|today|yesterday|last\s+week|last\s+month|last\s+year|top|skip|offset|count|order\s+by)\b/i;
+
+const MONTH_TOKEN_REGEX =
+  /\b(jan|january|feb|february|febaury|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b/i;
+
+const USERNAME_STOPWORDS = new Set([
+  "date",
+  "dates",
+  "month",
+  "months",
+  "year",
+  "years",
+  "today",
+  "yesterday",
+  "week",
+  "latest",
+  "recent",
+  "asc",
+  "desc",
+  "ascending",
+  "descending",
+  "price",
+  "amount",
+  "vendor",
+  "supplier",
+  "count",
+  "top",
+  "skip",
+  "offset",
+  "order",
+]);
+
+export function hasPoQuerySignals(message) {
+  const q = String(message || "").trim();
+  if (!q) return false;
+  if (PO_SIGNAL_REGEX.test(q)) return true;
+  if (/\b(shew|shwo|sho)\s+po\b/i.test(q)) return true;
+  if (MONTH_TOKEN_REGEX.test(q)) return true;
+  if (/\b(19\d{2}|20\d{2})\b/.test(q)) return true;
+  if (/\b\d{8,12}\b/.test(q)) return true;
+  return false;
+}
+
+export function hasStructuredPoRequest(extracted) {
+  const filters = Array.isArray(extracted?.filters) ? extracted.filters : [];
+  const orderBy = Array.isArray(extracted?.orderBy) ? extracted.orderBy : [];
+  const hasLimit = Number.isFinite(Number(extracted?.limit)) && Number(extracted?.limit) > 0;
+  const hasSkip = Number.isFinite(Number(extracted?.skip)) && Number(extracted?.skip) > 0;
+
+  return Boolean(
+    extracted?.docNumber ||
+      extracted?.docItem ||
+      extracted?.listMode ||
+      extracted?.count === true ||
+      hasLimit ||
+      hasSkip ||
+      filters.length > 0 ||
+      orderBy.length > 0
+  );
 }
 
 function singularizeToken(t) {
@@ -358,6 +440,94 @@ async function callExtractorLLM({ message, allowedFields }) {
   }
 }
 
+function buildPoStructuredExtractionPrompt({ message, allowedFields, fieldLabels }) {
+  return `
+You are a strict SAP Purchase Order prompt interpreter.
+
+Return ONLY JSON with this exact shape:
+{
+  "normalizedQuery": "string",
+  "shouldReject": false,
+  "confidence": 0.0,
+  "reason": "string",
+  "fields": [],
+  "docNumber": null,
+  "docItem": null,
+  "filters": [],
+  "orderBy": [],
+  "limit": null,
+  "skip": null,
+  "count": false,
+  "listMode": null
+}
+
+Rules:
+- Keep business meaning unchanged.
+- Fix spelling mistakes while preserving IDs and usernames.
+- If the prompt is gibberish, set shouldReject=true.
+- Only use fields from the allowed list below.
+- If the user says "created by <user>", map it to a filter:
+  {"field":"UserCreated","op":"eq","type":"string","value":"<user>"}
+- If the user says last/today/month/week/day ranges, map date filters onto the best date field.
+- If the user asks for latest/recent PO list, set listMode to "latest_po" and orderBy to CrtDate desc.
+- If no explicit limit is mentioned for list queries, default limit to 10.
+- confidence must be between 0 and 1.
+
+Allowed fields:
+${JSON.stringify(allowedFields)}
+
+Field labels:
+${JSON.stringify(fieldLabels || {})}
+
+User message:
+${JSON.stringify(message)}
+`.trim();
+}
+
+async function callPoStructuredExtractorLLM({ message, allowedFields, fieldLabels }) {
+  const url = process.env.OLLAMA_URL || "http://localhost:11434/api/generate";
+  const model = process.env.OLLAMA_MODEL || "llama3:latest";
+  const timeoutMs = Number(process.env.LLM_TIMEOUT_MS || 8000);
+
+  const prompt = buildPoStructuredExtractionPrompt({ message, allowedFields, fieldLabels });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const f = await getFetch();
+
+    const resp = await f(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        options: {
+          temperature: 0,
+          num_predict: 180,
+          stop: ["}\n", "}\r\n", "}"],
+        },
+      }),
+    });
+
+    if (!resp.ok) return null;
+
+    const json = await resp.json();
+    const parsed = safeJsonFromText(json?.response);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    return parsed;
+  } catch (e) {
+    if (e?.name === "AbortError") return null;
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function pickPoDateField(message, allowedFields) {
   const q = String(message || "").toLowerCase();
   const set = new Set((allowedFields || []).map((f) => String(f).toLowerCase()));
@@ -391,16 +561,35 @@ function extractUserCreatedFilters(message, allowedFields) {
   const allowedSet = new Set((allowedFields || []).map((f) => String(f).toLowerCase()));
   if (!allowedSet.has("usercreated")) return [];
 
-  const m =
+  const directMatch =
     text.match(/\bcreated\s*by\s*[:=]?\s*([A-Za-z0-9_@.\-]+)\b/i) ||
-    text.match(/\bcreatedby\s*[:=]?\s*([A-Za-z0-9_@.\-]+)\b/i);
+    text.match(/\bcreatedby\s*[:=]?\s*([A-Za-z0-9_@.\-]+)\b/i) ||
+    text.match(/\b(?:user(?:name)?|user\s*id|userid|sap\s*user)\s*[:=]?\s*([A-Za-z0-9_@.\-]+)\b/i);
 
-  if (!m?.[1]) return [];
+  let user = directMatch?.[1] ? String(directMatch[1]).trim() : "";
 
-  const user = String(m[1]).trim();
+  if (!user) {
+    const byRegex = /\bby\s+([A-Za-z0-9_@.\-]+)\b/gi;
+    const byMatches = [...text.matchAll(byRegex)];
+    const hasCreationContext =
+      /\b(created|creation|created\s+on|created\s+in|created\s+during)\b/i.test(text) ||
+      MONTH_TOKEN_REGEX.test(text) ||
+      /\b(19\d{2}|20\d{2})\b/.test(text);
+
+    if (hasCreationContext && byMatches.length > 0) {
+      for (let i = byMatches.length - 1; i >= 0; i--) {
+        const candidate = String(byMatches[i][1] || "").trim();
+        if (!candidate) continue;
+        if (USERNAME_STOPWORDS.has(candidate.toLowerCase())) continue;
+        user = candidate;
+        break;
+      }
+    }
+  }
+
   if (!user) return [];
 
-  if (["me", "my", "user", "someone"].includes(q.split(" ").pop())) {
+  if (["me", "my", "myself", "user", "someone"].includes(q.split(" ").pop())) {
     // optional: resolve current sap user later
   }
 
@@ -458,6 +647,14 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
     : [];
 
   const intent = detectIntent(truncated);
+  const hasPoMention = /\b(po|purchase\s*order[s]?)\b/i.test(truncated);
+  const needsStructuredPoFallback =
+    hasPoMention &&
+    !out.docNumber &&
+    !out.docItem &&
+    out.filters.length === 0 &&
+    out.orderBy.length === 0 &&
+    !intent;
 
   if (intent && !out.docNumber) {
     out.listMode = intent.listMode || null;
@@ -468,6 +665,21 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
 
     if (out.limit == null && Number.isFinite(Number(intent.defaultLimit))) {
       out.limit = Number(intent.defaultLimit);
+    }
+  }
+
+  if (!intent && hasPoMention && !out.docNumber && !out.docItem) {
+    const poListDefaults = ["CrtDate", "UserCreated", "SuppAcoutNo", "NetPrice", "CurKey"];
+    const allowedSet = new Set(allowedFields.map((f) => String(f).toLowerCase()));
+    out.listMode = "latest_po";
+    if (!Array.isArray(out.orderBy) || out.orderBy.length === 0) {
+      out.orderBy = [{ field: "CrtDate", dir: "desc" }];
+    }
+    if (out.limit == null) {
+      out.limit = 10;
+    }
+    if (!Array.isArray(out.fields) || out.fields.length === 0) {
+      out.fields = poListDefaults.filter((f) => allowedSet.has(String(f).toLowerCase()));
     }
   }
 
@@ -513,6 +725,101 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
     if (detailDefaults.length > 0) {
       out.fields = detailDefaults;
       return out;
+    }
+  }
+
+  if (needsStructuredPoFallback) {
+    const normalizedPrompt = await normalizePromptWithLlm({ query: truncated });
+    const structuredMessage =
+      String(normalizedPrompt?.normalizedQuery || "").trim() || truncated;
+
+    const parsed = await callPoStructuredExtractorLLM({
+      message: structuredMessage,
+      allowedFields,
+      fieldLabels,
+    });
+
+    if (parsed && typeof parsed === "object") {
+      const parsedConfidence = Number(parsed.confidence || 0);
+      const parsedReject = parsed.shouldReject === true;
+
+      if (!parsedReject && parsedConfidence >= 0.35) {
+        const allowedMap = new Map(allowedFields.map((f) => [String(f).toLowerCase(), f]));
+
+        const parsedFields = Array.isArray(parsed.fields) ? parsed.fields : [];
+        const llmFields = parsedFields
+          .map((f) => allowedMap.get(String(f).toLowerCase()))
+          .filter(Boolean);
+        if (llmFields.length > 0) out.fields = llmFields;
+
+        const parsedDocNumber =
+          (typeof parsed.docNumber === "string" && parsed.docNumber.trim()
+            ? parsed.docNumber.trim()
+            : null) ||
+          (typeof parsed.poNumber === "string" && parsed.poNumber.trim()
+            ? parsed.poNumber.trim()
+            : null);
+        if (parsedDocNumber) out.docNumber = parsedDocNumber;
+
+        const parsedItem = parsed.docItem ?? parsed.poItem ?? null;
+        out.docItem = normalizePoItem(parsedItem) || out.docItem;
+
+        const parsedFilters = Array.isArray(parsed.filters) ? parsed.filters : [];
+        if (parsedFilters.length > 0) {
+          out.filters = parsedFilters
+            .map((f) => {
+              if (!f || typeof f !== "object") return null;
+              const field = String(f.field || "").trim();
+              const op = String(f.op || "").trim().toLowerCase();
+              const type = String(f.type || "string").trim().toLowerCase();
+              const value = f.value;
+              if (!field || value == null) return null;
+              if (!["eq", "ne", "gt", "ge", "lt", "le"].includes(op)) return null;
+              if (!["string", "number", "boolean", "datetime"].includes(type)) return null;
+
+              const normalizedField =
+                allowedMap.get(field.toLowerCase()) ||
+                (field.toLowerCase() === "usercreated" ? "UserCreated" : null);
+              if (!normalizedField) return null;
+
+              return { field: normalizedField, op, type, value };
+            })
+            .filter(Boolean);
+        }
+
+        const parsedOrderBy = Array.isArray(parsed.orderBy) ? parsed.orderBy : [];
+        if (parsedOrderBy.length > 0) {
+          out.orderBy = parsedOrderBy
+            .map((o) => {
+              if (!o || typeof o !== "object") return null;
+              const field = String(o.field || "").trim();
+              if (!field) return null;
+
+              const normalizedField =
+                allowedMap.get(field.toLowerCase()) ||
+                (field.toLowerCase() === "crtdate" ? "CrtDate" : null);
+              if (!normalizedField) return null;
+
+              const dir = String(o.dir || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+              return { field: normalizedField, dir };
+            })
+            .filter(Boolean);
+        }
+
+        if (parsed.listMode) out.listMode = String(parsed.listMode).trim() || out.listMode;
+        if (Number.isFinite(Number(parsed.limit))) out.limit = Number(parsed.limit);
+        if (Number.isFinite(Number(parsed.skip))) out.skip = Number(parsed.skip);
+        if (parsed.count === true) out.count = true;
+
+        if (out.docNumber && (!out.fields || out.fields.length === 0)) {
+          const detailDefaults = extractFieldsByBundles("details", allowedFields);
+          if (detailDefaults.length > 0) out.fields = detailDefaults;
+        }
+
+        if (out.filters.length > 0 || out.docNumber || out.docItem || out.orderBy.length > 0) {
+          return out;
+        }
+      }
     }
   }
 

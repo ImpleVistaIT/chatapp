@@ -1,5 +1,14 @@
 import ReplyTable from "./ReplyTable";
 import { replyToTable } from "../utils/replyToTable";
+import {
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+} from "recharts";
+import { normalizeSolmanStatusChart } from "../utils/solmanChart.js";
 
 // =========================
 // AVATAR
@@ -95,10 +104,25 @@ function buildStructuredTable(data) {
   };
 }
 
+function buildStatusChart(chart) {
+  try {
+    const normalized = normalizeSolmanStatusChart(chart);
+
+    if (!normalized) return null;
+
+    return { normalized };
+  } catch (e) {
+    console.error("Chart parse error:", e);
+    return { error: true };
+  }
+}
+
 export default function MessageBubble({
   role,
   text,
+  summary,
   data,
+  chart = null,
   suggestions,
   onSuggestionClick,
   showAvatar = true,
@@ -118,6 +142,8 @@ export default function MessageBubble({
   const formattedText = formatText(text);
 
   let table = buildStructuredTable(data);
+  const chartSource = chart || data?.chart || data;
+  const chartView = buildStatusChart(chartSource);
 
   if (!table) {
     try {
@@ -138,12 +164,19 @@ export default function MessageBubble({
     totalRows > cappedTo;
 
   const safeSuggestions = Array.isArray(suggestions) ? suggestions : [];
+  const safeSummary = String(summary || "").trim();
 
   return (
     <div className="flex items-start justify-start gap-3 w-full">
       <Avatar role={role} showAvatar={showAvatar} />
 
-      <div className="max-w-[95%] sm:max-w-full min-w-0 overflow-hidden">
+      <div className="max-w-[95%] sm:max-w-full min-w-0 overflow-hidden space-y-2">
+        {safeSummary && (
+          <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-900">
+            {safeSummary}
+          </div>
+        )}
+
         <div
           className={
             hasTable
@@ -172,6 +205,52 @@ export default function MessageBubble({
             </div>
           )}
         </div>
+
+        {chartView?.normalized ? (
+          <div className="mt-3 overflow-hidden rounded-2xl rounded-tl-sm border border-cyan-200 bg-white shadow-sm">
+            <div className="border-b border-cyan-100 px-4 py-3">
+              <div className="text-sm font-semibold text-slate-900">
+                {chartView.normalized.title}
+              </div>
+              <div className="mt-1 text-xs text-slate-600">
+                {chartView.normalized.totalCRs} change request(s)
+              </div>
+            </div>
+
+            <div className="h-72 w-full px-2 pb-2 pt-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={chartView.normalized.data}
+                    dataKey="count"
+                    nameKey="status"
+                    innerRadius={58}
+                    outerRadius={92}
+                    paddingAngle={3}
+                  >
+                    {chartView.normalized.data.map((entry, idx) => (
+                      <Cell
+                        key={`cell-${entry.status}-${idx}`}
+                        fill={entry.color || "#64748b"}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value, name, props) => {
+                      const pct = props?.payload?.percentage;
+                      return [`${value} (${pct}%)`, props?.payload?.status || name];
+                    }}
+                  />
+                  <Legend verticalAlign="bottom" />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        ) : chartView?.error ? (
+          <div className="mt-3 rounded-2xl rounded-tl-sm border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
+            Chart unavailable for this result.
+          </div>
+        ) : null}
 
         {safeSuggestions.length > 0 && (
           <div className="mt-3 ml-4 flex flex-wrap gap-2">

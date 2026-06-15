@@ -34,6 +34,7 @@ function normalizeIntent(value) {
     create_change_request: "create_change_request",
     get_change_request_details: "get_change_request_details",
     list_change_requests: "list_change_requests",
+    cr_status_distribution: "cr_status_distribution",
     create_transport: "create_transport",
     unknown: "unknown",
   };
@@ -108,7 +109,8 @@ function inferProcessType(query) {
   const q = String(query || "").toLowerCase();
 
   if (q.includes("india")) return "YMH1";
-  return "YMHF";
+  if (q.includes("row")) return "YMHF";
+  return "";
 }
 
 function normalizeCreateChangeRequestEntities(raw = {}) {
@@ -152,7 +154,7 @@ function normalizeGetChangeRequestEntities(raw = {}) {
         raw.ChangeRequest ||
         raw.CR
     ),
-    processType: cleanString(raw.processType || raw.PROCESS_TYPE) || "YMHF",
+    processType: cleanString(raw.processType || raw.PROCESS_TYPE) || "",
   };
 }
 
@@ -160,8 +162,24 @@ function normalizeListChangeRequestEntities(raw = {}) {
   return {
     fromDate: normalizeDateYYYYMMDD(raw.fromDate || raw.FROM_DATE),
     toDate: normalizeDateYYYYMMDD(raw.toDate || raw.TO_DATE),
-    processType: cleanString(raw.processType || raw.PROCESS_TYPE) || "YMHF",
+    processType: cleanString(raw.processType || raw.PROCESS_TYPE) || "",
     triggerAll: cleanString(raw.triggerAll || raw.TRIGGER_ALL) || "X",
+  };
+}
+
+function normalizeCrStatusDistributionEntities(raw = {}) {
+  return {
+    processType: cleanString(raw.processType || raw.PROCESS_TYPE) || "",
+    fromDate: normalizeDateYYYYMMDD(raw.fromDate || raw.FROM_DATE),
+    toDate: normalizeDateYYYYMMDD(raw.toDate || raw.TO_DATE),
+    businessScope: cleanString(raw.businessScope || raw.scope || raw.region || ""),
+    createdBy: cleanString(raw.createdBy || raw.CREATED_BY || ""),
+    createdByMode: cleanString(raw.createdByMode || ""),
+    status: cleanString(raw.status || raw.STATUS || ""),
+    statusMode: cleanString(raw.statusMode || ""),
+    excludeStatuses: Array.isArray(raw.excludeStatuses) ? raw.excludeStatuses : [],
+    triggerAll: cleanString(raw.triggerAll || raw.TRIGGER_ALL) || "X",
+    dateText: cleanString(raw.dateText || raw.dateRangeText || ""),
   };
 }
 
@@ -183,6 +201,9 @@ function normalizeEntitiesByIntent(intent, rawEntities = {}) {
 
     case "list_change_requests":
       return normalizeListChangeRequestEntities(raw);
+
+    case "cr_status_distribution":
+      return normalizeCrStatusDistributionEntities(raw);
 
     default:
       return raw;
@@ -210,6 +231,66 @@ function keywordFallback(query) {
     q.includes("get") ||
     q.includes("fetch") ||
     q.includes("view");
+
+  const wantsCrAnalytics =
+    q.includes("status distribution") ||
+    q.includes("status breakdown") ||
+    q.includes("status analytics") ||
+    q.includes("status chart") ||
+    q.includes("percentage distribution") ||
+    q.includes("pie chart") ||
+    q.includes("donut chart") ||
+    q.includes("grouped by status") ||
+    q.includes("group by status") ||
+    q.includes("cr status distribution") ||
+    q.includes("status percentage distribution");
+
+  const wantsCrList =
+    q.includes("list change requests") ||
+    q.includes("show change requests") ||
+    q.includes("cr list") ||
+    q.includes("show crs") ||
+    q.includes("show cr status") ||
+    q.includes("show cr list") ||
+    q.includes("show crs status") ||
+    q.includes("list crs") ||
+    q.includes("change request list") ||
+    q.includes("browse crs") ||
+    q.includes("browse change requests");
+
+  if (wantsCrAnalytics) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "cr_status_distribution",
+      confidence: 0.93,
+      reason: "Matched SolMan CR status analytics keywords",
+      source: "keyword",
+      entities: {
+        processType,
+        fromDate,
+        toDate,
+        dateText: q,
+      },
+    });
+  }
+
+  if (mentionsCr && wantsCrList) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "list_change_requests",
+      confidence: 0.92,
+      reason: "Matched SolMan CR list keywords",
+      source: "keyword",
+      entities: {
+        fromDate,
+        toDate,
+        processType,
+        triggerAll: "X",
+      },
+    });
+  }
 
   if (objectId && mentionsCr && wantsCrDetails) {
     return normalizeRoutingResult({
@@ -325,6 +406,54 @@ export async function classifyPrompt({ query, sessionContext = null }) {
       source: "llm",
       entities: normalizeEntitiesByIntent(normalizedIntent, llm.data.entities),
     });
+
+    const q = String(query || "").toLowerCase();
+    const explicitAnalyticsQuery =
+      q.includes("status distribution") ||
+      q.includes("status breakdown") ||
+      q.includes("status analytics") ||
+      q.includes("status chart") ||
+      q.includes("percentage distribution") ||
+      q.includes("pie chart") ||
+      q.includes("donut chart") ||
+      q.includes("grouped by status") ||
+      q.includes("group by status") ||
+      q.includes("cr status distribution") ||
+      q.includes("status percentage distribution");
+
+    const crListQuery =
+      q.includes("show cr status") ||
+      q.includes("show crs") ||
+      q.includes("list change requests") ||
+      q.includes("show change requests") ||
+      q.includes("cr list") ||
+      q.includes("list crs") ||
+      q.includes("change request list");
+
+    if (candidate.system === "solman" && crListQuery && !explicitAnalyticsQuery) {
+      return normalizeRoutingResult({
+        ...candidate,
+        module: "charm",
+        intent: "list_change_requests",
+        entities: normalizeEntitiesByIntent("list_change_requests", llm.data.entities),
+        reason: candidate.reason || "Normalized SolMan CR list request",
+      });
+    }
+
+    if (
+      candidate.system === "solman" &&
+      candidate.intent === "cr_status_distribution" &&
+      crListQuery &&
+      !explicitAnalyticsQuery
+    ) {
+      return normalizeRoutingResult({
+        ...candidate,
+        module: "charm",
+        intent: "list_change_requests",
+        entities: normalizeEntitiesByIntent("list_change_requests", llm.data.entities),
+        reason: candidate.reason || "Normalized SolMan CR list request",
+      });
+    }
 
     if (candidate.system === "ambiguous") {
       return candidate;
