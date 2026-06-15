@@ -137,6 +137,7 @@ export async function resolveTargetSystem({
 
   const preferredEndpoint = inferPreferredEndpoint({ query, classified });
   const solmanLike = isSolmanLikeQuery({ query, classified });
+  const connectedSystems = systems.filter(isConnectedSystem);
 
   if (requestedId) {
     const requestedMatches = systems.filter(
@@ -184,6 +185,26 @@ export async function resolveTargetSystem({
       candidates: [],
       reason: "resolved_by_endpoint_without_available_systems",
     };
+  }
+
+  // For S4-like requests with multiple connected systems and no explicit systemId,
+  // prefer the first connected system from availableSystems (UI order/system-1)
+  // instead of forcing the hardcoded endpoint match.
+  if (!requestedId && !solmanLike && connectedSystems.length > 1) {
+    const firstConnected = systems.find(isConnectedSystem);
+    if (firstConnected) {
+      return {
+        status: "resolved",
+        targetSystemId: normalizeSystemId(
+          firstConnected.systemId || firstConnected.id || firstConnected.code
+        ),
+        targetEndpoint: getEndpoint(firstConnected),
+        candidates: connectedSystems.map((s) =>
+          normalizeSystemId(s.systemId || s.id || s.code)
+        ),
+        reason: "s4_first_connected_default",
+      };
+    }
   }
 
   if (preferredEndpoint) {
@@ -236,8 +257,6 @@ export async function resolveTargetSystem({
       reason: "resolved_by_endpoint",
     };
   }
-
-  const connectedSystems = systems.filter(isConnectedSystem);
 
   if (connectedSystems.length === 1) {
     return {

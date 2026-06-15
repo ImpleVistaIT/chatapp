@@ -110,10 +110,7 @@ function buildStatusChart(chart) {
 
     if (!normalized) return null;
 
-    return {
-      normalized,
-      colors: ["#0f766e", "#14b8a6", "#2dd4bf", "#5eead4", "#99f6e4", "#0ea5e9", "#22c55e"],
-    };
+    return { normalized };
   } catch (e) {
     console.error("Chart parse error:", e);
     return { error: true };
@@ -123,6 +120,7 @@ function buildStatusChart(chart) {
 export default function MessageBubble({
   role,
   text,
+  summary,
   data,
   chart = null,
   suggestions,
@@ -166,12 +164,19 @@ export default function MessageBubble({
     totalRows > cappedTo;
 
   const safeSuggestions = Array.isArray(suggestions) ? suggestions : [];
+  const safeSummary = String(summary || "").trim();
 
   return (
     <div className="flex items-start justify-start gap-3 w-full">
       <Avatar role={role} showAvatar={showAvatar} />
 
-      <div className="max-w-[95%] sm:max-w-full min-w-0 overflow-hidden">
+      <div className="max-w-[95%] sm:max-w-full min-w-0 overflow-hidden space-y-2">
+        {safeSummary && (
+          <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-900">
+            {safeSummary}
+          </div>
+        )}
+
         <div
           className={
             hasTable
@@ -226,7 +231,7 @@ export default function MessageBubble({
                     {chartView.normalized.data.map((entry, idx) => (
                       <Cell
                         key={`cell-${entry.status}-${idx}`}
-                        fill={chartView.colors[idx % chartView.colors.length]}
+                        fill={entry.color || "#64748b"}
                       />
                     ))}
                   </Pie>

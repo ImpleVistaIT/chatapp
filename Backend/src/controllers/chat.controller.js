@@ -175,7 +175,7 @@ function generateSuggestions(query, extracted, rows) {
 
   if (q.includes("purchase order") || q.includes("po")) {
     return [
-      "Show latest purchase orders",
+      "show cr status",
       "Show PO created in January 2026",
       "Show details of PO 4500001933 item 00010",
     ];
@@ -193,7 +193,7 @@ function generateSuggestions(query, extracted, rows) {
   }
 
   return [
-    "Show latest purchase orders",
+    "show cr status",
     "Show PO created by IRAM",
     "Show details of PO 4500001933",
   ];
@@ -275,7 +275,7 @@ export async function listChatMessages(req, res) {
     const items = await ChatMessage.find(q)
       .sort({ createdAt: -1 })
       .limit(limit + 1)
-      .select({ role: 1, text: 1, summary: 1, data: 1, createdAt: 1 })
+      .select({ role: 1, text: 1, summary: 1, data: 1, suggestions: 1, createdAt: 1 })
       .lean();
 
     const hasMore = items.length > limit;
@@ -290,6 +290,7 @@ export async function listChatMessages(req, res) {
         text: m.text || "",
         summary: m.summary || null,
         data: m.data || null,
+        suggestions: Array.isArray(m.suggestions) ? m.suggestions : [],
         createdAt: m.createdAt || null,
       })),
     });

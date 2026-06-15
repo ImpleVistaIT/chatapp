@@ -1,5 +1,6 @@
 import { classifyPrompt } from "../services/routing/promptClassifier.service.js";
 import { resolveTargetSystem } from "../services/routing/systemContextResolver.service.js";
+import { normalizePromptWithLlm } from "../services/routing/promptNormalization.service.js";
 import { SapCredential } from "../models/SapCredential.model.js";
 import { ChatMessage } from "../models/ChatMessage.model.js";
 import { SapConnection } from "../models/SapConnection.model.js";
@@ -27,6 +28,107 @@ function isLandscapeOnlyQuery(query) {
   return q === "ROW" || q === "INDIA";
 }
 
+const ROUTING_KEYWORD_REGEX =
+  /\b(po|purchase\s*order|purchase\s*orders|invoice|vendor|supplier|material|delivery|sales\s*order|change\s*request|change\s*requests|cr|charm|transport|solman|s4|s4hana|created|date|month|year|count|top|skip|offset|order\s*by|latest|recent|newest|status)\b/i;
+
+const COMMON_PROMPT_WORDS = new Set([
+  "show",
+  "list",
+  "get",
+  "fetch",
+  "find",
+  "view",
+  "please",
+  "help",
+  "details",
+  "detail",
+  "latest",
+  "recent",
+  "newest",
+  "created",
+  "create",
+  "by",
+  "in",
+  "from",
+  "to",
+  "for",
+  "of",
+  "on",
+  "with",
+  "and",
+  "or",
+  "top",
+  "last",
+  "all",
+  "my",
+  "me",
+  "where",
+  "when",
+  "open",
+  "closed",
+  "pending",
+  "approved",
+  "rejected",
+  "status",
+  "count",
+  "user",
+  "username",
+]);
+
+function buildInvalidPromptMessage() {
+  return "I couldn't understand that request. Try something like: 'show cr status' or 'Show PO created in June by username'.";
+}
+
+function hasReadablePromptSignal(tokens) {
+  return tokens.some((token) => COMMON_PROMPT_WORDS.has(token));
+}
+
+export function isLikelyGibberishQuery(query) {
+  const q = cleanString(query).toLowerCase();
+  if (!q) return false;
+
+  if (ROUTING_KEYWORD_REGEX.test(q)) return false;
+  if (/\b\d{8,12}\b/.test(q)) return false;
+
+  const tokens = q.match(/[a-z0-9]+/g) || [];
+  if (tokens.length === 0) return false;
+
+  const alphaTokens = tokens.filter((token) => /^[a-z]+$/.test(token));
+  if (alphaTokens.length === 0) return false;
+
+  const compact = alphaTokens.join("");
+  const hasReadableSignal = hasReadablePromptSignal(alphaTokens);
+
+  // If the user typed a single opaque token with no SAP keywords,
+  // treat it as gibberish and stop before LLM/routing.
+  if (tokens.length === 1 && !hasReadableSignal && tokens[0].length >= 4) {
+    return true;
+  }
+
+  if (tokens.length === 1) {
+    const t = tokens[0];
+    if (t.length < 12) return false;
+
+    const vowelCount = (t.match(/[aeiou]/g) || []).length;
+    const vowelRatio = vowelCount / Math.max(1, t.length);
+    return vowelRatio < 0.32;
+  }
+
+  if (tokens.length <= 2 && !hasReadableSignal) {
+    const avgLen = compact.length / tokens.length;
+    const vowelCount = (compact.match(/[aeiou]/g) || []).length;
+    const vowelRatio = vowelCount / Math.max(1, compact.length);
+    if (compact.length <= 14) return true;
+    if (avgLen >= 8 && vowelRatio < 0.28) return true;
+  }
+
+  if (tokens.length <= 3 && !hasReadableSignal && compact.length <= 18) {
+    return true;
+  }
+
+  return false;
+}
+
 export function isValidSolmanPendingAction(pendingAction) {
   const system = cleanString(pendingAction?.system).toLowerCase();
   const intent = cleanString(pendingAction?.intent).toLowerCase();
@@ -46,11 +148,10 @@ function scopeToProcessType(scope) {
   return "";
 }
 
-function isSolmanCrQuery(query) {
+export function isSolmanCrQuery(query) {
   const q = cleanString(query).toLowerCase();
 
   if (!q) return false;
-  if (isNextPageQuery(q)) return true;
 
   const hasCrContext =
     /\bcr\b/.test(q) ||
@@ -77,7 +178,6 @@ function isSolmanCrQuery(query) {
     /\btransport created cr\b/.test(q) ||
     /\btransports created cr\b/.test(q) ||
     /\bcreated by me\b/.test(q) ||
-    /\bcreated by\b/.test(q) ||
     /\bmy cr\b/.test(q) ||
     /\bmy crs\b/.test(q) ||
     /\bmy change request\b/.test(q) ||
@@ -130,7 +230,7 @@ function isSolmanCrQuery(query) {
     /\bmy crs\b/,
     /\bmy change request\b/,
     /\bmy change requests\b/,
-    /\bcreated by\s+[a-z0-9._-]+\b/i,
+    /\b(?:cr|change\s*request[s]?)\b.*\bcreated by\s+[a-z0-9._-]+\b/i,
   ];
 
   return patterns.some((re) => re.test(q));
@@ -346,13 +446,40 @@ export async function handleChatStream(req, res) {
       return sse.end();
     }
 
+    if (isLikelyGibberishQuery(query)) {
+      sse.send("error", {
+        message: buildInvalidPromptMessage(),
+        status: "invalid_prompt",
+      });
+      return sse.end();
+    }
+
+    const normalizedPrompt = await step("normalizePromptWithLlm", () =>
+      normalizePromptWithLlm({ query })
+    );
+
+    const effectiveQuery = cleanString(normalizedPrompt?.normalizedQuery || query) || cleanString(query);
+
+    if (normalizedPrompt?.rejected) {
+      sse.send("error", {
+        message: buildInvalidPromptMessage(),
+        status: "invalid_prompt",
+        normalization: {
+          usedLlm: Boolean(normalizedPrompt?.usedLlm),
+          confidence: Number(normalizedPrompt?.confidence || 0),
+          reason: normalizedPrompt?.reason || null,
+        },
+      });
+      return sse.end();
+    }
+
     sse.send("phase", {
       phase: "routing",
       message: "Understanding your request...",
     });
 
-    const queryIsNextPage = isNextPageQuery(query);
-    const queryIsLandscapeOnly = isLandscapeOnlyQuery(query);
+    const queryIsNextPage = isNextPageQuery(effectiveQuery);
+    const queryIsLandscapeOnly = isLandscapeOnlyQuery(effectiveQuery);
 
     let effectivePendingAction = pendingAction || null;
 
@@ -399,7 +526,7 @@ export async function handleChatStream(req, res) {
       const pendingFilters = effectivePendingAction?.filters || {};
 
       const restoredScope = queryIsLandscapeOnly
-        ? cleanString(query).toUpperCase()
+        ? cleanString(effectiveQuery).toUpperCase()
         : cleanString(businessScope || "");
 
       const restoredProcessType = queryIsLandscapeOnly
@@ -478,7 +605,7 @@ export async function handleChatStream(req, res) {
           ? effectivePendingAction?.query || "show cr list"
           : queryIsLandscapeOnly
             ? effectivePendingAction?.query || "show cr list"
-            : query || effectivePendingAction?.query
+            : effectiveQuery || effectivePendingAction?.query
       );
 
       const restoredClassified = {
@@ -542,14 +669,18 @@ export async function handleChatStream(req, res) {
 
     const classified = await step("classifyPrompt", () =>
       classifyPrompt({
-        query,
+        query: effectiveQuery,
         sessionContext: null,
       })
     );
 
+    const queryLooksLikePoContinuation =
+      queryIsNextPage && /\bpo\b|purchase\s+orders?/i.test(effectiveQuery);
+
     const forcedSolman =
-      isSolmanCrQuery(query) ||
-      cleanString(classified?.system).toLowerCase() === "solman";
+      !queryLooksLikePoContinuation &&
+      (isSolmanCrQuery(effectiveQuery) ||
+        cleanString(classified?.system).toLowerCase() === "solman");
 
     if (forcedSolman) {
       console.log("[SSE] forcing SolMan routing based on CR query pattern");
@@ -557,14 +688,14 @@ export async function handleChatStream(req, res) {
 
     const systemResolution = await step("resolveTargetSystem", () =>
       resolveTargetSystem({
-        query,
+        query: effectiveQuery,
         classified,
         requestedSystemId: systemId,
         availableSystems: effectiveAvailableSystems,
       })
     );
 
-    const useSolman = forcedSolman || classified?.system === "solman";
+    const useSolman = !queryLooksLikePoContinuation && (forcedSolman || classified?.system === "solman");
 
     if (systemResolution.status === "disconnected") {
       sse.send("error", {
@@ -642,7 +773,7 @@ export async function handleChatStream(req, res) {
     const context = {
       sse,
       owner,
-      query,
+      query: effectiveQuery,
       sessionId,
       systemId: resolvedSystemId,
       sapUser: resolvedSapUser,

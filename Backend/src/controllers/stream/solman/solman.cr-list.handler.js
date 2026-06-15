@@ -9,6 +9,7 @@ import {
   pickCrListEntities,
   toCrDetailsArray,
 } from "./solman.shared.js";
+import { generateSummaryLLM } from "../../../services/responseNarrator.service.js";
 import { step } from "../stream.shared.js";
 
 const LIST_CHART_PAGE_SIZE = 200;
@@ -575,6 +576,26 @@ export async function handleCrList(context) {
     reply = `${reply}\n\n${noMoreMessage}`;
   }
 
+  const summary =
+    rows.length > 0
+      ? await step("generateSummaryLLM", () =>
+          generateSummaryLLM({
+            entityLabel: "change requests",
+            count: rows.length,
+            extracted: {
+              businessScope: listInput.businessScope,
+              processType: result?.result?.processType || listInput.processType,
+              createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+              status: result?.result?.status || listInput.status,
+              dateFrom: result?.result?.fromDate || listInput.fromDate,
+              dateTo: result?.result?.toDate || listInput.toDate,
+            },
+            sample: rows.slice(0, 5),
+            columns: Object.keys(rows[0] || {}).slice(0, 8),
+          })
+        )
+      : "No change requests found.";
+
   const persistedPendingAction = {
     system: "solman",
     intent: "list_change_requests",
@@ -604,7 +625,7 @@ export async function handleCrList(context) {
     owner,
     sessionId: session._id,
     text: reply,
-    summary: result?.message || `Fetched ${rows.length} change request(s).`,
+    summary,
     extracted: {
       system: "solman",
       intent: "list_change_requests",
@@ -653,7 +674,7 @@ export async function handleCrList(context) {
     systemId: effectiveSystemId,
     sapUser: effectiveSapUser,
     reply,
-    summary: result?.message || `Fetched ${rows.length} change request(s).`,
+    summary,
     data: responseData,
     pagination: {
       top: responseTop,

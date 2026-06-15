@@ -27,7 +27,10 @@ export function normalizePoItem(poItem) {
 }
 
 export function sanitizeODataQuery(query = {}, { maxTop = 200 } = {}) {
-  const qs = new URLSearchParams();
+  // Build OData query string manually to keep literal '$' in param names.
+  // URLSearchParams encodes '$' as '%24', which SAP OData ignores entirely,
+  // causing $orderby, $filter, $top, $skip to be silently discarded.
+  const parts = [];
 
   for (const key of Object.keys(query || {})) {
     if (!ALLOWED_ODATA_PARAMS.has(key)) continue;
@@ -38,7 +41,7 @@ export function sanitizeODataQuery(query = {}, { maxTop = 200 } = {}) {
     if (key === "$top") {
       const top = Number(raw);
       if (Number.isFinite(top) && top > 0) {
-        qs.set("$top", String(Math.min(top, maxTop)));
+        parts.push(`$top=${String(Math.min(top, maxTop))}`);
       }
       continue;
     }
@@ -46,7 +49,7 @@ export function sanitizeODataQuery(query = {}, { maxTop = 200 } = {}) {
     if (key === "$skip") {
       const skip = Number(raw);
       if (Number.isFinite(skip) && skip >= 0) {
-        qs.set("$skip", String(skip));
+        parts.push(`$skip=${String(skip)}`);
       }
       continue;
     }
@@ -54,15 +57,16 @@ export function sanitizeODataQuery(query = {}, { maxTop = 200 } = {}) {
     if (key === "$count") {
       const normalized = String(raw).toLowerCase();
       if (normalized === "true" || normalized === "false") {
-        qs.set("$count", normalized);
+        parts.push(`$count=${normalized}`);
       }
       continue;
     }
 
-    qs.set(key, String(raw));
+    // Encode only the value, never the key — OData system params must keep literal '$'.
+    parts.push(`${key}=${encodeURIComponent(String(raw))}`);
   }
 
-  return qs.toString();
+  return parts.join("&");
 }
 
 export function buildEntitySetQuery(entitySet, query = {}, options = {}) {

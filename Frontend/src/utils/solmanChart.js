@@ -1,3 +1,16 @@
+const STATUS_COLOR_MAP = {
+  "approved for production": "#2E7D32",
+  "imported in production": "#1565C0",
+  "in development": "#EF6C00",
+  "ready for test": "#6A1B9A",
+  "tested ok": "#616161",
+  "under implementation": "#C62828",
+};
+
+function normalizeStatusLabel(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
 export function normalizeSolmanStatusChart(chart) {
   if (!chart || typeof chart !== "object") return null;
 
@@ -10,6 +23,7 @@ export function normalizeSolmanStatusChart(chart) {
           const status = String(item?.status || "").trim();
           const count = Number(item?.count);
           const percentage = Number(item?.percentage);
+          const color = STATUS_COLOR_MAP[normalizeStatusLabel(status)] || "#64748b";
 
           if (!status || !Number.isFinite(count) || count < 0) {
             return null;
@@ -19,6 +33,7 @@ export function normalizeSolmanStatusChart(chart) {
             status,
             count,
             percentage: Number.isFinite(percentage) && percentage >= 0 ? percentage : 0,
+            color,
           };
         })
         .filter(Boolean)

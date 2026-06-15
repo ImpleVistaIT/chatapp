@@ -516,50 +516,6 @@ export function formatCrListReply(rows = [], params = {}) {
 
   const header = [`Found ${rows.length} change request(s).`];
 
-  if (params?.businessScope) {
-    header.push(`Landscape: ${params.businessScope}`);
-  }
-
-  if (params?.createdBy) {
-    header.push(`Created By: ${params.createdBy}`);
-  }
-
-  if (params?.fromDate || params?.toDate) {
-    header.push(
-      `Date Range: ${formatDisplayDate(params?.fromDate)} to ${formatDisplayDate(params?.toDate)}`
-    );
-  }
-
-  if (params?.statusMode === "pending") {
-    header.push("Status Filter: Pending (excluding CLOSED and REJECTED)");
-  } else if (params?.status) {
-    header.push(`Status Filter: ${params.status}`);
-  }
-
-  if (params?.skip) {
-    header.push(`Offset: ${params.skip}`);
-  }
-
-  if (rows.length <= 2) {
-    const body = rows
-      .map((item) => {
-        const crNumber = getCrNumber(item);
-        const status = item?.STATUS || "-";
-        const createdOn = formatDisplayDate(item?.CREATED_ON);
-        const shortDesc = item?.SHORT_DESC || "-";
-
-        return [
-          `CR Number: ${crNumber}`,
-          `Status: ${status}`,
-          `Created On: ${createdOn}`,
-          `Short Description: ${shortDesc}`,
-        ].join("\n");
-      })
-      .join("\n\n");
-
-    return `${header.join("\n")}\n\n${body}`;
-  }
-
   const widths = {
     no: 10,
     cr: 16,
