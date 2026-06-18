@@ -91,6 +91,7 @@ export async function solmanLoginController(req, res) {
     }
 
     const loginResult = await loginToSolman({
+      systemId,
       baseUrl: builtBaseUrl,
       sapUser,
       sapPassword,

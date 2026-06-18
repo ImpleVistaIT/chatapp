@@ -29,26 +29,49 @@ export async function resolveSapConnection({ owner, systemId, sapUser }) {
     throw err;
   }
 
-  const system = await SapSystem.findOne({
+  let system = await SapSystem.findOne({
     owner: { $in: [normalizedOwner, "local"] },
     systemId: normalizedSystemId,
   }).lean();
 
+  let resolvedSystemId = normalizedSystemId;
+
   if (!system) {
-    const err = new Error(`SAP system not found for systemId ${normalizedSystemId}`);
-    err.status = 404;
-    throw err;
+    const credentialFallback = await SapCredential.findOne({
+      owner: normalizedOwner,
+      sapUser: normalizedSapUser,
+    }).lean();
+
+    const fallbackSystemId = cleanString(credentialFallback?.systemId).toUpperCase();
+
+    if (fallbackSystemId) {
+      const fallbackSystem = await SapSystem.findOne({
+        owner: { $in: [normalizedOwner, "local"] },
+        systemId: fallbackSystemId,
+      }).lean();
+
+      if (fallbackSystem) {
+        system = fallbackSystem;
+        resolvedSystemId = fallbackSystemId;
+      }
+    }
+
+    if (!system) {
+      const err = new Error(`SAP system not found for systemId ${normalizedSystemId}`);
+      err.status = 404;
+      throw err;
+    }
   }
 
   const credential = await SapCredential.findOne({
     owner: normalizedOwner,
-    systemId: normalizedSystemId,
+    systemId: resolvedSystemId,
     sapUser: normalizedSapUser,
   }).lean();
 
   if (!credential) {
     const err = new Error(
-      `SAP credential not found for systemId ${normalizedSystemId} and sapUser ${normalizedSapUser}`
+      `SAP credential not found for systemId ${resolvedSystemId} and sapUser ${normalizedSapUser}`
     );
     err.status = 404;
     throw err;
@@ -80,10 +103,11 @@ export async function resolveSapConnection({ owner, systemId, sapUser }) {
     },
     meta: {
       owner: normalizedOwner,
-      systemId: normalizedSystemId,
+      systemId: resolvedSystemId,
       sapUser: normalizedSapUser,
       systemName: system.name || "",
       resolvedSystemOwner: system.owner || null,
+      resolvedViaSapUserFallback: resolvedSystemId !== normalizedSystemId,
     },
   };
 }

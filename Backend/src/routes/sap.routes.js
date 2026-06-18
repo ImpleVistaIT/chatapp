@@ -10,6 +10,7 @@ import { encryptString, decryptString } from "../utils/crypto.js";
 import { getAllowedFieldsWithLabels } from "../services/allowlist.service.js";
 import { fetchFromSap } from "../services/sap.service.js";
 import { loginToSolman } from "../services/systems/solman/login.service.js";
+import { buildSapLoginRequest } from "../config/sap.config.js";
 
 export const sapRoutes = express.Router();
 
@@ -34,6 +35,20 @@ function normalizeSapUser(value) {
 function clampString(value, max = 200) {
   const s = String(value ?? "").trim();
   return s.length > max ? s.slice(0, max) : s;
+}
+
+function buildBasicAuthHeader(username, password) {
+  return `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
+}
+
+async function parseJsonResponse(response) {
+  const responseText = await response.text();
+
+  try {
+    return { data: JSON.parse(responseText), raw: responseText };
+  } catch {
+    return { data: null, raw: responseText };
+  }
 }
 
 function toInt(value) {
@@ -77,6 +92,29 @@ function sanitizeResponseData(value) {
   if (value == null) return null;
   const s = String(value);
   return s.length > 4000 ? `${s.slice(0, 4000)}...` : s;
+}
+
+function extractProfileEmail(row = {}) {
+  const candidateKeys = [
+    "Email",
+    "EMail",
+    "EMAIL",
+    "E_MAIL",
+    "EmailAddress",
+    "EMAILADDRESS",
+    "Mail",
+    "MAIL",
+    "SMTP_ADDR",
+    "SmtpAddr",
+    "smtpAddr",
+  ];
+
+  for (const key of candidateKeys) {
+    const value = String(row?.[key] || "").trim();
+    if (value) return value;
+  }
+
+  return "";
 }
 
 function buildClientError(err, { exposeRequestUrl = false } = {}) {
@@ -584,11 +622,13 @@ sapRoutes.post("/credentials", async (req, res, next) => {
       if (systemKind === "solman") {
         try {
           const loginResult = await loginToSolman({
+            systemId,
             protocol: system.protocol || "https",
             host: system.host,
             port: system.port,
             sapUser,
             sapPassword,
+            requireMappedSystem: true,
           });
 
           if (!loginResult?.ok) {
@@ -780,11 +820,13 @@ sapRoutes.post("/connect", async (req, res, next) => {
       if (systemKind === "solman") {
         try {
           const loginResult = await loginToSolman({
+            systemId,
             protocol: sys.protocol || "https",
             host: sys.host,
             port: sys.port,
             sapUser: cred.sapUser,
             sapPassword: plainPassword,
+            requireMappedSystem: true,
           });
 
           if (!loginResult?.ok) {
@@ -950,8 +992,9 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
     const cachedFullName = String(cred?.profileFullName || "").trim();
     const cachedFirstName = String(cred?.profileFirstName || "").trim();
     const cachedLastName = String(cred?.profileLastName || "").trim();
+    const cachedEmail = String(cred?.profileEmail || "").trim();
 
-    if (cachedFullName || cachedFirstName || cachedLastName) {
+    if (cachedEmail) {
       return res.json({
         ok: true,
         profile: {
@@ -959,6 +1002,7 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
           firstName: cachedFirstName,
           lastName: cachedLastName,
           fullName: cachedFullName,
+          email: cachedEmail,
           cached: true,
           profileUpdatedAt: cred?.profileUpdatedAt || null,
         },
@@ -976,21 +1020,47 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
       return res.status(500).json({ ok: false, error: "Failed to decrypt stored SAP credentials." });
     }
 
-    const service = { serviceName: "ZSAP_USER_LOGIN_SRV" };
-    const filter = `UserName eq '${String(sapUser).replace(/'/g, "''")}' and Password eq '${String(
-      plainPassword
-    ).replace(/'/g, "''")}'`;
+    const loginRequest = buildSapLoginRequest({
+      systemId,
+      sapUser,
+      sapPassword: plainPassword,
+      requireMappedSystem: true,
+    });
 
-    const relativePath = `user_dataSet?$filter=${encodeURIComponent(filter)}&$format=json`;
+    console.info("[sap.routes] selected user-profile login target", {
+      systemId,
+      baseUrl: loginRequest.baseUrl,
+      serviceName: loginRequest.serviceName,
+      entitySet: loginRequest.entitySet,
+      requestUrl: loginRequest.requestUrl,
+    });
 
-    const sapData = await fetchFromSap(
-      {
-        system: sys,
-        service,
-        relativePath,
+    const response = await fetch(loginRequest.requestUrl, {
+      method: "GET",
+      headers: {
+        Accept: "application/json, application/xml, text/xml, application/atom+xml",
+        Authorization: buildBasicAuthHeader(cred.sapUser, plainPassword),
+        "X-Requested-With": "XMLHttpRequest",
       },
-      { username: cred.sapUser, password: plainPassword }
-    );
+    });
+
+    const { data: sapData, raw: sapRaw } = await parseJsonResponse(response);
+
+    if (!response.ok) {
+      const err = new Error(`SAP login request failed (${response.status})`);
+      err.status = response.status;
+      err.responseData = sapRaw;
+      err.requestUrl = loginRequest.requestUrl;
+      throw err;
+    }
+
+    if (!sapData) {
+      const err = new Error("SAP login response was not valid JSON.");
+      err.status = 502;
+      err.responseData = sapRaw;
+      err.requestUrl = loginRequest.requestUrl;
+      throw err;
+    }
 
     const results = sapData?.d?.results;
     const row = Array.isArray(results) ? results[0] : sapData?.d;
@@ -1001,9 +1071,10 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
           firstName: String(row?.Firstname || "").trim(),
           lastName: String(row?.Lastname || "").trim(),
           fullName: String(row?.Fullname || "").trim(),
+          email: extractProfileEmail(row),
           cached: false,
         }
-      : { sapUser, firstName: "", lastName: "", fullName: "", cached: false };
+      : { sapUser, firstName: "", lastName: "", fullName: "", email: "", cached: false };
 
     const now = new Date();
 
@@ -1014,6 +1085,7 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
           profileFirstName: profile.firstName,
           profileLastName: profile.lastName,
           profileFullName: profile.fullName,
+          profileEmail: profile.email,
           profileUpdatedAt: now,
         },
       }

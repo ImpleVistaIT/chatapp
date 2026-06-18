@@ -32,7 +32,7 @@ export async function listPurchaseOrders({ req, query } = {}) {
     maxTop: 200,
   });
 
-  return fetchFromSap(
+  const sapData = await fetchFromSap(
     {
       system,
       service,
@@ -40,4 +40,9 @@ export async function listPurchaseOrders({ req, query } = {}) {
     },
     auth
   );
+
+  return {
+    data: sapData,
+    totalCount: Number(sapData?.d?.__count || 0) || null,
+  };
 }

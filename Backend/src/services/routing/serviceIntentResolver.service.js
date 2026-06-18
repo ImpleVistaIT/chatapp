@@ -1,5 +1,5 @@
-import axios from "axios";
 import { SapServiceCatalog } from "../../models/SapServiceCatalog.model.js";
+import { generateJson } from "../llm/ollama.client.js";
 
 function compactField(field) {
   return {
@@ -65,24 +65,6 @@ ${JSON.stringify(services, null, 2)}
 `.trim();
 }
 
-function extractJson(text) {
-  const s = String(text || "").trim();
-  if (!s) throw new Error("Empty LLM response");
-
-  try {
-    return JSON.parse(s);
-  } catch {}
-
-  const start = s.indexOf("{");
-  const end = s.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    const candidate = s.slice(start, end + 1);
-    return JSON.parse(candidate);
-  }
-
-  throw new Error("Could not parse JSON from LLM response");
-}
-
 function quickExtractDocNumber(query) {
   const q = String(query || "");
   const match = q.match(/\b(\d{6,20})\b/);
@@ -119,39 +101,6 @@ function buildSingleServiceFallback(service, query) {
     reason: "Single active catalog service matched by fallback",
     candidatesConsidered: 1,
   };
-}
-
-async function callOllama({ prompt }) {
-  const baseUrl = String(process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/+$/, "");
-  const model = String(process.env.OLLAMA_MODEL || "llama3:latest").trim();
-
-  const res = await axios.post(
-    `${baseUrl}/api/generate`,
-    {
-      model,
-      prompt,
-      stream: false,
-      format: "json",
-      options: {
-        temperature: 0.1,
-      },
-    },
-    {
-      timeout: 30000,
-      validateStatus: () => true,
-    }
-  );
-
-  if (res.status < 200 || res.status >= 300) {
-    throw new Error(`Ollama call failed (${res.status}): ${JSON.stringify(res.data).slice(0, 500)}`);
-  }
-
-  const responseText =
-    typeof res.data?.response === "string"
-      ? res.data.response
-      : JSON.stringify(res.data);
-
-  return extractJson(responseText);
 }
 
 export async function resolveServiceIntent({
@@ -227,27 +176,33 @@ export async function resolveServiceIntent({
 
   const services = catalog.map(compactService);
   const prompt = buildRoutingPrompt({ query, services });
-  const llm = await callOllama({ prompt });
+  const llm = await generateJson({
+    prompt,
+    schemaHint: "service-intent-router",
+    timeoutMs: Number(process.env.SERVICE_INTENT_TIMEOUT_MS || 30000),
+  });
+
+  const data = llm?.ok ? llm.data : null;
 
   return {
-    matchFound: Boolean(llm?.matchFound),
-    confidence: Number(llm?.confidence || 0),
-    systemId: llm?.systemId ? String(llm.systemId).trim().toUpperCase() : null,
-    serviceName: llm?.serviceName ? String(llm.serviceName).trim() : null,
-    entitySet: llm?.entitySet ? String(llm.entitySet).trim() : null,
-    entityTypeName: llm?.entityTypeName ? String(llm.entityTypeName).trim() : null,
-    operation: llm?.operation ? String(llm.operation).trim().toLowerCase() : "list",
-    docNumber: llm?.docNumber ?? null,
-    docItem: llm?.docItem ?? null,
-    fields: Array.isArray(llm?.fields)
-      ? llm.fields.map((x) => String(x).trim()).filter(Boolean)
+    matchFound: Boolean(data?.matchFound),
+    confidence: Number(data?.confidence || 0),
+    systemId: data?.systemId ? String(data.systemId).trim().toUpperCase() : null,
+    serviceName: data?.serviceName ? String(data.serviceName).trim() : null,
+    entitySet: data?.entitySet ? String(data.entitySet).trim() : null,
+    entityTypeName: data?.entityTypeName ? String(data.entityTypeName).trim() : null,
+    operation: data?.operation ? String(data.operation).trim().toLowerCase() : "list",
+    docNumber: data?.docNumber ?? null,
+    docItem: data?.docItem ?? null,
+    fields: Array.isArray(data?.fields)
+      ? data.fields.map((x) => String(x).trim()).filter(Boolean)
       : [],
-    filters: Array.isArray(llm?.filters) ? llm.filters : [],
-    orderBy: Array.isArray(llm?.orderBy) ? llm.orderBy : [],
-    limit: Number.isFinite(Number(llm?.limit))
-      ? Math.max(1, Math.min(Number(llm.limit), 200))
+    filters: Array.isArray(data?.filters) ? data.filters : [],
+    orderBy: Array.isArray(data?.orderBy) ? data.orderBy : [],
+    limit: Number.isFinite(Number(data?.limit))
+      ? Math.max(1, Math.min(Number(data.limit), 200))
       : 10,
-    reason: String(llm?.reason || "").trim(),
+    reason: String(data?.reason || "").trim(),
     candidatesConsidered: services.length,
   };
 }

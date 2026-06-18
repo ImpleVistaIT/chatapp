@@ -6,6 +6,7 @@ import {
   getSolmanChangeRequestDetails,
   listSolmanChangeRequests,
 } from "../controllers/chat.actions.controller.js";
+import { sendChatReportEmail } from "../controllers/chat.email.controller.js";
 
 import {
   listChatSessions,
@@ -34,6 +35,8 @@ chatRoutes.post(
   "/actions/solman/list-change-requests",
   listSolmanChangeRequests
 );
+
+chatRoutes.post("/email", sendChatReportEmail);
 
 // sidebar sessions
 chatRoutes.get("/sessions", listChatSessions);

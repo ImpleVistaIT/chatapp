@@ -8,6 +8,7 @@ function clean(v) {
 export default function SolmanCreateCrForm({
   systemId = "",
   sapUser = "",
+  sessionId = "",
   initialValues = {},
   pendingAction = null,
   onSuccess,
@@ -75,12 +76,40 @@ export default function SolmanCreateCrForm({
     setError("");
     setFieldErrors({});
 
+    const debugPayload = {
+      systemId: clean(systemId),
+      sapUser: clean(sapUser),
+      sessionId: clean(sessionId),
+      payload: {
+        ShortDesc: clean(shortDesc),
+        DeliveryResponsible: clean(deliveryResponsible),
+        Developer: clean(developer),
+        Tester: clean(tester),
+        WorkItemReference: clean(workItemReference),
+        Landscape: clean(landscape),
+        ...(clean(url) && clean(urlName)
+          ? {
+              REQ_URL_NAV: [
+                {
+                  URL: clean(url),
+                  URL_NAME: clean(urlName),
+                },
+              ],
+            }
+          : {}),
+      },
+    };
+
+    console.log("[SolMan Create CR] submit clicked", debugPayload);
+
     if (!clean(systemId)) {
+      console.warn("[SolMan Create CR] blocked: missing active SAP system", debugPayload);
       setError("No active SAP system selected.");
       return;
     }
 
     if (!clean(sapUser)) {
+      console.warn("[SolMan Create CR] blocked: missing active SAP user", debugPayload);
       setError("No active SAP user found.");
       return;
     }
@@ -111,23 +140,7 @@ export default function SolmanCreateCrForm({
       return;
     }
 
-    const payload = {
-      ShortDesc: clean(shortDesc),
-      DeliveryResponsible: clean(deliveryResponsible),
-      Developer: clean(developer),
-      Tester: clean(tester),
-      WorkItemReference: clean(workItemReference),
-      Landscape: clean(landscape),
-    };
-
-    if (clean(url) && clean(urlName)) {
-      payload.REQ_URL_NAV = [
-        {
-          URL: clean(url),
-          URL_NAME: clean(urlName),
-        },
-      ];
-    }
+    const payload = debugPayload.payload;
 
     console.log("Submitting create change request", {
       systemId: clean(systemId),
@@ -148,6 +161,7 @@ export default function SolmanCreateCrForm({
           body: JSON.stringify({
             systemId: clean(systemId),
             sapUser: clean(sapUser),
+              sessionId: clean(sessionId),
             payload,
           }),
         }

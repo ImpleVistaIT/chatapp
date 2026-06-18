@@ -1,3 +1,8 @@
+import {
+  buildSapLoginRequest,
+  normalizeSystemId,
+} from "../../../config/sap.config.js";
+
 function cleanString(v) {
   return String(v || "").trim();
 }
@@ -20,7 +25,7 @@ function buildBaseUrl({ protocol = "https", host, port }) {
   return `${p}://${h}${prt ? `:${prt}` : ""}`;
 }
 
-function buildLoginUrl(baseUrl, sapUser, sapPassword) {
+function buildLegacyLoginUrl(baseUrl, sapUser, sapPassword) {
   const root = String(baseUrl || "").trim().replace(/\/+$/, "");
   const filter = `$filter=UserName eq '${escODataString(sapUser)}' and Password eq '${escODataString(sapPassword)}'`;
   return `${root}/sap/opu/odata/sap/ZNEW_USER_LOGIN_SRV/user_loginSet?${encodeURI(filter)}`;
@@ -66,17 +71,31 @@ function toDebugString(err) {
 }
 
 export async function loginToSolman({
+  systemId = null,
   baseUrl,
   protocol = "https",
   host,
   port,
   sapUser,
   sapPassword,
+  loginTargets = undefined,
+  requireMappedSystem = false,
 }) {
   const user = cleanString(sapUser);
   const password = cleanString(sapPassword);
+  const normalizedSystemId = normalizeSystemId(systemId);
 
-  const root = cleanString(baseUrl) || buildBaseUrl({ protocol, host, port });
+  const mappedLoginRequest = normalizedSystemId
+    ? buildSapLoginRequest({
+        systemId: normalizedSystemId,
+        sapUser: user,
+        sapPassword: password,
+        loginTargets,
+        requireMappedSystem,
+      })
+    : null;
+
+  const root = mappedLoginRequest?.baseUrl || cleanString(baseUrl) || buildBaseUrl({ protocol, host, port });
 
   if (!root) {
     const e = new Error("baseUrl or host is required");
@@ -96,7 +115,16 @@ export async function loginToSolman({
     throw e;
   }
 
-  const url = buildLoginUrl(root, user, password);
+  const url = mappedLoginRequest?.requestUrl || buildLegacyLoginUrl(root, user, password);
+
+  console.info("[SolMan login] selected login target", {
+    systemId: normalizedSystemId || null,
+    source: mappedLoginRequest ? "mapped" : "legacy",
+    baseUrl: root,
+    serviceName: mappedLoginRequest?.serviceName || "ZNEW_USER_LOGIN_SRV",
+    entitySet: mappedLoginRequest?.entitySet || "user_loginSet",
+    requestUrl: url,
+  });
 
   let response;
   let text = "";

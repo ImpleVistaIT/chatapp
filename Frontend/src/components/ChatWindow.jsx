@@ -88,6 +88,7 @@ export default function ChatWindow({
   onMicClick,
   onCopyAssistant,
   onDownloadAssistant,
+  onEmailAssistant,
   startEditMessage,
   cancelEdit,
   applyEditLocal,
@@ -852,6 +853,7 @@ const isConnected = useMemo(() => {
         pendingAction={pendingAction}
         onCopyAssistant={onCopyAssistant}
         onDownloadAssistant={onDownloadAssistant}
+        onEmailAssistant={onEmailAssistant}
         onToast={onToast}
         copiedAtIndex={copiedAtIndex}
         loading={loading}

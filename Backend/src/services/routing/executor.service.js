@@ -326,6 +326,11 @@ async function executeS4hanaListPurchaseOrders({ payload, req }) {
     req?.body?.query ||
     "Show latest purchase orders";
 
+  const fromDate = payload?.fromDate || req?.body?.fromDate || null;
+  const toDate = payload?.toDate || req?.body?.toDate || null;
+  const limit = Math.min(200, Math.max(1, Number(payload?.limit || req?.body?.limit || 200)));
+  const skip = Math.max(0, Number(payload?.skip || req?.body?.skip || 0));
+
   if (!systemId) {
     const err = new Error("systemId is required.");
     err.status = 400;
@@ -372,6 +377,21 @@ async function executeS4hanaListPurchaseOrders({ payload, req }) {
     defaultDocType: "PO",
   });
 
+  if (fromDate && toDate) {
+    extracted.filters = Array.isArray(extracted.filters) ? extracted.filters : [];
+    extracted.filters = extracted.filters.filter((filter) => String(filter?.field || "").toLowerCase() !== "crtdate");
+    extracted.filters.push(
+      { field: "CrtDate", op: "ge", type: "datetime", value: fromDate },
+      { field: "CrtDate", op: "lt", type: "datetime", value: toDate }
+    );
+  }
+
+  extracted.limit = limit;
+  extracted.skip = skip;
+  if (!Array.isArray(extracted.orderBy) || extracted.orderBy.length === 0) {
+    extracted.orderBy = [{ field: "CrtDate", dir: "desc" }];
+  }
+
   const docNumber = extracted.docNumber
     ? normalizeNumericId(extracted.docNumber, Number(service.idPad) || null)
     : null;
@@ -379,9 +399,6 @@ async function executeS4hanaListPurchaseOrders({ payload, req }) {
   const docItem = extracted.docItem
     ? normalizeNumericId(extracted.docItem, Number(service.itemPad) || null)
     : null;
-
-  const limit = Math.min(200, Math.max(1, Number(extracted.limit) || 10));
-  const skip = Number.isFinite(Number(extracted.skip)) ? Math.max(0, Number(extracted.skip)) : 0;
 
   const relativePath = buildStructuredEntitySetQuery({
     entitySet: service.entitySet,
@@ -409,10 +426,13 @@ async function executeS4hanaListPurchaseOrders({ payload, req }) {
 
   return {
     query,
-    extracted: { ...extracted, limit, skip },
-    sapRequest: relativePath,
-    data: toResultsArray(sapData),
-    returned: toResultsArray(sapData).length,
+    result: {
+      query,
+      extracted: { ...extracted, limit, skip },
+      sapRequest: relativePath,
+      data: toResultsArray(sapData),
+      returned: toResultsArray(sapData).length,
+    },
   };
 }
 

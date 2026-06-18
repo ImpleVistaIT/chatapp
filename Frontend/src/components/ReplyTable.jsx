@@ -2,8 +2,51 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
   const isFallback =
     !columns || columns.length === 0 || columns[0] === "Output";
 
-  const safeColumns = Array.isArray(columns) ? columns : [];
   const safeRows = Array.isArray(rows) ? rows : [];
+
+  function isBlankLike(value) {
+    const text = String(value ?? "").trim();
+    return !text || text === "-";
+  }
+
+  function getColumnValue(row, column, colIdx) {
+    if (Array.isArray(row)) {
+      return row[colIdx] ?? row[column] ?? "";
+    }
+
+    if (!row || typeof row !== "object") {
+      return "";
+    }
+
+    const aliasMap = {
+      PoNo: ["PoNo", "PO Number", "PONumber", "PO_NO"],
+      PoItem: ["PoItem", "PO Item", "POItem", "PO_ITEM"],
+    };
+
+    const aliases = aliasMap[column] || [column];
+
+    for (const key of aliases) {
+      const value = row?.[key];
+      if (!isBlankLike(value)) {
+        return value;
+      }
+    }
+
+    if (column === "PoNo" && row?.__metadata?.id) {
+      const match = String(row.__metadata.id).match(/\('([^']+)'\)/);
+      if (match) return match[1];
+    }
+
+    return "";
+  }
+
+  const safeColumns = Array.isArray(columns) ? columns : [];
+  const visibleColumns =
+    safeColumns.includes("PoNo") &&
+    safeRows.length > 0 &&
+    safeRows.every((row, idx) => isBlankLike(getColumnValue(row, "PoNo", safeColumns.indexOf("PoNo"))))
+      ? safeColumns.filter((column) => column !== "PoNo")
+      : safeColumns;
 
   const labelMap = {
     "#": "Serial No",
@@ -34,7 +77,7 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
             {!isFallback && (
               <thead className="bg-green-300 text-black font-semibold">
                 <tr>
-                  {safeColumns.map((c) => (
+                  {visibleColumns.map((c) => (
                     <th
                       key={c}
                       className="px-3 py-3 border border-green-200 whitespace-nowrap"
@@ -53,12 +96,12 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
                   className="bg-green-100 text-green-800 border-t border-green-200"
                 >
                   {!isFallback ? (
-                    safeColumns.map((c, colIdx) => (
+                    visibleColumns.map((c, colIdx) => (
                       <td
                         key={`${c}-${colIdx}`}
                         className="px-3 py-3 whitespace-nowrap border border-green-200"
                       >
-                        {String(row?.[colIdx] ?? row?.[c] ?? "")}
+                        {String(getColumnValue(row, c, colIdx) ?? "")}
                       </td>
                     ))
                   ) : (

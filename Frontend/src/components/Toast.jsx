@@ -36,6 +36,17 @@ export default function Toast({ toast, onClose }) {
       {toast.message ? (
         <div className="mt-1 text-sm opacity-90">{toast.message}</div>
       ) : null}
+
+      {Number.isFinite(Number(toast.progress)) ? (
+        <div className="mt-3">
+          <div className="h-2 overflow-hidden rounded-full bg-black/10">
+            <div
+              className="h-full rounded-full bg-current transition-all duration-200"
+              style={{ width: `${Math.max(0, Math.min(100, Number(toast.progress)))}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSpeechToText } from "../hooks/useSpeechToText";
+import { sendChatMessageForExport } from "../api/chatApi";
 import { sendChatMessageStream } from "../api/chatApiStream";
-import { getSolmanChangeRequestDetails, listSolmanChangeRequests } from "../api/solmanApi";
+import { getSolmanChangeRequestDetails, listSolmanChangeRequestsForExport } from "../api/solmanApi";
 import {
   buildExportSummary,
+  buildExportFilename,
+  createChatExportExcelArrayBuffer,
+  createChatExportPdfBlob,
   buildRowsFromChartOrTable,
+  downloadChatSectionExcel,
   downloadChatSectionPdf,
 } from "../utils/downloadChatPdf";
 
@@ -201,6 +206,25 @@ function getCurrentConnectedSystem({ activeSession, selectedSystem, availableSys
     };
   }
 
+  const connectedSystems = Array.isArray(availableSystems)
+    ? availableSystems.filter((item) => item?.connected === true)
+    : [];
+
+  const preferredSolman = connectedSystems.find((item) => {
+    const sid = normalizeSystemId(item?.systemId || item?.id || item?.code);
+    const name = String(item?.name || item?.label || "").toLowerCase();
+    return sid.startsWith("H") || name.includes("solman");
+  });
+
+  const fallbackMatch = preferredSolman || connectedSystems[0] || null;
+
+  if (fallbackMatch) {
+    return {
+      systemId: normalizeSystemId(fallbackMatch?.systemId || fallbackMatch?.id || fallbackMatch?.code),
+      sapUser: String(fallbackMatch?.sapUser || activeSession?.sapUser || "").trim(),
+    };
+  }
+
   return {
     systemId: "",
     sapUser: "",
@@ -255,6 +279,11 @@ export default function Chat({ onToast = null } = {}) {
   const [systems, setSystems] = useState([]);
   const [tiles, setTiles] = useState([]);
   const [tilesLoaded, setTilesLoaded] = useState(false);
+  const resolvedConnectedSystem = getCurrentConnectedSystem({
+    activeSession,
+    selectedSystem,
+    availableSystems: tiles,
+  });
 
   const loadSystems = useCallback(async () => {
     try {
@@ -748,6 +777,7 @@ export default function Chat({ onToast = null } = {}) {
 
     const text = requestText.trim();
     const uiText = String(displayText || text).trim();
+    const currentConvId = activeId;
 
     if (!text || loading) return;
     if (sendingRef.current) return;
@@ -837,8 +867,6 @@ export default function Chat({ onToast = null } = {}) {
     sendingRef.current = true;
     baseRef.current = "";
     interimRef.current = "";
-
-    const currentConvId = activeId;
     const sessionIdToSend = isMongoId(sessionId)
       ? sessionId
       : isMongoId(currentConvId)
@@ -1220,6 +1248,190 @@ export default function Chat({ onToast = null } = {}) {
     };
   }
 
+  function getLastNDaysRange(days = 30) {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - Math.max(1, Number(days) || 30) + 1);
+
+    const toYyyymmdd = (date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}${month}${day}`;
+    };
+
+    return {
+      fromDate: toYyyymmdd(start),
+      toDate: toYyyymmdd(end),
+    };
+  }
+
+  function isPurchaseOrderDownloadContext(message = {}) {
+    const rows = buildRowsFromChartOrTable(message?.data || message?.result || message);
+    const hasPoShape = Array.isArray(rows) && rows.some((row) => {
+      if (!row || typeof row !== "object") return false;
+      return (
+        row.PoNo != null ||
+        row.PoItem != null ||
+        row.CrtDate != null ||
+        row.UserCreated != null ||
+        row.SuppAcoutNo != null ||
+        row.NetPrice != null ||
+        row.CurKey != null
+      );
+    });
+
+    if (hasPoShape) return true;
+
+    const system = String(message?.extracted?.system || message?.responseMeta?.system || "").trim().toLowerCase();
+    const intent = String(message?.extracted?.intent || message?.responseMeta?.intent || message?.responseMeta?.executor || "").trim().toLowerCase();
+    const text = String(message?.text || message?.summary || "").trim().toLowerCase();
+
+    if (system === "s4hana") return true;
+    if (intent.includes("purchase_order")) return true;
+
+    return (
+      text.includes("purchase order") ||
+      text.includes("purchase orders") ||
+      /\bpo\b/.test(text)
+    );
+  }
+
+  async function fetchEntirePurchaseOrderData(message, fallbackFilters = {}) {
+    const filters = {
+      ...(fallbackFilters || {}),
+    };
+
+    let storedActiveSystem = null;
+    try {
+      storedActiveSystem = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
+    } catch {
+      storedActiveSystem = null;
+    }
+
+    const exportSystemId = String(
+      message?.responseMeta?.systemId ||
+        message?.data?.responseMeta?.systemId ||
+        message?.data?.systemId ||
+        activeSession?.systemId ||
+        storedActiveSystem?.systemId ||
+        ""
+    ).trim();
+    const exportSapUser = String(
+      message?.responseMeta?.sapUser ||
+        message?.data?.responseMeta?.sapUser ||
+        message?.data?.sapUser ||
+        activeSession?.sapUser ||
+        storedActiveSystem?.sapUser ||
+        ""
+    ).trim();
+
+    if (!exportSystemId || !exportSapUser) {
+      throw new Error("Active SAP connection is required for full export.");
+    }
+
+    if (!filters.fromDate || !filters.toDate) {
+      const last30Days = getLastNDaysRange(30);
+      filters.fromDate = filters.fromDate || last30Days.fromDate;
+      filters.toDate = filters.toDate || last30Days.toDate;
+      if (!filters.dateText) filters.dateText = "last 30 days";
+    }
+
+    const queryText = "show purchase orders";
+
+    const availableSystems = Array.isArray(systems) ? systems : [];
+    const rows = [];
+    const pageSize = 200;
+    let totalCount = null;
+
+    for (let page = 0; page < 30; page += 1) {
+      const skip = page * pageSize;
+      if (totalCount && totalCount > 0) {
+        const progress = Math.min(99, Math.round((rows.length / totalCount) * 100));
+        showDownloadToast("info", "Downloading", `Fetching purchase orders ${progress}%`, progress);
+      } else if (page === 0) {
+        showDownloadToast("info", "Downloading", "Fetching purchase orders 0%", 0);
+      }
+
+      const response = await sendChatMessageForExport({
+        query: queryText,
+        sessionId: null,
+        systemId: exportSystemId,
+        sapUser: exportSapUser,
+        availableSystems,
+        limit: pageSize,
+        skip,
+        fromDate: filters.fromDate,
+        toDate: filters.toDate,
+      });
+
+      const responseBody = response?.payload || {};
+      const responseResult =
+        responseBody?.result?.result ||
+        responseBody?.result ||
+        responseBody?.data ||
+        responseBody?.rows ||
+        responseBody;
+      const pageRows = buildRowsFromChartOrTable(responseResult);
+
+      if (pageRows.length > 0) {
+        rows.push(...pageRows);
+      }
+
+      if (!totalCount) {
+        const rawTotal = Number(
+          responseBody?.result?.result?.totalCount ||
+            responseBody?.result?.result?.count ||
+            responseBody?.result?.totalCount ||
+            responseBody?.result?.count ||
+            responseBody?.totalCount ||
+            responseBody?.count ||
+            0
+        );
+        if (Number.isFinite(rawTotal) && rawTotal > 0) {
+          totalCount = rawTotal;
+        }
+      }
+
+      const returnedCount = Number(
+        responseBody?.result?.result?.returned ??
+          responseBody?.result?.returned ??
+          pageRows.length
+      );
+
+      if (!response.ok && pageRows.length === 0) {
+        const errorMessage =
+          responseBody?.error?.message ||
+          responseBody?.error ||
+          responseBody?.message ||
+          `Chat request failed (${response.status})`;
+
+        throw new Error(errorMessage);
+      }
+
+      if (totalCount && totalCount > 0) {
+        const progress = Math.min(99, Math.round((rows.length / totalCount) * 100));
+        showDownloadToast(
+          "info",
+          "Downloading",
+          `Fetching purchase orders ${progress}% (${rows.length}/${totalCount})`,
+          progress
+        );
+      }
+
+      if ((Number.isFinite(totalCount) && totalCount > 0 && rows.length >= totalCount) || returnedCount < pageSize) {
+        break;
+      }
+    }
+
+    if (Number.isFinite(totalCount) && totalCount > 0 && rows.length > totalCount) {
+      rows.length = totalCount;
+    }
+
+    rows.totalCount = totalCount ?? rows.length;
+    return rows;
+  }
+
   async function fetchEntireSolmanData(message, fallbackFilters = {}) {
     const filters = {
       ...(fallbackFilters || {}),
@@ -1254,7 +1466,14 @@ export default function Chat({ onToast = null } = {}) {
     }
 
     if (!filters.fromDate || !filters.toDate) {
-      throw new Error("This export needs a date range to fetch the full result set.");
+      if (isPurchaseOrderDownloadContext(message)) {
+        const last30Days = getLastNDaysRange(30);
+        filters.fromDate = filters.fromDate || last30Days.fromDate;
+        filters.toDate = filters.toDate || last30Days.toDate;
+        if (!filters.dateText) filters.dateText = "last 30 days";
+      } else {
+        throw new Error("This export needs a date range to fetch the full result set.");
+      }
     }
 
     const baseRequest = {
@@ -1275,83 +1494,461 @@ export default function Chat({ onToast = null } = {}) {
     };
 
     if (filters.fromDate && filters.toDate) {
-      const result = await listSolmanChangeRequests(baseRequest);
-      return normalizeSolmanRows(result, message?.data);
+      const response = await listSolmanChangeRequestsForExport(baseRequest);
+      const responseBody = response?.payload || {};
+      const result =
+        responseBody?.result ||
+        responseBody?.data ||
+        responseBody?.rows ||
+        responseBody;
+      const normalizedRows = normalizeSolmanRows(result, message?.data);
+
+      if (!response.ok && normalizedRows.length === 0) {
+        const errorMessage =
+          responseBody?.error?.message ||
+          responseBody?.error ||
+          responseBody?.message ||
+          `SolMan request failed (${response.status})`;
+
+        throw new Error(errorMessage);
+      }
+
+      return normalizedRows;
     }
 
     return Array.isArray(message?.data) ? message.data : [];
   }
 
-  function showDownloadToast(type, title, message) {
-    if (typeof onToast !== "function") return;
-    onToast({ type, title, message, duration: type === "info" ? 1200 : 2500 });
+  async function fetchActiveProfileEmail() {
+    let storedActiveSession = null;
+    try {
+      storedActiveSession = JSON.parse(localStorage.getItem("sapActiveSession") || "null");
+    } catch {
+      storedActiveSession = null;
+    }
+
+    const resolvedConnection = getCurrentConnectedSystem({
+      activeSession: activeSession || storedActiveSession,
+      selectedSystem,
+      availableSystems: tiles,
+    });
+
+    const systemId = String(resolvedConnection?.systemId || "").trim();
+    const sapUser = String(resolvedConnection?.sapUser || "").trim();
+
+    const isConnectedTile = (tile) => {
+      if (!tile || typeof tile !== "object") return false;
+      if (tile.connected === true || tile.isConnected === true || tile.active === true) return true;
+      const status = String(tile.status || "").trim().toLowerCase();
+      return ["connected", "online", "active"].includes(status);
+    };
+
+    const fallbackTile = Array.isArray(tiles)
+      ? tiles.find((tile) => isConnectedTile(tile) && String(tile?.systemId || tile?.SystemId || "").trim())
+      : null;
+
+    const fallbackSystemId = String(fallbackTile?.systemId || fallbackTile?.SystemId || "").trim();
+
+    const effectiveSystemId = systemId || fallbackSystemId;
+    const effectiveSapUser = sapUser || String(fallbackTile?.sapUser || fallbackTile?.user || "").trim();
+
+    let resolvedSapUser = effectiveSapUser;
+
+    if (effectiveSystemId && !resolvedSapUser) {
+      const statusResponse = await authFetch(`${apiBase}/sap/status?systemId=${encodeURIComponent(effectiveSystemId)}`, {
+        method: "GET",
+      });
+
+      const statusPayload = await statusResponse.json().catch(() => ({}));
+      if (statusResponse.ok && statusPayload?.ok === true) {
+        resolvedSapUser = String(statusPayload?.sapUser || "").trim();
+      }
+    }
+
+    if (!effectiveSystemId || !resolvedSapUser) {
+      throw new Error("Active SAP connection is required to resolve the sender email.");
+    }
+
+    const response = await authFetch(`${apiBase}/sap/user-profile`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ systemId: effectiveSystemId, sapUser: resolvedSapUser }),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok || payload?.ok !== true) {
+      throw new Error(payload?.error || "Failed to fetch the active profile email.");
+    }
+
+    const profile = payload?.profile || payload || {};
+    const email = String(profile?.email || profile?.Email || profile?.mail || profile?.Mail || "").trim();
+    const firstName = String(profile?.firstName || profile?.Firstname || profile?.first_name || "").trim();
+    const lastName = String(profile?.lastName || profile?.Lastname || profile?.last_name || "").trim();
+
+    return {
+      email,
+      firstName,
+      lastName,
+      profile,
+    };
   }
 
-  async function onDownloadAssistant({ group, mode }) {
+  function blobToBase64(blob) {
+    return blob.arrayBuffer().then((buffer) => {
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      const chunkSize = 0x8000;
+
+      for (let index = 0; index < bytes.length; index += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+      }
+
+      return btoa(binary);
+    });
+  }
+
+  function showDownloadToast(type, title, message, progress = null) {
+    if (typeof onToast !== "function") return;
+    onToast({
+      type,
+      title,
+      message,
+      progress: Number.isFinite(Number(progress)) ? Math.max(0, Math.min(100, Number(progress))) : null,
+      duration: type === "info" ? 12000 : 2500,
+    });
+  }
+
+  async function onDownloadAssistant({ group, mode, fromDate = null, toDate = null, format = "pdf" }) {
     const message = getAssistantMessageForDownload(group, mode);
-    const { rowMessage, filterMessage } = getAssistantDownloadContext(group);
     if (!message) {
       showDownloadToast("error", "Download failed", "No export data found for this response.");
-      return;
+      return { ok: false, message: "No export data found for this response." };
     }
 
     const isCurrent = mode === "current";
     showDownloadToast(
       "info",
       "Preparing download",
-      isCurrent ? "Building current section PDF..." : "Fetching entire dataset for PDF..."
+      isCurrent
+        ? "Building current section PDF..."
+        : `Building ${String(format || "pdf").toUpperCase()} for selected date range...`
     );
 
     try {
-      const sectionRows = buildRowsFromChartOrTable(rowMessage?.data || message?.data);
-      const chartData = message?.chart || message?.data?.chart || rowMessage?.chart || rowMessage?.data?.chart || null;
-      const filters = (filterMessage?.extracted?.filters || message?.extracted?.filters || {});
+      const sectionRows = buildRowsFromChartOrTable(message?.data);
+      const chartData = message?.chart || message?.data?.chart || null;
+      const filters = message?.extracted?.filters || {};
 
       if (isCurrent) {
+        const filename = buildExportFilename({
+          baseName: "report",
+          fromDate: filters?.fromDate,
+          toDate: filters?.toDate,
+          format: "pdf",
+        });
+
         downloadChatSectionPdf({
           title: "SAP Chat Export",
           sectionLabel: "Current section",
-          summary: rowMessage?.summary || rowMessage?.text || message?.summary || message?.text || "",
+          summary: message?.summary || message?.text || "",
           rows: sectionRows,
           chartData: chartData || buildChartFromRows(sectionRows),
           filters,
           includeResultTable: true,
-          filename: "sap-current-section.pdf",
+          filename,
         });
         showDownloadToast("success", "Download ready", "Current section PDF has been downloaded.");
-        return;
+        return { ok: true };
       }
 
-      const fullRows = await fetchEntireSolmanData(filterMessage || message, filters);
+      const selectedFromDate = String(fromDate || "").trim();
+      const selectedToDate = String(toDate || "").trim();
+
+      if (!selectedFromDate || !selectedToDate) {
+        throw new Error("From Date and To Date are required.");
+      }
+
+      if (selectedFromDate > selectedToDate) {
+        throw new Error("From Date cannot be later than To Date.");
+      }
+
+      const rangeFilters = {
+        ...filters,
+        fromDate: selectedFromDate,
+        toDate: selectedToDate,
+      };
+
+      const isPurchaseOrderExport = isPurchaseOrderDownloadContext(message);
+      const fullRows = isPurchaseOrderExport
+        ? await fetchEntirePurchaseOrderData(message, rangeFilters)
+        : await fetchEntireSolmanData(message, rangeFilters);
 
       if (!Array.isArray(fullRows) || fullRows.length === 0) {
-        throw new Error("Could not fetch the entire result set for this export.");
+        throw new Error("Selected date range does not contain any available records.");
       }
 
       const fullChart = chartData || buildChartFromRows(fullRows);
       const summary = buildExportSummary({
         summary: "",
         totalCount: fullRows.length,
-        filters,
+        filters: rangeFilters,
+      });
+      const exportFilename = buildExportFilename({
+        baseName: "report",
+        fromDate: selectedFromDate,
+        toDate: selectedToDate,
+        format,
       });
 
-      downloadChatSectionPdf({
-        title: "SAP Chat Export",
-        sectionLabel: "Entire data",
-        summary,
-        rows: fullRows,
-        chartData: fullChart,
-        filters,
-        filename: "sap-entire-data.pdf",
-      });
+      if (String(format || "pdf").toLowerCase() === "xlsx") {
+        downloadChatSectionExcel({
+          title: "SAP Chat Export",
+          sectionLabel: `Selected range: ${selectedFromDate} to ${selectedToDate}`,
+          summary,
+          rows: fullRows,
+          filters: rangeFilters,
+          filename: exportFilename,
+        });
+      } else {
+        downloadChatSectionPdf({
+          title: "SAP Chat Export",
+          sectionLabel: `Selected range: ${selectedFromDate} to ${selectedToDate}`,
+          summary,
+          rows: fullRows,
+          chartData: fullChart,
+          filters: rangeFilters,
+          filename: exportFilename,
+        });
+      }
 
       showDownloadToast(
         "success",
         "Download ready",
-        `Entire data PDF downloaded with ${fullRows.length} record(s).`
+        `${String(format || "pdf").toUpperCase()} download started with ${fullRows.length} record(s).`
       );
+
+      return { ok: true };
     } catch (err) {
       showDownloadToast("error", "Download failed", err?.message || "Download failed.");
+      return { ok: false, message: err?.message || "Download failed." };
+    }
+  }
+
+  async function onEmailAssistant({
+    group,
+    recipientType,
+    recipientEmail,
+    scope = "current",
+    fromDate = "",
+    toDate = "",
+    format = "pdf",
+    customMessageEnabled = false,
+    customMessage = "",
+    onStatusChange = null,
+  }) {
+    const message = getAssistantMessageForDownload(group, "current");
+    if (!message) {
+      showDownloadToast("error", "Email failed", "No export data found for this response.");
+      return { ok: false, message: "No export data found for this response." };
+    }
+
+    const filters = message?.extracted?.filters || {};
+    const selectedFormat = String(format || "pdf").toLowerCase() === "xlsx" ? "xlsx" : "pdf";
+
+    const normalizedScope = String(scope || "current").trim().toLowerCase();
+    const isRangeScope = normalizedScope === "range";
+
+    const exportFromDate = String(fromDate || filters?.fromDate || "").trim();
+    const exportToDate = String(toDate || filters?.toDate || "").trim();
+
+    onStatusChange?.("Generating report...");
+
+    const emailPayload = (() => {
+      if (isRangeScope) {
+        if (!exportFromDate || !exportToDate) {
+          throw new Error("A date range is required before sending this report by email.");
+        }
+
+        const isPurchaseOrderExport = isPurchaseOrderDownloadContext(message);
+        const rangeFilters = {
+          ...filters,
+          fromDate: exportFromDate,
+          toDate: exportToDate,
+        };
+
+        return {
+          kind: "range",
+          filters: rangeFilters,
+          fileName: buildExportFilename({
+            baseName: "report",
+            fromDate: exportFromDate,
+            toDate: exportToDate,
+            format: selectedFormat,
+          }),
+          rowsPromise: isPurchaseOrderExport
+            ? fetchEntirePurchaseOrderData(message, rangeFilters)
+            : fetchEntireSolmanData(message, rangeFilters),
+          sectionLabel: `Selected range: ${exportFromDate} to ${exportToDate}`,
+          summaryFilters: rangeFilters,
+        };
+      }
+
+      const currentRows = buildRowsFromChartOrTable(message?.data);
+      return {
+        kind: "current",
+        filters,
+        fileName: buildExportFilename({
+          baseName: "report_current_section",
+          fromDate: "current",
+          toDate: "section",
+          format: selectedFormat,
+        }),
+        rowsPromise: Promise.resolve(Array.isArray(currentRows) ? currentRows : []),
+        sectionLabel: "Current section",
+        summaryFilters: filters,
+      };
+    })();
+
+    const fullRows = await emailPayload.rowsPromise;
+
+    if (!Array.isArray(fullRows) || (fullRows.length === 0 && emailPayload.kind === "range")) {
+      throw new Error(
+        emailPayload.kind === "range"
+          ? "Selected date range does not contain any available records."
+          : "Current section does not contain any available records."
+      );
+    }
+
+    const summary = buildExportSummary({
+      summary: emailPayload.kind === "current" && (!Array.isArray(fullRows) || fullRows.length === 0)
+        ? String(message?.summary || message?.text || "").trim()
+        : "",
+      totalCount: fullRows.length,
+      filters: emailPayload.summaryFilters,
+    });
+    const fileName = emailPayload.fileName;
+    const emailFilters = emailPayload.filters || filters;
+
+    const senderProfile = await fetchActiveProfileEmail();
+    const senderEmail = String(senderProfile?.email || "").trim();
+    const senderName = `${String(senderProfile?.firstName || "").trim()} ${String(senderProfile?.lastName || "").trim()}`.trim();
+
+    if (recipientType !== "me" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(recipientEmail || "").trim())) {
+      throw new Error("Please enter a valid recipient email address.");
+    }
+
+    onStatusChange?.("Generating attachment...");
+
+    let attachmentContentBase64 = "";
+    let contentType = "application/pdf";
+    let attachmentSize = 0;
+
+    if (selectedFormat === "xlsx") {
+      const arrayBuffer = createChatExportExcelArrayBuffer({
+        title: "SAP Chat Export",
+        sectionLabel: emailPayload.kind === "range"
+          ? `Selected range: ${exportFromDate} to ${exportToDate}`
+          : "Current section",
+        summary,
+        rows: fullRows,
+        filters: emailFilters,
+      });
+
+      attachmentSize = arrayBuffer?.byteLength || 0;
+      if (attachmentSize <= 0) {
+        throw new Error("Attachment generation failed.");
+      }
+
+      const attachmentBlob = new Blob([arrayBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      if (attachmentBlob.size <= 0) {
+        throw new Error("Attachment generation failed.");
+      }
+
+      attachmentContentBase64 = await blobToBase64(attachmentBlob);
+      contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+      attachmentSize = attachmentBlob.size;
+    } else {
+      const pdfBlob = createChatExportPdfBlob({
+        title: "SAP Chat Export",
+        sectionLabel: emailPayload.kind === "range"
+          ? `Selected range: ${exportFromDate} to ${exportToDate}`
+          : "Current section",
+        summary,
+        rows: fullRows,
+        chartData: fullRows.length > 0 ? buildChartFromRows(fullRows) : null,
+        filters: emailFilters,
+        includeResultTable: fullRows.length > 0,
+      });
+
+      if (!pdfBlob || pdfBlob.size <= 0) {
+        throw new Error("Attachment generation failed.");
+      }
+
+      attachmentContentBase64 = await blobToBase64(pdfBlob);
+      contentType = "application/pdf";
+      attachmentSize = pdfBlob.size;
+    }
+
+    if (!attachmentContentBase64 || attachmentSize <= 0) {
+      throw new Error("Attachment generation failed.");
+    }
+
+    onStatusChange?.("Sending email...");
+
+    const emailBodyText = customMessageEnabled && String(customMessage || "").trim()
+      ? String(customMessage || "").trim()
+      : emailPayload.kind === "range"
+        ? `Please find the ${selectedFormat.toUpperCase()} report attached for ${exportFromDate} to ${exportToDate}.`
+        : `Please find the ${selectedFormat.toUpperCase()} report attached for the current section.`;
+
+    const to = recipientType === "me" ? senderEmail : String(recipientEmail || "").trim();
+
+    try {
+      const response = await authFetch(`${apiBase}/chat/email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          to,
+          senderEmail,
+          senderName,
+          subject: emailPayload.kind === "range"
+            ? `SAP Chat Export (${exportFromDate} to ${exportToDate})`
+            : "SAP Chat Export (Current section)",
+          customMessage: emailBodyText,
+          attachment: {
+            filename: fileName,
+            contentType,
+            contentBase64: attachmentContentBase64,
+          },
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      console.log("Email API Response:", response);
+      console.log("Email API Response Payload:", payload);
+
+      if (!response.ok || payload?.ok !== true) {
+        throw new Error(payload?.error || payload?.message || "Failed to send email. Please try again.");
+      }
+
+      showDownloadToast(
+        "success",
+        "Email sent",
+        `Email sent successfully to ${recipientType === "me" ? senderEmail : to}`
+      );
+
+      return { ok: true };
+    } catch (error) {
+      console.error("Email API Error:", error);
+      const message = error?.message || "Failed to send email. Please try again.";
+      showDownloadToast("error", "Email failed", message);
+      return { ok: false, message };
     }
   }
 
@@ -1362,7 +1959,9 @@ export default function Chat({ onToast = null } = {}) {
   }
 
   async function handleViewCrStatus({ objectId, processType = "YMHF" }) {
-    if (!activeSession?.systemId) {
+    const resolvedConnection = resolvedConnectedSystem;
+
+    if (!resolvedConnection?.systemId) {
       updateActiveMessages((m) => [
         ...m,
         {
@@ -1373,7 +1972,7 @@ export default function Chat({ onToast = null } = {}) {
       return;
     }
 
-    if (!activeSession?.sapUser) {
+    if (!resolvedConnection?.sapUser) {
       updateActiveMessages((m) => [
         ...m,
         {
@@ -1386,8 +1985,8 @@ export default function Chat({ onToast = null } = {}) {
 
     try {
       const data = await getSolmanChangeRequestDetails({
-        systemId: activeSession.systemId,
-        sapUser: activeSession.sapUser,
+        systemId: resolvedConnection.systemId,
+        sapUser: resolvedConnection.sapUser,
         objectId,
         processType,
       });
@@ -1532,15 +2131,23 @@ export default function Chat({ onToast = null } = {}) {
   const solmanCreateCrForm = showSolmanCrForm ? (
     <div className="px-4 pb-4">
       <SolmanCreateCrForm
-        systemId={activeSession?.systemId || ""}
-        sapUser={activeSession?.sapUser || ""}
+        systemId={resolvedConnectedSystem?.systemId || ""}
+        sapUser={resolvedConnectedSystem?.sapUser || ""}
+        sessionId={isMongoId(activeId) ? activeId : ""}
         initialValues={pendingAction?.collected || {}}
         pendingAction={pendingAction}
         onCancel={() => {
           setShowSolmanCrForm(false);
         }}
         onSuccess={async (data) => {
-          const crId = data.changeRequestId;
+          const crId =
+            data?.changeRequestId ||
+            data?.result?.changeRequestId ||
+            data?.result?.objectId ||
+            String(data?.message || "").match(/CR\s+(\d+)/i)?.[1] ||
+            "";
+          const successMessage = data?.message || "Change request created successfully.";
+          const statusText = data?.status ? `Status: ${data.status}` : "";
 
           setShowSolmanCrForm(false);
           setPendingAction(null);
@@ -1549,14 +2156,9 @@ export default function Chat({ onToast = null } = {}) {
             ...m,
             {
               role: "assistant",
-              text: `CR ${crId} created successfully. Status: ${data.status}`,
+              text: [successMessage, statusText].filter(Boolean).join(" "),
             },
           ]);
-
-          await handleViewCrStatus({
-            objectId: crId,
-            processType: "YMHF",
-          });
         }}
       />
     </div>
@@ -1633,6 +2235,7 @@ export default function Chat({ onToast = null } = {}) {
             onMicClick={onMicClick}
             onCopyAssistant={onCopyAssistant}
             onDownloadAssistant={onDownloadAssistant}
+            onEmailAssistant={onEmailAssistant}
             onToast={onToast}
             startEditMessage={startEditMessage}
             cancelEdit={cancelEdit}

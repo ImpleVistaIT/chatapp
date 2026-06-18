@@ -1,9 +1,11 @@
 import { classifyPrompt } from "../services/routing/promptClassifier.service.js";
 import { resolveTargetSystem } from "../services/routing/systemContextResolver.service.js";
 import { normalizePromptWithLlm } from "../services/routing/promptNormalization.service.js";
+import { buildGeneralConversationResponse, detectConversationIntent } from "../services/routing/conversationIntent.service.js";
 import { SapCredential } from "../models/SapCredential.model.js";
 import { ChatMessage } from "../models/ChatMessage.model.js";
 import { SapConnection } from "../models/SapConnection.model.js";
+import { getSessionPendingAction } from "../services/chat/chatSessionPending.service.js";
 
 import {
   createSseSession,
@@ -25,7 +27,7 @@ function isNextPageQuery(query) {
 
 function isLandscapeOnlyQuery(query) {
   const q = cleanString(query).toUpperCase();
-  return q === "ROW" || q === "INDIA";
+  return ["ROW", "INDIA", "PRD", "QAS", "DEV", "QA", "UAT", "PROD"].includes(q);
 }
 
 const ROUTING_KEYWORD_REGEX =
@@ -446,7 +448,30 @@ export async function handleChatStream(req, res) {
       return sse.end();
     }
 
-    if (isLikelyGibberishQuery(query)) {
+    const rawQuery = cleanString(query);
+    const sessionPendingAction =
+      pendingAction ||
+      (sessionId
+        ? await step("getSessionPendingAction", () => getSessionPendingAction(sessionId))
+        : null);
+    const isExactSolmanContinuation =
+      Boolean(sessionPendingAction) &&
+      (isLandscapeOnlyQuery(rawQuery) || isNextPageQuery(rawQuery));
+
+    const conversationIntent = await step("detectConversationIntent", () =>
+      detectConversationIntent({ query: rawQuery })
+    );
+
+    if (conversationIntent?.handled && !isExactSolmanContinuation) {
+      console.log("Skipping SAP API call - General Conversation");
+      sse.send("reply", buildGeneralConversationResponse(conversationIntent));
+      sse.send("done", { ok: true });
+      return sse.end();
+    }
+
+    console.log("SAP Query Detected - Calling SAP API");
+
+    if (!isExactSolmanContinuation && isLikelyGibberishQuery(rawQuery)) {
       sse.send("error", {
         message: buildInvalidPromptMessage(),
         status: "invalid_prompt",
@@ -455,12 +480,13 @@ export async function handleChatStream(req, res) {
     }
 
     const normalizedPrompt = await step("normalizePromptWithLlm", () =>
-      normalizePromptWithLlm({ query })
+      normalizePromptWithLlm({ query: rawQuery })
     );
 
-    const effectiveQuery = cleanString(normalizedPrompt?.normalizedQuery || query) || cleanString(query);
+    const effectiveQuery =
+      cleanString(normalizedPrompt?.normalizedQuery || rawQuery) || rawQuery;
 
-    if (normalizedPrompt?.rejected) {
+    if (normalizedPrompt?.rejected && !isExactSolmanContinuation) {
       sse.send("error", {
         message: buildInvalidPromptMessage(),
         status: "invalid_prompt",
@@ -478,10 +504,10 @@ export async function handleChatStream(req, res) {
       message: "Understanding your request...",
     });
 
-    const queryIsNextPage = isNextPageQuery(effectiveQuery);
-    const queryIsLandscapeOnly = isLandscapeOnlyQuery(effectiveQuery);
+    const queryIsNextPage = isNextPageQuery(rawQuery);
+    const queryIsLandscapeOnly = isLandscapeOnlyQuery(rawQuery);
 
-    let effectivePendingAction = pendingAction || null;
+    let effectivePendingAction = sessionPendingAction || null;
 
     if (!effectivePendingAction && sessionId) {
       effectivePendingAction = await step("findLastSolmanListContext", () =>
@@ -526,7 +552,7 @@ export async function handleChatStream(req, res) {
       const pendingFilters = effectivePendingAction?.filters || {};
 
       const restoredScope = queryIsLandscapeOnly
-        ? cleanString(effectiveQuery).toUpperCase()
+        ? rawQuery.toUpperCase()
         : cleanString(businessScope || "");
 
       const restoredProcessType = queryIsLandscapeOnly
@@ -604,7 +630,7 @@ export async function handleChatStream(req, res) {
         queryIsNextPage
           ? effectivePendingAction?.query || "show cr list"
           : queryIsLandscapeOnly
-            ? effectiveQuery || effectivePendingAction?.query || "show cr list"
+            ? rawQuery || effectivePendingAction?.query || "show cr list"
             : effectiveQuery || effectivePendingAction?.query
       );
 
@@ -771,6 +797,7 @@ export async function handleChatStream(req, res) {
     }
 
     const context = {
+      req,
       sse,
       owner,
       query: effectiveQuery,

@@ -1,12 +1,14 @@
-import MessageBubble from "../MessageBubble";
+﻿import MessageBubble from "../MessageBubble";
 import toast from "react-hot-toast";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { buildExportFilename } from "../../utils/downloadChatPdf";
 import {
   FiCopy,
   FiCheck,
   FiEdit2,
   FiDownload,
+  FiMail,
   FiRefreshCw,
   FiChevronDown,
 } from "react-icons/fi";
@@ -18,6 +20,280 @@ function normalizeBool(value, fallback = false) {
     if (["true", "yes", "1", "connected", "online", "active"].includes(v)) return true;
     if (["false", "no", "0", "disconnected", "offline", "inactive"].includes(v)) return false;
   }
+
+      {emailDialogOpen && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 z-[10001] flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" onClick={closeEmailDialog} />
+
+          <div className="relative w-full max-w-2xl overflow-hidden rounded-3xl border border-white/20 bg-white shadow-[0_25px_90px_rgba(15,23,42,0.38)]">
+            <div className="border-b border-slate-200 bg-gradient-to-r from-sky-900 to-cyan-700 px-6 py-4 text-white">
+              <p className="text-xs uppercase tracking-[0.24em] text-sky-200">Email Delivery</p>
+              <h3 className="mt-1 text-xl font-semibold">Send report by email</h3>
+              <p className="mt-2 text-sm text-sky-100/90">
+                Choose the current section or a particular date range before selecting a format.
+              </p>
+            </div>
+
+            <div className="px-6 py-5">
+              <div className={`mb-5 grid gap-2 text-xs font-medium uppercase tracking-wide text-slate-500 ${emailWizardSteps.length === 6 ? "grid-cols-6" : "grid-cols-5"}`}>
+                {emailWizardSteps.map((label, index) => {
+                  const active = emailStep === index + 1;
+                  const completed = emailStep > index + 1;
+                  return (
+                    <div
+                      key={label}
+                      className={`rounded-2xl px-3 py-2 text-center transition ${
+                        active
+                          ? "bg-sky-600 text-white"
+                          : completed
+                            ? "bg-sky-100 text-sky-900"
+                            : "bg-slate-100 text-slate-500"
+                      }`}
+                    >
+                      {label}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="space-y-5">
+                {emailStep === 1 && (
+                  <div className="space-y-4">
+                    <p className="text-sm font-medium text-slate-700">Who would you like to send this report to?</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        { value: "me", label: "Send to Me" },
+                        { value: "other", label: "Send to Another Person" },
+                      ].map((option) => {
+                        const active = emailDraft.recipientType === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setEmailDraft((curr) => ({ ...curr, recipientType: option.value }))}
+                            className={`rounded-2xl border px-4 py-4 text-left text-sm font-medium transition ${
+                              active
+                                ? "border-sky-500 bg-sky-50 text-sky-900"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {emailDraft.recipientType === "other" && (
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium text-slate-700">Recipient email address</span>
+                        <input
+                          type="email"
+                          value={emailDraft.recipientEmail}
+                          onChange={(e) => setEmailDraft((curr) => ({ ...curr, recipientEmail: e.target.value }))}
+                          className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15"
+                          placeholder="john.doe@company.com"
+                        />
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {emailStep === 2 && (
+                  <div className="space-y-4">
+                    <p className="text-sm font-medium text-slate-700">What do you want to send?</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        { value: "current", label: "Current section" },
+                        { value: "range", label: "Particular date range" },
+                      ].map((option) => {
+                        const active = emailDraft.scope === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setEmailDraft((curr) => ({ ...curr, scope: option.value }))}
+                            className={`rounded-2xl border px-4 py-4 text-left text-sm font-medium transition ${
+                              active
+                                ? "border-sky-500 bg-sky-50 text-sky-900"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {emailIsRange && emailStep === 3 && (
+                  <div className="space-y-4">
+                    <p className="text-sm font-medium text-slate-700">Select date range</p>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <label className="space-y-2">
+                        <span className="text-sm font-medium text-slate-700">From Date</span>
+                        <input
+                          type="date"
+                          value={emailDraft.fromDate}
+                          onChange={(e) => setEmailDraft((curr) => ({ ...curr, fromDate: e.target.value }))}
+                          className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15"
+                        />
+                      </label>
+
+                      <label className="space-y-2">
+                        <span className="text-sm font-medium text-slate-700">To Date</span>
+                        <input
+                          type="date"
+                          value={emailDraft.toDate}
+                          onChange={(e) => setEmailDraft((curr) => ({ ...curr, toDate: e.target.value }))}
+                          className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15"
+                        />
+                      </label>
+                    </div>
+                    <p className="text-xs text-slate-500">These dates are required only when sending a particular date range.</p>
+                  </div>
+                )}
+
+                {((!emailIsRange && emailStep === 3) || (emailIsRange && emailStep === 4)) && (
+                  <div className="space-y-4">
+                    <p className="text-sm font-medium text-slate-700">Select file format</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        { value: "pdf", label: "PDF" },
+                        { value: "xlsx", label: "Excel (.xlsx)" },
+                      ].map((option) => {
+                        const active = emailDraft.format === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setEmailDraft((curr) => ({ ...curr, format: option.value }))}
+                            className={`rounded-2xl border px-4 py-4 text-left text-sm font-medium transition ${
+                              active
+                                ? "border-sky-500 bg-sky-50 text-sky-900"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {((!emailIsRange && emailStep === 4) || (emailIsRange && emailStep === 5)) && (
+                  <div className="space-y-4">
+                    <p className="text-sm font-medium text-slate-700">Would you like to add a custom email message?</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        { value: true, label: "Yes" },
+                        { value: false, label: "No" },
+                      ].map((option) => {
+                        const active = emailDraft.customMessageEnabled === option.value;
+                        return (
+                          <button
+                            key={String(option.value)}
+                            type="button"
+                            onClick={() => setEmailDraft((curr) => ({ ...curr, customMessageEnabled: option.value }))}
+                            className={`rounded-2xl border px-4 py-4 text-left text-sm font-medium transition ${
+                              active
+                                ? "border-sky-500 bg-sky-50 text-sky-900"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {emailDraft.customMessageEnabled && (
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium text-slate-700">Message</span>
+                        <textarea
+                          rows={5}
+                          value={emailDraft.customMessage}
+                          onChange={(e) => setEmailDraft((curr) => ({ ...curr, customMessage: e.target.value }))}
+                          className="w-full resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15"
+                          placeholder="Hi, please find the report attached."
+                        />
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {((!emailIsRange && emailStep === 5) || (emailIsRange && emailStep === 6)) && (
+                  <div className="space-y-3 rounded-3xl bg-slate-50 p-4 text-sm text-slate-700">
+                    <div><span className="font-medium">Recipient:</span> {emailDraft.recipientType === "me" ? "Send to Me" : emailDraft.recipientEmail || "-"}</div>
+                    <div><span className="font-medium">Scope:</span> {emailDraft.scope === "current" ? "Current section" : "Particular date range"}</div>
+                    {emailDraft.scope === "range" ? (
+                      <div><span className="font-medium">Date range:</span> {emailDraft.fromDate || "-"} to {emailDraft.toDate || "-"}</div>
+                    ) : null}
+                    <div><span className="font-medium">Format:</span> {emailDraft.format.toUpperCase()}</div>
+                    <div><span className="font-medium">Custom message:</span> {emailDraft.customMessageEnabled ? "Yes" : "No"}</div>
+                  </div>
+                )}
+
+                {emailError ? (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                    {emailError}
+                  </div>
+                ) : null}
+
+                {emailStatus ? (
+                  <div className={`rounded-2xl px-4 py-3 text-sm ${emailStatus === "Sending email..." ? "border border-sky-200 bg-sky-50 text-sky-700" : emailStatus.startsWith("Email sent successfully") ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-slate-200 bg-slate-50 text-slate-700"}`}>
+                    {emailStatus}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4">
+              <button
+                type="button"
+                onClick={closeEmailDialog}
+                disabled={emailBusy}
+                className="rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={prevEmailStep}
+                  disabled={emailBusy || emailStep === 1}
+                  className="rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Back
+                </button>
+
+                {emailStep < emailMaxStep ? (
+                  <button
+                    type="button"
+                    onClick={nextEmailStep}
+                    disabled={emailBusy || !canAdvanceEmailStep()}
+                    className="rounded-2xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Next
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={confirmEmail}
+                    disabled={emailBusy || !safeOnEmailAssistant}
+                    className="rounded-2xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {emailBusy ? "Sending..." : "Send Email"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
   return fallback;
 }
 
@@ -32,6 +308,27 @@ function isTileConnected(tile) {
   if (["disconnected", "offline", "inactive"].includes(status)) return false;
 
   return normalizeBool(tile.connected, false) || normalizeBool(tile.isConnected, false);
+}
+
+function normalizeIsoDate(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (/^\d{8}$/.test(s)) {
+    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  }
+  return s;
+}
+
+function buildEmailAttachmentName(draft) {
+  const format = String(draft?.format || "pdf").toLowerCase() === "xlsx" ? "xlsx" : "pdf";
+  if (String(draft?.scope || "current").toLowerCase() === "range") {
+    const fromDate = normalizeIsoDate(draft?.fromDate || "") || "from-date";
+    const toDate = normalizeIsoDate(draft?.toDate || "") || "to-date";
+    return `report_${fromDate}_to_${toDate}.${format}`;
+  }
+
+  return `report_current_section_current_to_section.${format}`;
 }
 
 export default function ChatScreen({
@@ -58,6 +355,7 @@ export default function ChatScreen({
   pendingAction,
   onCopyAssistant,
   onDownloadAssistant,
+  onEmailAssistant,
   onToast,
 
   loading,
@@ -70,16 +368,58 @@ export default function ChatScreen({
   const [regeneratingIndex, setRegeneratingIndex] = useState(null);
   const [downloadMenuIndex, setDownloadMenuIndex] = useState(null);
   const [downloadMenuStyle, setDownloadMenuStyle] = useState(null);
+  const [downloadDialogOpen, setDownloadDialogOpen] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
+  const [downloadStatus, setDownloadStatus] = useState("");
+  const [downloadTarget, setDownloadTarget] = useState(null);
+  const [downloadDraft, setDownloadDraft] = useState({
+    fromDate: "",
+    toDate: "",
+    format: "pdf",
+  });
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [emailError, setEmailError] = useState("");
+  const [emailStatus, setEmailStatus] = useState("");
+  const [emailTarget, setEmailTarget] = useState(null);
+  const [emailStep, setEmailStep] = useState(1);
+  const [emailDraft, setEmailDraft] = useState({
+    recipientType: "me",
+    recipientEmail: "",
+    scope: "current",
+    fromDate: "",
+    toDate: "",
+    format: "pdf",
+    customMessageEnabled: false,
+    customMessage: "",
+  });
   const downloadButtonRefs = useRef(new Map());
 
   const safeOnSend = typeof onSend === "function" ? onSend : null;
   const safeOnCopyAssistant = typeof onCopyAssistant === "function" ? onCopyAssistant : null;
   const safeOnDownloadAssistant = typeof onDownloadAssistant === "function" ? onDownloadAssistant : null;
+  const safeOnEmailAssistant = typeof onEmailAssistant === "function" ? onEmailAssistant : null;
   const safeOnToast = typeof onToast === "function" ? onToast : null;
   const safeStartEditMessage = typeof startEditMessage === "function" ? startEditMessage : null;
   const safeCancelEdit = typeof cancelEdit === "function" ? cancelEdit : null;
   const safeApplyEditLocal = typeof applyEditLocal === "function" ? applyEditLocal : null;
   const safeSetEditingText = typeof setEditingText === "function" ? setEditingText : null;
+  const emailIsRange = emailDraft.scope === "range";
+  const emailAttachmentReady = emailDraft.format && (!emailIsRange || (String(emailDraft.fromDate || "").trim() && String(emailDraft.toDate || "").trim()));
+  const emailAttachmentName = buildEmailAttachmentName(emailDraft);
+  const emailStatusIsWorking = /generating report|generating attachment|preparing attachment|sending email/i.test(String(emailStatus || ""));
+  const emailWizardSteps = emailIsRange
+    ? ["Recipient", "Scope", "Date Range", "Format", "Message", "Confirm"]
+    : ["Recipient", "Scope", "Format", "Message", "Confirm"];
+  const emailMaxStep = emailWizardSteps.length;
+  const downloadRangeReady = Boolean(String(downloadDraft.fromDate || "").trim()) && Boolean(String(downloadDraft.toDate || "").trim()) && Boolean(downloadDraft.format);
+  const downloadFilename = buildExportFilename({
+    baseName: "report",
+    fromDate: downloadDraft.fromDate,
+    toDate: downloadDraft.toDate,
+    format: downloadDraft.format,
+  });
 
   useEffect(() => {
     if (downloadMenuIndex === null) {
@@ -221,14 +561,237 @@ export default function ChatScreen({
       return;
     }
 
+    if (mode === "range") {
+      const message = group?.messages?.[0] || group;
+      const extractedFilters = message?.extracted?.filters || {};
+
+      setDownloadTarget({
+        group,
+        message,
+        filters: extractedFilters,
+      });
+      setDownloadDraft({
+        fromDate: normalizeIsoDate(extractedFilters?.fromDate || ""),
+        toDate: normalizeIsoDate(extractedFilters?.toDate || ""),
+        format: "pdf",
+      });
+      setDownloadError("");
+      setDownloadStatus("");
+      setDownloadDialogOpen(true);
+      return;
+    }
+
+    const message = group?.messages?.[0] || group;
+    const extractedFilters = message?.extracted?.filters || {};
+    const fromDate = normalizeIsoDate(extractedFilters?.fromDate || "");
+    const toDate = normalizeIsoDate(extractedFilters?.toDate || "");
+
     safeOnToast?.({
       type: "info",
       title: "Preparing download",
-      message: mode === "current" ? "Building current section PDF..." : "Fetching entire dataset for PDF...",
+      message: mode === "current"
+        ? "Building current section PDF..."
+        : "Building PDF for the selected date range...",
       duration: 1200,
     });
 
-    safeOnDownloadAssistant({ group, mode });
+    safeOnDownloadAssistant({ group, mode, fromDate, toDate });
+  };
+
+  const closeDownloadDialog = () => {
+    if (downloadBusy) return;
+    setDownloadDialogOpen(false);
+    setDownloadError("");
+    setDownloadStatus("");
+    setDownloadTarget(null);
+  };
+
+  const confirmDownloadRange = async () => {
+    if (!safeOnDownloadAssistant || !downloadTarget) return;
+
+    const fromDate = String(downloadDraft.fromDate || "").trim();
+    const toDate = String(downloadDraft.toDate || "").trim();
+    const format = String(downloadDraft.format || "pdf").trim().toLowerCase() === "xlsx" ? "xlsx" : "pdf";
+
+    if (!fromDate || !toDate) {
+      setDownloadError("Both From Date and To Date are required.");
+      return;
+    }
+
+    if (fromDate > toDate) {
+      setDownloadError("From Date cannot be later than To Date.");
+      return;
+    }
+
+    setDownloadBusy(true);
+    setDownloadError("");
+    setDownloadStatus("Generating file...");
+
+    try {
+      const result = await safeOnDownloadAssistant({
+        group: downloadTarget.group,
+        mode: "range",
+        fromDate,
+        toDate,
+        format,
+      });
+
+      if (result?.ok === false) {
+        const failureMessage = result?.message || "Download failed. Please try again.";
+        setDownloadError(failureMessage);
+        setDownloadStatus(failureMessage);
+        return;
+      }
+
+      setDownloadStatus("Download started successfully.");
+      safeOnToast?.({
+        type: "success",
+        title: "Download started",
+        message: `Started ${format.toUpperCase()} export for ${fromDate} to ${toDate}.`,
+      });
+
+      setTimeout(() => {
+        setDownloadDialogOpen(false);
+        setDownloadTarget(null);
+        setDownloadStatus("");
+      }, 1200);
+    } catch (error) {
+      const failureMessage = error?.message || "Download failed. Please try again.";
+      setDownloadError(failureMessage);
+      setDownloadStatus(failureMessage);
+    } finally {
+      setDownloadBusy(false);
+    }
+  };
+
+  const handleEmailChoice = (group) => {
+    setDownloadMenuIndex(null);
+
+    const message = group?.messages?.[0] || group;
+    const extractedFilters = message?.extracted?.filters || {};
+
+    setEmailTarget({ group, message, filters: extractedFilters });
+    setEmailDraft({
+      recipientType: "me",
+      recipientEmail: "",
+      scope: "current",
+      fromDate: normalizeIsoDate(extractedFilters?.fromDate || ""),
+      toDate: normalizeIsoDate(extractedFilters?.toDate || ""),
+      format: "pdf",
+      customMessageEnabled: false,
+      customMessage: "",
+    });
+    setEmailStep(1);
+    setEmailError(safeOnEmailAssistant ? "" : "Email is not available right now.");
+    setEmailStatus("");
+    setEmailDialogOpen(true);
+
+    if (!safeOnEmailAssistant) {
+      safeOnToast?.({
+        type: "error",
+        title: "Email unavailable",
+        message: "Email is not available right now.",
+      });
+    }
+  };
+
+  const closeEmailDialog = () => {
+    if (emailBusy) return;
+    setEmailDialogOpen(false);
+    setEmailError("");
+    setEmailStatus("");
+    setEmailTarget(null);
+  };
+
+  const canAdvanceEmailStep = () => {
+    if (emailStep === 1) {
+      if (emailDraft.recipientType === "other") {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(emailDraft.recipientEmail || "").trim());
+      }
+      return true;
+    }
+
+    if (emailStep === 2) return Boolean(emailDraft.scope);
+
+    if (emailIsRange) {
+      if (emailStep === 3) {
+        return Boolean(String(emailDraft.fromDate || "").trim()) && Boolean(String(emailDraft.toDate || "").trim());
+      }
+
+      if (emailStep === 4) return Boolean(emailDraft.format);
+      if (emailStep === 5) return true;
+      if (emailStep === 6) return true;
+      return Boolean(emailDraft.format);
+    }
+
+    if (emailStep === 3) return Boolean(emailDraft.format);
+    if (emailStep === 4) return true;
+    if (emailStep === 5) return true;
+    return Boolean(emailDraft.format);
+  };
+
+  const nextEmailStep = () => {
+    setEmailError("");
+    setEmailStep((current) => Math.min(emailMaxStep, current + 1));
+  };
+
+  const prevEmailStep = () => {
+    setEmailError("");
+    setEmailStep((current) => Math.max(1, current - 1));
+  };
+
+  const confirmEmail = async () => {
+    if (!safeOnEmailAssistant || !emailTarget) return;
+
+    setEmailBusy(true);
+    setEmailError("");
+    setEmailStatus("Generating report...");
+
+    try {
+      const result = await safeOnEmailAssistant({
+        group: emailTarget.group,
+        recipientType: emailDraft.recipientType,
+        recipientEmail: emailDraft.recipientEmail,
+        scope: emailDraft.scope,
+        fromDate: emailDraft.fromDate,
+        toDate: emailDraft.toDate,
+        format: emailDraft.format,
+        customMessageEnabled: emailDraft.customMessageEnabled,
+        customMessage: emailDraft.customMessage,
+        onStatusChange: setEmailStatus,
+      });
+
+      if (result?.ok === false) {
+        const failureMessage = result?.message || "Failed to send email. Please try again.";
+        setEmailError(failureMessage);
+        setEmailStatus(failureMessage);
+        return;
+      }
+
+      const recipientLabel = emailDraft.recipientType === "me"
+        ? "your email"
+        : String(emailDraft.recipientEmail || "").trim();
+      const successMessage = `Email sent successfully to ${recipientLabel}`;
+      setEmailStatus(successMessage);
+      safeOnToast?.({
+        type: "success",
+        title: "Email sent",
+        message: successMessage,
+      });
+
+      setTimeout(() => {
+        setEmailDialogOpen(false);
+        setEmailTarget(null);
+        setEmailStatus("");
+      }, 1200);
+    } catch (error) {
+      console.error("Email API Error:", error);
+      const failureMessage = error?.message || "Failed to send email. Please try again.";
+      setEmailError(failureMessage);
+      setEmailStatus(failureMessage);
+    } finally {
+      setEmailBusy(false);
+    }
   };
 
   const handleSuggestion = (value) => {
@@ -266,7 +829,7 @@ export default function ChatScreen({
 
     const upper = text.toUpperCase();
 
-    if (pendingAction && (upper === "ROW" || upper === "INDIA")) {
+    if (pendingAction && ["ROW", "INDIA", "PRD", "QAS", "DEV", "QA", "UAT", "PROD"].includes(upper)) {
       safeOnSend({
         overrideText: upper,
         displayText: upper,
@@ -319,7 +882,7 @@ export default function ChatScreen({
           <div className="mx-auto max-w-4xl space-y-4">
             {msgLoadingMore && activeConv?.messages?.length > 0 && (
               <div className="px-4 py-2 text-xs text-gray-400 italic">
-                Loading more…
+                Loading moreΓÇª
               </div>
             )}
 
@@ -459,12 +1022,22 @@ export default function ChatScreen({
                           />
                         </button>
 
+                        <button
+                          type="button"
+                          onClick={() => handleEmailChoice(m)}
+                          className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                          title="Email"
+                        >
+                          <FiMail size={15} />
+                        </button>
+
                         <div className="relative z-[9999]">
                           <button
                             type="button"
                             onClick={() =>
                               setDownloadMenuIndex(downloadMenuIndex === idx ? null : idx)
                             }
+
                             ref={(node) => {
                               if (node) {
                                 downloadButtonRefs.current.set(idx, node);
@@ -504,10 +1077,10 @@ export default function ChatScreen({
 
                               <button
                                 type="button"
-                                onClick={() => handleDownloadChoice(m, "entire")}
+                                onClick={() => handleDownloadChoice(m, "range")}
                                 className="flex w-full items-center gap-3 border-t border-gray-100 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                               >
-                                Download entire data
+                                Download by Date Range
                               </button>
                             </div>,
                             document.body
@@ -571,6 +1144,395 @@ export default function ChatScreen({
         >
           <FiChevronDown size={18} />
         </button>
+      )}
+
+      {emailDialogOpen && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 z-[10001] flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" onClick={closeEmailDialog} />
+
+          <div className="relative w-full max-w-2xl overflow-hidden rounded-3xl border border-white/20 bg-white shadow-[0_25px_90px_rgba(15,23,42,0.38)]">
+            <div className="border-b border-slate-200 bg-gradient-to-r from-sky-900 to-cyan-700 px-6 py-4 text-white">
+              <p className="text-xs uppercase tracking-[0.24em] text-sky-200">Email Delivery</p>
+              <h3 className="mt-1 text-xl font-semibold">Send report by email</h3>
+              <p className="mt-2 text-sm text-sky-100/90">
+                Choose the current section or a particular date range before selecting a format.
+              </p>
+            </div>
+
+            <div className="px-6 py-5">
+              <div className={`mb-5 grid gap-2 text-xs font-medium uppercase tracking-wide text-slate-500 ${emailWizardSteps.length === 6 ? "grid-cols-6" : "grid-cols-5"}`}>
+                {emailWizardSteps.map((label, index) => {
+                  const active = emailStep === index + 1;
+                  const completed = emailStep > index + 1;
+                  return (
+                    <div
+                      key={label}
+                      className={`rounded-2xl px-3 py-2 text-center transition ${
+                        active
+                          ? "bg-sky-600 text-white"
+                          : completed
+                            ? "bg-sky-100 text-sky-900"
+                            : "bg-slate-100 text-slate-500"
+                      }`}
+                    >
+                      {label}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="space-y-5">
+                {emailStep === 1 && (
+                  <div className="space-y-4">
+                    <p className="text-sm font-medium text-slate-700">Who would you like to send this report to?</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        { value: "me", label: "Send to Me" },
+                        { value: "other", label: "Send to Another Person" },
+                      ].map((option) => {
+                        const active = emailDraft.recipientType === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setEmailDraft((curr) => ({ ...curr, recipientType: option.value }))}
+                            className={`rounded-2xl border px-4 py-4 text-left text-sm font-medium transition ${
+                              active
+                                ? "border-sky-500 bg-sky-50 text-sky-900"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {emailDraft.recipientType === "other" && (
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium text-slate-700">Recipient email address</span>
+                        <input
+                          type="email"
+                          value={emailDraft.recipientEmail}
+                          onChange={(e) => setEmailDraft((curr) => ({ ...curr, recipientEmail: e.target.value }))}
+                          className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15"
+                          placeholder="john.doe@company.com"
+                        />
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {emailStep === 2 && (
+                  <div className="space-y-4">
+                    <p className="text-sm font-medium text-slate-700">What do you want to send?</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        { value: "current", label: "Current section" },
+                        { value: "range", label: "Particular date range" },
+                      ].map((option) => {
+                        const active = emailDraft.scope === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setEmailDraft((curr) => ({ ...curr, scope: option.value }))}
+                            className={`rounded-2xl border px-4 py-4 text-left text-sm font-medium transition ${
+                              active
+                                ? "border-sky-500 bg-sky-50 text-sky-900"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {emailIsRange && emailStep === 3 && (
+                  <div className="space-y-4">
+                    <p className="text-sm font-medium text-slate-700">Select date range</p>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <label className="space-y-2">
+                        <span className="text-sm font-medium text-slate-700">From Date</span>
+                        <input
+                          type="date"
+                          value={emailDraft.fromDate}
+                          onChange={(e) => setEmailDraft((curr) => ({ ...curr, fromDate: e.target.value }))}
+                          className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15"
+                        />
+                      </label>
+
+                      <label className="space-y-2">
+                        <span className="text-sm font-medium text-slate-700">To Date</span>
+                        <input
+                          type="date"
+                          value={emailDraft.toDate}
+                          onChange={(e) => setEmailDraft((curr) => ({ ...curr, toDate: e.target.value }))}
+                          className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15"
+                        />
+                      </label>
+                    </div>
+                    <p className="text-xs text-slate-500">These dates are required only when sending a particular date range.</p>
+                  </div>
+                )}
+
+                {((!emailIsRange && emailStep === 3) || (emailIsRange && emailStep === 4)) && (
+                  <div className="space-y-4">
+                    <p className="text-sm font-medium text-slate-700">Select file format</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        { value: "pdf", label: "PDF" },
+                        { value: "xlsx", label: "Excel (.xlsx)" },
+                      ].map((option) => {
+                        const active = emailDraft.format === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setEmailDraft((curr) => ({ ...curr, format: option.value }))}
+                            className={`rounded-2xl border px-4 py-4 text-left text-sm font-medium transition ${
+                              active
+                                ? "border-sky-500 bg-sky-50 text-sky-900"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {((!emailIsRange && emailStep === 4) || (emailIsRange && emailStep === 5)) && (
+                  <div className="space-y-4">
+                    <p className="text-sm font-medium text-slate-700">Would you like to add a custom email message?</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        { value: true, label: "Yes" },
+                        { value: false, label: "No" },
+                      ].map((option) => {
+                        const active = emailDraft.customMessageEnabled === option.value;
+                        return (
+                          <button
+                            key={String(option.value)}
+                            type="button"
+                            onClick={() => setEmailDraft((curr) => ({ ...curr, customMessageEnabled: option.value }))}
+                            className={`rounded-2xl border px-4 py-4 text-left text-sm font-medium transition ${
+                              active
+                                ? "border-sky-500 bg-sky-50 text-sky-900"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {emailDraft.customMessageEnabled && (
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium text-slate-700">Message</span>
+                        <textarea
+                          rows={5}
+                          value={emailDraft.customMessage}
+                          onChange={(e) => setEmailDraft((curr) => ({ ...curr, customMessage: e.target.value }))}
+                          className="w-full resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15"
+                          placeholder="Hi, please find the report attached."
+                        />
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {((!emailIsRange && emailStep === 5) || (emailIsRange && emailStep === 6)) && (
+                  <div className="space-y-3 rounded-3xl bg-slate-50 p-4 text-sm text-slate-700">
+                    <div><span className="font-medium">Recipient:</span> {emailDraft.recipientType === "me" ? "Send to Me" : emailDraft.recipientEmail || "-"}</div>
+                    <div><span className="font-medium">Scope:</span> {emailDraft.scope === "current" ? "Current section" : "Particular date range"}</div>
+                    {emailDraft.scope === "range" ? (
+                      <div><span className="font-medium">Date range:</span> {emailDraft.fromDate || "-"} to {emailDraft.toDate || "-"}</div>
+                    ) : null}
+                    <div><span className="font-medium">Format:</span> {emailDraft.format.toUpperCase()}</div>
+                    <div><span className="font-medium">Attachment:</span> {emailAttachmentName}</div>
+                    <div><span className="font-medium">Attachment status:</span> {emailAttachmentReady ? "Ready to attach automatically" : "Not ready"}</div>
+                    <div><span className="font-medium">Custom message:</span> {emailDraft.customMessageEnabled ? "Yes" : "No"}</div>
+                  </div>
+                )}
+
+                {emailError ? (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                    {emailError}
+                  </div>
+                ) : null}
+
+                {emailStatus ? (
+                  <div className={`rounded-2xl px-4 py-3 text-sm ${emailStatusIsWorking ? "border border-sky-200 bg-sky-50 text-sky-700" : emailStatus.startsWith("Email sent successfully") ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-slate-200 bg-slate-50 text-slate-700"}`}>
+                    {emailStatus}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4">
+              <button
+                type="button"
+                onClick={closeEmailDialog}
+                disabled={emailBusy}
+                className="rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={prevEmailStep}
+                  disabled={emailBusy || emailStep === 1}
+                  className="rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Back
+                </button>
+
+                {emailStep < emailMaxStep ? (
+                  <button
+                    type="button"
+                    onClick={nextEmailStep}
+                    disabled={emailBusy || !canAdvanceEmailStep()}
+                    className="rounded-2xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Next
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={confirmEmail}
+                    disabled={emailBusy || !safeOnEmailAssistant || !emailAttachmentReady}
+                    className="rounded-2xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {emailBusy ? "Sending..." : "Send Email"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {downloadDialogOpen && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 z-[10002] flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" onClick={closeDownloadDialog} />
+
+          <div className="relative w-full max-w-xl overflow-hidden rounded-3xl border border-white/20 bg-white shadow-[0_25px_90px_rgba(15,23,42,0.38)]">
+            <div className="border-b border-slate-200 bg-gradient-to-r from-sky-900 to-cyan-700 px-6 py-4 text-white">
+              <p className="text-xs uppercase tracking-[0.24em] text-sky-200">Export Data</p>
+              <h3 className="mt-1 text-xl font-semibold">Download by Date Range</h3>
+              <p className="mt-2 text-sm text-sky-100/90">
+                Select a valid date range and file format before downloading.
+              </p>
+            </div>
+
+            <div className="px-6 py-5 space-y-5">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-700">From Date</span>
+                  <input
+                    type="date"
+                    value={downloadDraft.fromDate}
+                    onChange={(e) => {
+                      setDownloadError("");
+                      setDownloadDraft((curr) => ({ ...curr, fromDate: e.target.value }));
+                    }}
+                    className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15"
+                  />
+                </label>
+
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-700">To Date</span>
+                  <input
+                    type="date"
+                    value={downloadDraft.toDate}
+                    onChange={(e) => {
+                      setDownloadError("");
+                      setDownloadDraft((curr) => ({ ...curr, toDate: e.target.value }));
+                    }}
+                    className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15"
+                  />
+                </label>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-slate-700">Select Download Format</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[
+                    { value: "pdf", label: "PDF" },
+                    { value: "xlsx", label: "Excel (.xlsx)" },
+                  ].map((option) => {
+                    const active = downloadDraft.format === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          setDownloadError("");
+                          setDownloadDraft((curr) => ({ ...curr, format: option.value }));
+                        }}
+                        className={`rounded-2xl border px-4 py-4 text-left text-sm font-medium transition ${
+                          active
+                            ? "border-sky-500 bg-sky-50 text-sky-900"
+                            : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-slate-50 p-4 text-sm text-slate-700 space-y-2">
+                <div><span className="font-medium">Filename:</span> {downloadFilename}</div>
+                <div><span className="font-medium">Status:</span> {downloadRangeReady ? "Ready to download" : "Select both dates and a format"}</div>
+              </div>
+
+              {downloadError ? (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  {downloadError}
+                </div>
+              ) : null}
+
+              {downloadStatus ? (
+                <div className={`rounded-2xl px-4 py-3 text-sm ${downloadStatus === "Generating file..." ? "border border-sky-200 bg-sky-50 text-sky-700" : downloadStatus === "Download started successfully." ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-slate-200 bg-slate-50 text-slate-700"}`}>
+                  {downloadStatus}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4">
+              <button
+                type="button"
+                onClick={closeDownloadDialog}
+                disabled={downloadBusy}
+                className="rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={confirmDownloadRange}
+                disabled={downloadBusy || !safeOnDownloadAssistant || !downloadRangeReady}
+                className="rounded-2xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {downloadBusy ? "Generating..." : "Download"}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </>
   );

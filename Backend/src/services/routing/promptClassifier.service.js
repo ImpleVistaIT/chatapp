@@ -128,6 +128,83 @@ function normalizeCreateChangeRequestEntities(raw = {}) {
   };
 }
 
+export function extractCreateChangeRequestEntitiesFromText(query = "") {
+  const text = String(query || "");
+
+  const labelTokens = [
+    "short description",
+    "description",
+    "desc",
+    "delivery responsible",
+    "del responsible",
+    "deliveryresponsible",
+    "developer",
+    "tester",
+    "work item ref",
+    "work item reference",
+    "workitemreference",
+    "landscape",
+    "process type",
+  ];
+
+  const buildValuePattern = (labelPattern, stopLabels = []) => {
+    const stopPattern = stopLabels.length > 0 ? stopLabels.join("|") : "";
+    return new RegExp(
+      String.raw`(?:^|[\s,;])\s*${labelPattern}\s*[-=:]\s*([\s\S]*?)(?=\s*(?:${stopPattern}|$|[\n,;]))`,
+      "i"
+    );
+  };
+
+  const findValue = (patterns) => {
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match && String(match[1] || "").trim()) {
+        return cleanString(match[1]);
+      }
+    }
+    return null;
+  };
+
+  return {
+    ShortDesc: findValue([
+      buildValuePattern(
+        "(?:short\\s*desc(?:ription)?|description|desc)",
+        ["delivery responsible", "del responsible", "deliveryresponsible", "developer", "tester", "work item ref", "work item reference", "workitemreference", "landscape", "process type"]
+      ),
+    ]),
+    DeliveryResponsible: findValue([
+      buildValuePattern(
+        "(?:delivery\\s*responsible|del\\s*responsible|deliveryresponsible)",
+        ["developer", "tester", "work item ref", "work item reference", "workitemreference", "landscape", "process type", "short description", "description", "desc"]
+      ),
+    ]),
+    Developer: findValue([
+      buildValuePattern(
+        "(?:developer)",
+        ["tester", "work item ref", "work item reference", "workitemreference", "landscape", "process type", "short description", "description", "desc", "delivery responsible", "del responsible", "deliveryresponsible"]
+      ),
+    ]),
+    Tester: findValue([
+      buildValuePattern(
+        "(?:tester)",
+        ["work item ref", "work item reference", "workitemreference", "landscape", "process type", "short description", "description", "desc", "delivery responsible", "del responsible", "deliveryresponsible", "developer"]
+      ),
+    ]),
+    WorkItemReference: findValue([
+      buildValuePattern(
+        "(?:work\\s*item\\s*(?:ref(?:erence)?)?|workitemreference)",
+        ["landscape", "process type", "short description", "description", "desc", "delivery responsible", "del responsible", "deliveryresponsible", "developer", "tester"]
+      ),
+    ]),
+    Landscape: findValue([
+      buildValuePattern(
+        "(?:landscape|process\\s*type)",
+        ["work item ref", "work item reference", "workitemreference", "short description", "description", "desc", "delivery responsible", "del responsible", "deliveryresponsible", "developer", "tester"]
+      ),
+    ]),
+  };
+}
+
 function normalizePurchaseOrderDetailEntities(raw = {}) {
   return {
     PurchaseOrder: cleanString(
@@ -183,12 +260,15 @@ function normalizeCrStatusDistributionEntities(raw = {}) {
   };
 }
 
-function normalizeEntitiesByIntent(intent, rawEntities = {}) {
+function normalizeEntitiesByIntent(intent, rawEntities = {}, queryText = "") {
   const raw = rawEntities && typeof rawEntities === "object" ? rawEntities : {};
 
   switch (intent) {
     case "create_change_request":
-      return normalizeCreateChangeRequestEntities(raw);
+      return normalizeCreateChangeRequestEntities({
+        ...extractCreateChangeRequestEntitiesFromText(queryText),
+        ...raw,
+      });
 
     case "get_purchase_order_details":
       return normalizePurchaseOrderDetailEntities(raw);
@@ -335,7 +415,7 @@ function keywordFallback(query) {
       confidence: 0.9,
       reason: "Matched explicit SolMan change request keywords",
       source: "keyword",
-      entities: normalizeEntitiesByIntent("create_change_request", {}),
+      entities: normalizeEntitiesByIntent("create_change_request", {}, query),
     });
   }
 
@@ -404,7 +484,7 @@ export async function classifyPrompt({ query, sessionContext = null }) {
       confidence: clampConfidence(llm.data.confidence),
       reason: String(llm.data.reason || "").trim() || "LLM classification",
       source: "llm",
-      entities: normalizeEntitiesByIntent(normalizedIntent, llm.data.entities),
+      entities: normalizeEntitiesByIntent(normalizedIntent, llm.data.entities, query),
     });
 
     const q = String(query || "").toLowerCase();

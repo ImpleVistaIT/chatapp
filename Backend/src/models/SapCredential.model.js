@@ -27,6 +27,7 @@ const SapCredentialSchema = new mongoose.Schema(
     profileFirstName: { type: String, default: "" },
     profileLastName: { type: String, default: "" },
     profileFullName: { type: String, default: "" },
+        profileEmail: { type: String, default: "" },
     profileUpdatedAt: { type: Date, default: null },
   },
   { timestamps: true }

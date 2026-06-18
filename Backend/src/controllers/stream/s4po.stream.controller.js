@@ -458,6 +458,7 @@ function resolveSelfUserFilter(filters, sapUser) {
 }
 
 export async function handleS4poChatStream({
+  req,
   sse,
   owner,
   query,
@@ -641,6 +642,22 @@ export async function handleS4poChatStream({
     extracted.docItem = serviceIntent.docItem;
   }
 
+  const explicitFromDate = String(req?.body?.fromDate || req?.query?.fromDate || "").trim();
+  const explicitToDate = String(req?.body?.toDate || req?.query?.toDate || "").trim();
+  const explicitDateText = String(req?.body?.dateText || req?.query?.dateText || "").trim();
+
+  if (explicitFromDate) {
+    extracted.fromDate = extracted.fromDate || explicitFromDate;
+  }
+
+  if (explicitToDate) {
+    extracted.toDate = extracted.toDate || explicitToDate;
+  }
+
+  if (explicitDateText) {
+    extracted.dateText = extracted.dateText || explicitDateText;
+  }
+
   if ((!extracted.limit || Number(extracted.limit) <= 0) && serviceIntent?.limit) {
     extracted.limit = serviceIntent.limit;
   }
@@ -723,6 +740,7 @@ export async function handleS4poChatStream({
     fetchFromSap({ system, service, relativePath }, sapAuth)
   );
   let selectedRelativePath = relativePath;
+  const totalCount = Number(sapData?.d?.__count || sapData?.__count || 0) || null;
 
   if (isLatestQuery(query, extracted) && !docNumber && !docItem) {
     const latestOrderCandidates = getLatestOrderCandidates({
@@ -802,6 +820,7 @@ export async function handleS4poChatStream({
     generateSummaryLLM({
       entityLabel: service.entityTypeName || "SAP Documents",
       count: safeRows.length,
+      totalCount,
       extracted,
       sample: safeRows.slice(0, 10),
       columns: extracted.fields || [],

@@ -1,4 +1,6 @@
 import { classifyPrompt } from "./promptClassifier.service.js";
+import { normalizePromptWithLlm } from "./promptNormalization.service.js";
+import { buildGeneralConversationResponse, detectConversationIntent } from "./conversationIntent.service.js";
 import { validateRoutingResult } from "./routingValidator.service.js";
 import { resolveRoutingAction } from "./actionResolver.service.js";
 import { executeResolvedAction } from "./executor.service.js";
@@ -45,6 +47,17 @@ function buildResumeQuery({ pendingAction, query }) {
   return `${originalQuery}\n${nextQuery}`;
 }
 
+function isPendingActionContinuationQuery(query, pendingAction) {
+  if (!pendingAction) return false;
+
+  const normalizedQuery = String(query || "").trim().toUpperCase();
+  if (!normalizedQuery) return false;
+
+  return ["ROW", "INDIA", "PRD", "QAS", "DEV", "QA", "UAT", "PROD"].includes(
+    normalizedQuery
+  );
+}
+
 function applyResolvedSystemIdToAction(resolved, systemId) {
   if (!resolved || !systemId) return resolved;
 
@@ -75,8 +88,21 @@ export async function orchestrateChatRequest({
       })
     : query;
 
+  const conversationIntent = await detectConversationIntent({ query: effectiveQuery });
+
+  if (conversationIntent?.handled && !isPendingActionContinuationQuery(query, existingPendingAction)) {
+    console.log("Skipping SAP API call - General Conversation");
+    return buildGeneralConversationResponse(conversationIntent);
+  }
+
+  console.log("SAP Query Detected - Calling SAP API");
+
+  const normalizedPrompt = await normalizePromptWithLlm({ query: effectiveQuery });
+  const normalizedQuery = String(normalizedPrompt?.normalizedQuery || "").trim();
+  const classifierQuery = normalizedQuery || effectiveQuery;
+
   const classified = await classifyPrompt({
-    query: effectiveQuery,
+    query: classifierQuery,
     sessionContext,
   });
 
@@ -90,7 +116,7 @@ export async function orchestrateChatRequest({
 
   if (!incomingSystemId && availableSystems.length > 0) {
     systemResolution = await resolveTargetSystem({
-      query: effectiveQuery,
+      query: classifierQuery,
       classified,
       requestedSystemId: incomingSystemId,
       availableSystems,

@@ -49,6 +49,10 @@ function buildAssistantTextFromResponse(response) {
   const result = response?.result || {};
   const rows = Array.isArray(result?.results) ? result.results : [];
 
+  if (response?.status === "general_conversation") {
+    return response?.reply || response?.message || "Hello! How can I help you today?";
+  }
+
   if (response?.status === "disconnected_system") {
     return response?.message || "The requested system is disconnected.";
   }
@@ -113,15 +117,6 @@ export async function handleChatEntry(req, res, next) {
     }
 
     const hasExplicitSystemId = Boolean(String(systemId || "").trim());
-    const hasAvailableSystems =
-      Array.isArray(availableSystems) && availableSystems.length > 0;
-
-    if (!hasExplicitSystemId && !hasAvailableSystems) {
-      return res.status(400).json({
-        ok: false,
-        error: "Either systemId or availableSystems is required",
-      });
-    }
 
     let session = null;
     let sessionContext = null;

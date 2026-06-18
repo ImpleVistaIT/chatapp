@@ -5,6 +5,7 @@ import {
   getSolmanChangeRequestDetailsById,
   listSolmanChangeRequestsByDateRange,
 } from "../services/systems/solman/charm.service.js";
+import { persistAssistantAndTouchSession } from "./stream/solman/solman.shared.js";
 
 function cleanString(v) {
   return String(v || "").trim();
@@ -21,15 +22,35 @@ function resolveCurrentSolmanUsername(connection) {
 }
 
 function validateCreateChangeRequestInput(body) {
+  console.log("[chat.actions] create-change-request input", {
+    systemId: cleanString(body?.systemId),
+    sapUser: cleanString(body?.sapUser),
+    payloadKeys: body?.payload && typeof body.payload === "object" ? Object.keys(body.payload) : [],
+  });
+
   if (!cleanString(body?.systemId)) {
+    console.warn("[chat.actions] create-change-request blocked: missing systemId", {
+      systemId: cleanString(body?.systemId),
+      sapUser: cleanString(body?.sapUser),
+      payload: body?.payload || null,
+    });
     return "systemId is required.";
   }
 
   if (!cleanString(body?.sapUser)) {
+    console.warn("[chat.actions] create-change-request blocked: missing sapUser", {
+      systemId: cleanString(body?.systemId),
+      sapUser: cleanString(body?.sapUser),
+      payload: body?.payload || null,
+    });
     return "sapUser is required.";
   }
 
   if (!body?.payload || typeof body.payload !== "object") {
+    console.warn("[chat.actions] create-change-request blocked: missing payload", {
+      systemId: cleanString(body?.systemId),
+      sapUser: cleanString(body?.sapUser),
+    });
     return "payload is required.";
   }
 
@@ -89,6 +110,30 @@ export const submitSolmanCreateChangeRequest = createSapActionHandler({
       sapAuth: connection.sapAuth,
       payload: body.payload,
     });
+
+    const sessionId = String(body?.sessionId || "").trim();
+    if (/^[a-f0-9]{24}$/i.test(sessionId)) {
+      await persistAssistantAndTouchSession({
+        owner,
+        sessionId,
+        text: result?.message || "Change request created successfully.",
+        summary: result?.message || "Change request created successfully.",
+        extracted: {
+          system: "solman",
+          intent: "create_change_request",
+          changeRequestId: result?.changeRequestId || null,
+          status: result?.status || null,
+        },
+        data: result?.raw || null,
+        responseMeta: {
+          ok: true,
+          kind: "action",
+          executor: "solman.charm.createChangeRequest",
+          systemId: connection.system?.systemId || body?.systemId || "",
+          sapUser: connection.sapAuth?.username || connection.sapAuth?.sapUser || body?.sapUser || "",
+        },
+      });
+    }
 
     if (!result?.ok) {
       const err = new Error(

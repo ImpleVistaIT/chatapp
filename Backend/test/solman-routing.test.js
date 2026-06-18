@@ -9,6 +9,9 @@ import {
   isSolmanCrQuery,
   isValidSolmanPendingAction,
 } from "../src/controllers/chat.stream.controller.js";
+import {
+  extractCreateChangeRequestEntitiesFromText,
+} from "../src/services/routing/promptClassifier.service.js";
 import { normalizeSolmanStatusChart } from "../../frontend/src/utils/solmanChart.js";
 
 test("show CR status stays on the SolMan list flow without inventing a process type", () => {
@@ -77,4 +80,15 @@ test("PO next-page prompt must not trigger SolMan CR routing", () => {
 
 test("CR created-by prompt should still trigger SolMan CR routing", () => {
   assert.equal(isSolmanCrQuery("show change requests created by IRAM"), true);
+});
+
+test("create CR prompt text extracts label-based field values", () => {
+  const extracted = extractCreateChangeRequestEntitiesFromText(
+    "DEscription - CR creation test from chatbot, developer & tester, DEL responsible - IMVT0001, Landscape - Z_DXB_ECC Work item ref - 1256906"
+  );
+
+  assert.equal(extracted.ShortDesc, "CR creation test from chatbot");
+  assert.equal(extracted.DeliveryResponsible, "IMVT0001");
+  assert.equal(extracted.Landscape, "Z_DXB_ECC");
+  assert.equal(extracted.WorkItemReference, "1256906");
 });

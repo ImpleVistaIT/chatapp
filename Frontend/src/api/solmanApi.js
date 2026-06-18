@@ -1,6 +1,5 @@
+import { API_BASE } from "./client";
 import { authFetch } from "./authFetch";
-
-const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
 
 async function parseJsonSafe(res) {
   try {
@@ -14,6 +13,27 @@ function extractApiError(data, fallback) {
   return data?.message || data?.error?.message || data?.error || fallback;
 }
 
+async function readResponseBody(res) {
+  const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+
+  if (contentType.includes("application/json") || contentType.includes("+json")) {
+    const json = await res.clone().json().catch(() => null);
+    if (json != null) return json;
+  }
+
+  const text = await res.clone().text().catch(() => "");
+  if (!text) return {};
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {
+      message: text,
+      rawText: text,
+    };
+  }
+}
+
 export async function getSolmanChangeRequestDetails({
   systemId,
   sapUser,
@@ -22,7 +42,7 @@ export async function getSolmanChangeRequestDetails({
   businessScope = "",
 }) {
   const res = await authFetch(
-    `${apiBase}/chat/actions/solman/get-change-request-details`,
+    `${API_BASE}/chat/actions/solman/get-change-request-details`,
     {
       method: "POST",
       headers: {
@@ -71,7 +91,7 @@ export async function listSolmanChangeRequests({
   top = null,
 }) {
   const res = await authFetch(
-    `${apiBase}/chat/actions/solman/list-change-requests`,
+    `${API_BASE}/chat/actions/solman/list-change-requests`,
     {
       method: "POST",
       headers: {
@@ -108,4 +128,55 @@ export async function listSolmanChangeRequests({
   }
 
   return data;
+}
+
+export async function listSolmanChangeRequestsForExport({
+  systemId,
+  sapUser,
+  processType = "",
+  businessScope = "",
+  fromDate,
+  toDate,
+  triggerAll = "X",
+  status = "",
+  statusMode = "",
+  excludeStatuses = [],
+  dateText = "",
+  createdBy = "",
+  createdByMode = "",
+  top = null,
+}) {
+  const res = await authFetch(
+    `${API_BASE}/chat/actions/solman/list-change-requests`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        systemId,
+        sapUser,
+        processType,
+        businessScope,
+        fromDate,
+        toDate,
+        triggerAll,
+        status,
+        statusMode,
+        excludeStatuses,
+        dateText,
+        createdBy,
+        createdByMode,
+        top,
+      }),
+    }
+  );
+
+  const payload = await readResponseBody(res);
+
+  return {
+    ok: res.ok,
+    status: res.status,
+    payload,
+  };
 }
