@@ -49,6 +49,8 @@ Supported routing targets:
 5. SolMan / Transport
 - intent: "create_transport"
   Use when user wants to create a transport
+- intent: "transport_list"
+  Use when user wants to show, list, fetch, or view transports for a CR / change request
 
 Rules:
 - Be conservative.
@@ -119,6 +121,17 @@ then classify as:
 - system = "solman"
 - module = "charm"
 - intent = "get_change_request_details"
+
+If the user asks for transports of a change request, including phrases like:
+- "show transports of cr"
+- "show transports cr"
+- "get transports"
+- "fetch transports"
+- "transport details of cr"
+then classify as:
+- system = "solman"
+- module = "transport"
+- intent = "transport_list"
 
 If the user asks to browse or list CRs without explicit analytics language, including phrases like:
 - "show CRs"

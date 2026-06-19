@@ -6,12 +6,85 @@ import {
   getSolmanChangeRequestDetailsById,
   listSolmanChangeRequestsByDateRange,
 } from "../systems/solman/charm.service.js";
+import { executeSolmanListTransports } from "../systems/solman/executors/listTransports.executor.js";
 
 import { extractDocQuery } from "../extractor/extractor.service.js";
 import { getAllowedFieldsWithLabels } from "../allowlist.service.js";
 import { fetchFromSap } from "../sap.service.js";
 import { buildEntitySetQuery, normalizeNumericId } from "../odataQueryBuilder.js";
 import { SapServiceMap } from "../../models/SapServiceMap.model.js";
+
+function hasDateFilter(filters) {
+  return (Array.isArray(filters) ? filters : []).some((filter) => {
+    if (!filter || typeof filter !== "object") return false;
+    const field = String(filter.field || "").toLowerCase();
+    const type = String(filter.type || "").toLowerCase();
+    return type === "datetime" || /date/.test(field);
+  });
+}
+
+function startOfCurrentYearIso() {
+  const now = new Date();
+  return `${now.getFullYear()}-01-01T00:00:00`;
+}
+
+function isLatestPoQuery(query) {
+  const q = String(query || "").toLowerCase();
+  return /\b(latest|recent|newest|most\s+recent)\b/.test(q);
+}
+
+function isSingleLatestPoRequest(query) {
+  const q = String(query || "").toLowerCase();
+  return (
+    /\b(latest|newest|most\s+recent)\s+(purchase\s+order|po)\b(?!s)/.test(q) ||
+    /\blatest\s+po\b/.test(q) ||
+    /\bmost\s+recent\s+po\b/.test(q)
+  );
+}
+
+function parseDateValue(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  if (/^\d{8}$/.test(raw)) {
+    const yyyy = Number(raw.slice(0, 4));
+    const mm = Number(raw.slice(4, 6));
+    const dd = Number(raw.slice(6, 8));
+    const dt = new Date(yyyy, mm - 1, dd);
+    return Number.isNaN(dt.getTime()) ? null : dt.getTime();
+  }
+
+  const dt = new Date(raw);
+  if (!Number.isNaN(dt.getTime())) return dt.getTime();
+
+  return null;
+}
+
+function sortRowsByLatestDate(rows) {
+  const data = Array.isArray(rows) ? [...rows] : [];
+
+  return data.sort((left, right) => {
+    const leftTs = parseDateValue(left?.CrtDate);
+    const rightTs = parseDateValue(right?.CrtDate);
+    const leftValid = Number.isFinite(leftTs);
+    const rightValid = Number.isFinite(rightTs);
+
+    if (leftValid && rightValid && leftTs !== rightTs) {
+      return rightTs - leftTs;
+    }
+
+    if (leftValid && !rightValid) return -1;
+    if (!leftValid && rightValid) return 1;
+
+    const leftPoNo = String(left?.PoNo || "");
+    const rightPoNo = String(right?.PoNo || "");
+    if (leftPoNo !== rightPoNo) {
+      return rightPoNo.localeCompare(leftPoNo, undefined, { numeric: true, sensitivity: "base" });
+    }
+
+    return 0;
+  });
+}
 
 function toResultsArray(sapData) {
   const results = sapData?.d?.results;
@@ -384,6 +457,14 @@ async function executeS4hanaListPurchaseOrders({ payload, req }) {
       { field: "CrtDate", op: "ge", type: "datetime", value: fromDate },
       { field: "CrtDate", op: "lt", type: "datetime", value: toDate }
     );
+  } else if (isLatestPoQuery(query) && !hasDateFilter(extracted.filters)) {
+    extracted.filters = Array.isArray(extracted.filters) ? extracted.filters : [];
+    extracted.filters.push({
+      field: "CrtDate",
+      op: "ge",
+      type: "datetime",
+      value: startOfCurrentYearIso(),
+    });
   }
 
   extracted.limit = limit;
@@ -424,14 +505,19 @@ async function executeS4hanaListPurchaseOrders({ payload, req }) {
     connection.sapAuth
   );
 
+  const rows = toResultsArray(sapData);
+  const responseRows = isLatestPoQuery(query)
+    ? (isSingleLatestPoRequest(query) ? sortRowsByLatestDate(rows).slice(0, 1) : sortRowsByLatestDate(rows))
+    : rows;
+
   return {
     query,
     result: {
       query,
       extracted: { ...extracted, limit, skip },
       sapRequest: relativePath,
-      data: toResultsArray(sapData),
-      returned: toResultsArray(sapData).length,
+      data: responseRows,
+      returned: responseRows.length,
     },
   };
 }
@@ -440,6 +526,7 @@ const EXECUTOR_MAP = {
   "solman.charm.createChangeRequest": executeSolmanCreateChangeRequest,
   "solman.charm.getChangeRequestDetails": executeSolmanGetChangeRequestDetails,
   "solman.charm.listChangeRequests": executeSolmanListChangeRequests,
+  "solman.transport.listTransports": executeSolmanListTransports,
   "s4hana.mm.listPurchaseOrders": executeS4hanaListPurchaseOrders,
 };
 

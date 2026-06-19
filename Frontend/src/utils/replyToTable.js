@@ -251,6 +251,15 @@ export function replyToTable(replyText) {
     return null;
   }
 
+  if (
+    text.includes("Original transport") ||
+    text.includes("SAP Message:") ||
+    text.includes("dependent transport") ||
+    text.includes("dependent transports")
+  ) {
+    return null;
+  }
+
   // ✅ Measures table (must be before generic fallback)
   const measures = parseMeasuresLines(text);
   if (measures) return measures;

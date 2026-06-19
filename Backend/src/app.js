@@ -7,6 +7,7 @@ import { chatRoutes } from "./routes/chat.routes.js";
 import { sapRoutes } from "./routes/sap.routes.js";
 import { poExtractRoutes } from "./routes/poextract.routes.js";
 import solmanRoutes from "./routes/solman.routes.js";
+import { procurementQueryController } from "./controllers/procurement.query.controller.js";
 import { handleChatStream } from "./controllers/chat.stream.controller.js";
 
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -117,6 +118,7 @@ app.use("/api/solman", requireAuth, solmanRoutes);
 app.use("/sap", requireAuth, sapRoutes);
 
 app.post("/chat/stream", requireAuth, handleChatStream);
+app.post("/api/query", requireAuth, procurementQueryController);
 app.use("/chat", requireAuth, chatRoutes);
 app.use("/po", requireAuth, poExtractRoutes);
 

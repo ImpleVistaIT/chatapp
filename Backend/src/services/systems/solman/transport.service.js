@@ -106,6 +106,60 @@ function normalizeDependencyRows(raw) {
   };
 }
 
+function mergeDependencyRows(results = []) {
+  const dependencies = [];
+  const sourceTransports = [];
+  const dependencyMessages = [];
+  const rawResponses = [];
+
+  for (const entry of Array.isArray(results) ? results : []) {
+    if (!entry || typeof entry !== "object") continue;
+
+    if (Array.isArray(entry.sourceTransports)) {
+      sourceTransports.push(...entry.sourceTransports);
+    }
+
+    if (Array.isArray(entry.dependencies)) {
+      dependencies.push(...entry.dependencies);
+    }
+
+    if (cleanString(entry.dependencyMessage)) {
+      dependencyMessages.push(cleanString(entry.dependencyMessage));
+    }
+
+    if (entry.raw != null) {
+      rawResponses.push(entry.raw);
+    }
+  }
+
+  const uniqueDependencies = [];
+  const seen = new Set();
+
+  for (const item of dependencies) {
+    const key = [
+      cleanString(item?.transportEntered),
+      cleanString(item?.dependentTransport),
+      cleanString(item?.description),
+      cleanString(item?.owner),
+      cleanString(item?.exportDate),
+      cleanString(item?.exportTime),
+      cleanString(item?.importDate),
+      cleanString(item?.importTime),
+    ].join("|");
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueDependencies.push(item);
+  }
+
+  return {
+    sourceTransports: unique(sourceTransports),
+    dependencies: uniqueDependencies,
+    dependencyMessage: dependencyMessages.filter(Boolean).join(" ").trim(),
+    rawResponses,
+  };
+}
+
 function isSapServiceNotFoundError(error, serviceName) {
   const msg = cleanString(error?.message).toLowerCase();
   const targetService = cleanString(serviceName).toLowerCase();
@@ -133,12 +187,48 @@ function mapSapServiceError(error, { serviceName }) {
   throw error;
 }
 
+function buildCrTransportLookupVariants({ changeRequestId, processType }) {
+  const cleanCr = cleanString(changeRequestId);
+  const cleanProcessType = cleanString(processType);
+
+  const variants = [];
+  const push = (filter) => {
+    if (filter) variants.push(filter);
+  };
+
+  push(`ChangeRequestId eq '${escapeODataString(cleanCr)}'`);
+
+  if (cleanProcessType) {
+    push(
+      `ChangeRequestId eq '${escapeODataString(cleanCr)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`
+    );
+  }
+
+  push(`ZchangeRequest eq '${escapeODataString(cleanCr)}'`);
+  if (cleanProcessType) {
+    push(
+      `ZchangeRequest eq '${escapeODataString(cleanCr)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`
+    );
+  }
+
+  push(`OBJECT_ID eq '${escapeODataString(cleanCr)}'`);
+  if (cleanProcessType) {
+    push(
+      `OBJECT_ID eq '${escapeODataString(cleanCr)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`
+    );
+  }
+
+  return [...new Set(variants)];
+}
+
 export async function getTransportNumbersFromCr({
   system,
   sapAuth,
   changeRequestId,
+  processType = "",
 }) {
   const cleanCr = cleanString(changeRequestId);
+  const cleanProcessType = cleanString(processType);
 
   if (!cleanCr) {
     const err = new Error("changeRequestId is required.");
@@ -147,24 +237,57 @@ export async function getTransportNumbersFromCr({
     throw err;
   }
 
-  const relativePath = `CR_DetailsSet?$filter=${encodeURIComponent(
-    `ChangeRequestId eq '${escapeODataString(cleanCr)}'`
-  )}`;
+  const variants = buildCrTransportLookupVariants({
+    changeRequestId: cleanCr,
+    processType: cleanProcessType,
+  });
 
-  let raw;
-  try {
-    raw = await fetchFromSap(
-      {
-        system,
-        service: { serviceName: "ZNEW_TRS_FROM_CR_SRV" },
-        relativePath,
+  let raw = null;
+  let lastError = null;
+
+  for (const filter of variants) {
+    const relativePath = `CR_DetailsSet?$filter=${encodeURIComponent(filter)}`;
+
+    try {
+      raw = await fetchFromSap(
+        {
+          system,
+          service: { serviceName: "ZNEW_TRS_FROM_CR_SRV" },
+          relativePath,
+        },
+        sapAuth
+      );
+
+      if (raw) break;
+    } catch (error) {
+      lastError = error;
+      const msg = cleanString(error?.message).toLowerCase();
+      if (
+        error?.status === 501 ||
+        msg.includes("no service found") ||
+        msg.includes("not implemented in data provider class")
+      ) {
+        mapSapServiceError(error, {
+          serviceName: "ZNEW_TRS_FROM_CR_SRV",
+        });
+      }
+    }
+  }
+
+  if (!raw) {
+    return {
+      ok: false,
+      message: `Unable to read transport details for CR ${cleanCr} from SAP.`,
+      result: {
+        changeRequestId: cleanCr,
+        processType: cleanProcessType || null,
+        raw: null,
+        error: {
+          code: "SAP_TRANSPORT_LOOKUP_FAILED",
+          message: cleanString(lastError?.message) || null,
+        },
       },
-      sapAuth
-    );
-  } catch (error) {
-    mapSapServiceError(error, {
-      serviceName: "ZNEW_TRS_FROM_CR_SRV",
-    });
+    };
   }
 
   const normalized = normalizeTransportsFromCr(raw);
@@ -198,46 +321,95 @@ export async function getTransportDependencyDetails({
     throw err;
   }
 
-  const filter = cleanTransports
-    .map((tr) => `TRANSPORT eq '${escapeODataString(tr)}'`)
-    .join(" or ");
-
-  const relativePath = `zmessageSet?$filter=${encodeURIComponent(
-    filter
-  )}&$expand=message_nav`;
-
   const dependencySystem = {
     ...system,
     protocol: cleanString(system?.protocol) || "https",
     port: Number(system?.port) || 50101,
   };
 
-  let raw;
-  try {
-    raw = await fetchFromSap(
-      {
-        system: dependencySystem,
-        service: { serviceName: "ZTR_DEP_CHECK_SRV" },
-        relativePath,
-      },
-      sapAuth
-    );
-  } catch (error) {
-    mapSapServiceError(error, {
-      serviceName: "ZTR_DEP_CHECK_SRV",
-    });
+  const perTransportResults = [];
+  const failures = [];
+
+  for (const transport of cleanTransports) {
+    const relativePath = `zmessageSet?$filter=${encodeURIComponent(
+      `TRANSPORT eq '${escapeODataString(transport)}'`
+    )}&$expand=message_nav`;
+
+    try {
+      const raw = await fetchFromSap(
+        {
+          system: dependencySystem,
+          service: { serviceName: "ZTR_DEP_CHECK_SRV" },
+          relativePath,
+        },
+        sapAuth
+      );
+
+      const normalized = normalizeDependencyRows(raw);
+      perTransportResults.push({
+        transport,
+        ...normalized,
+        raw,
+      });
+    } catch (error) {
+      failures.push({
+        transport,
+        error: cleanString(error?.message) || "Unknown SAP error",
+        status: error?.status || null,
+      });
+
+      const msg = cleanString(error?.message).toLowerCase();
+      if (
+        error?.status === 501 ||
+        msg.includes("no service found") ||
+        msg.includes("not implemented in data provider class")
+      ) {
+        mapSapServiceError(error, {
+          serviceName: "ZTR_DEP_CHECK_SRV",
+        });
+      }
+    }
   }
 
-  const normalized = normalizeDependencyRows(raw);
+  if (perTransportResults.length === 0) {
+    const err = new Error(
+      failures.length > 0
+        ? `SAP dependency check failed for all transports: ${failures.map((f) => `${f.transport} (${f.error})`).join(", ")}`
+        : "Dependency check failed."
+    );
+    err.status = 500;
+    err.code = "SAP_DEPENDENCY_CHECK_FAILED";
+    err.details = { failures };
+    throw err;
+  }
+
+  const merged = mergeDependencyRows(
+    perTransportResults.map((entry) => ({
+      sourceTransports: [entry.transport],
+      dependencies: entry.dependencies,
+      dependencyMessage: entry.dependencyMessage,
+      raw: entry.raw,
+    }))
+  );
+
+  const warningMessage =
+    failures.length > 0
+      ? `Dependency check completed with ${failures.length} transport failure(s).`
+      : "";
 
   return {
     ok: true,
-    message: normalized.dependencyMessage || "Dependency check completed.",
+    message:
+      [merged.dependencyMessage, warningMessage].filter(Boolean).join(" ").trim() ||
+      "Dependency check completed.",
     result: {
-      transports: cleanTransports,
-      dependencyMessage: normalized.dependencyMessage,
-      dependencies: normalized.dependencies,
-      raw,
+      transports: merged.sourceTransports,
+      dependencyMessage: merged.dependencyMessage,
+      dependencies: merged.dependencies,
+      raw: {
+        responses: merged.rawResponses,
+        failures,
+      },
     },
   };
 }
@@ -246,12 +418,32 @@ export async function getDependentTransportsFromCr({
   system,
   sapAuth,
   changeRequestId,
+  processType = "",
 }) {
   const trResult = await getTransportNumbersFromCr({
     system,
     sapAuth,
     changeRequestId,
+    processType,
   });
+
+  if (!trResult?.ok) {
+    return {
+      ok: false,
+      message: trResult?.message || `Unable to read transport details for CR ${changeRequestId}.`,
+      result: {
+        changeRequestId: cleanString(changeRequestId),
+        sourceTransports: [],
+        dependencyMessage: "",
+        dependencies: [],
+        raw: {
+          transportLookup: trResult?.result?.raw || null,
+          dependencyLookup: null,
+          transportLookupError: trResult?.result?.error || null,
+        },
+      },
+    };
+  }
 
   const sourceTransports = trResult?.result?.transports || [];
 

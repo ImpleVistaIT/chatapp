@@ -72,26 +72,51 @@ function getSuggestionLabel(suggestion) {
 }
 
 function buildStructuredTable(data) {
-  if (!data || data.viewType !== "transport_list_table") return null;
+  if (!data) return null;
+
+  const viewType = String(data.viewType || "").trim();
+  if (viewType !== "transport_list_table" && viewType !== "transport_dependency_table") return null;
 
   const columns = Array.isArray(data.columns) ? data.columns : [];
   const rawRows = Array.isArray(data.tableRows) ? data.tableRows : [];
 
+  if (viewType === "transport_list_table" && rawRows.length === 0 && String(data.emptyState || "").trim()) {
+    return {
+      columns: ["Message"],
+      rows: [[String(data.emptyState).trim()]],
+      forceGrid: true,
+      _meta: {
+        totalRows: 0,
+        cappedTo: 0,
+      },
+    };
+  }
+
   if (!columns.length || !rawRows.length) return null;
 
-  const rows = rawRows.map((row) => [
-    row.no ?? "-",
-    row.transport ?? "-",
-    row.description ?? "-",
-    row.owner ?? "-",
-    row.transportType ?? "-",
-    row.task ?? "-",
-    row.taskOwner ?? "-",
-    row.taskType ?? "-",
-    row.devCreated ?? "-",
-    row.devReleased ?? "-",
-    row.taskReleased ?? "-",
-  ]);
+  const rows =
+    viewType === "transport_dependency_table"
+      ? rawRows.map((row) => [
+          row.originalTransport ?? "-",
+          row.dependentTransport ?? "-",
+          row.description ?? "-",
+          row.owner ?? "-",
+          row.exportedOn ?? "-",
+          row.importedOn ?? "-",
+        ])
+      : rawRows.map((row) => [
+          row.no ?? "-",
+          row.transport ?? "-",
+          row.description ?? "-",
+          row.owner ?? "-",
+          row.transportType ?? "-",
+          row.task ?? "-",
+          row.taskOwner ?? "-",
+          row.taskType ?? "-",
+          row.devCreated ?? "-",
+          row.devReleased ?? "-",
+          row.taskReleased ?? "-",
+        ]);
 
   return {
     columns,

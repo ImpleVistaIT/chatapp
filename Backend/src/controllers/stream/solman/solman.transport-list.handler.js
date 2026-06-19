@@ -210,6 +210,10 @@ export async function handleTransportList(context) {
       "Task Released",
     ],
     tableRows,
+    emptyState:
+      rows.length === 0
+        ? `Transport details for CR ${objectId || "-"}\n\nNo transports found for this change request.`
+        : "",
   };
 
   await persistAssistantAndTouchSession({

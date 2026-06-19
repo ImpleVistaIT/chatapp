@@ -1,8 +1,12 @@
+import { useEffect, useRef, useState } from "react";
+
 export default function ReplyTable({ columns, rows, forceGrid = false }) {
   const isFallback =
     !columns || columns.length === 0 || columns[0] === "Output";
 
   const safeRows = Array.isArray(rows) ? rows : [];
+  const scrollAreaRef = useRef(null);
+  const [hasHorizontalOverflow, setHasHorizontalOverflow] = useState(false);
 
   function isBlankLike(value) {
     const text = String(value ?? "").trim();
@@ -44,7 +48,7 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
   const visibleColumns =
     safeColumns.includes("PoNo") &&
     safeRows.length > 0 &&
-    safeRows.every((row, idx) => isBlankLike(getColumnValue(row, "PoNo", safeColumns.indexOf("PoNo"))))
+    safeRows.every((row) => isBlankLike(getColumnValue(row, "PoNo", safeColumns.indexOf("PoNo"))))
       ? safeColumns.filter((column) => column !== "PoNo")
       : safeColumns;
 
@@ -63,16 +67,40 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
     CurKey: "Currency",
   };
 
+  useEffect(() => {
+    const element = scrollAreaRef.current;
+
+    if (!element) {
+      return undefined;
+    }
+
+    const updateOverflow = () => {
+      setHasHorizontalOverflow(element.scrollWidth > element.clientWidth + 1);
+    };
+
+    updateOverflow();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateOverflow);
+      return () => window.removeEventListener("resize", updateOverflow);
+    }
+
+    const observer = new ResizeObserver(updateOverflow);
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [safeColumns.length, safeRows.length, visibleColumns.length, forceGrid]);
+
   return (
     <div className="w-full p-1">
-      {forceGrid && (
+      {forceGrid && hasHorizontalOverflow && (
         <div className="mb-2 px-1 text-[11px] sm:text-xs text-green-800">
           Scroll horizontally to view all columns →
         </div>
       )}
 
       <div className="relative w-full max-w-full">
-        <div className="w-full max-w-full overflow-x-auto scrollbar-none">
+        <div ref={scrollAreaRef} className="w-full max-w-full overflow-x-auto scrollbar-none">
           <table className="w-max min-w-full text-left text-[11px] sm:text-xs border-collapse">
             {!isFallback && (
               <thead className="bg-green-300 text-black font-semibold">
@@ -115,7 +143,7 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
           </table>
         </div>
 
-        {forceGrid && (
+        {forceGrid && hasHorizontalOverflow && (
           <>
             <div className="pointer-events-none absolute right-0 top-0 h-full w-12 bg-gradient-to-l from-green-100 to-transparent" />
             {/* <div className="pointer-events-none absolute right-3 top-3 text-green-700 text-sm font-semibold">

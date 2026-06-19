@@ -4,6 +4,7 @@ const ALLOWED_ODATA_PARAMS = new Set([
   "$skip",
   "$orderby",
   "$count",
+  "$inlinecount",
   "$select",
   "$expand",
   "$format",
@@ -62,8 +63,16 @@ export function sanitizeODataQuery(query = {}, { maxTop = 200 } = {}) {
       continue;
     }
 
+    if (key === "$inlinecount") {
+      const normalized = String(raw).toLowerCase();
+      if (normalized === "allpages" || normalized === "none") {
+        parts.push(`$inlinecount=${normalized}`);
+      }
+      continue;
+    }
+
     // Encode only the value, never the key — OData system params must keep literal '$'.
-    parts.push(`${key}=${encodeURIComponent(String(raw))}`);
+    parts.push(`${key}=${encodeURIComponent(String(raw)).replace(/'/g, "%27")}`);
   }
 
   return parts.join("&");

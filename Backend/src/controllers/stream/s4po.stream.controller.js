@@ -62,8 +62,10 @@ export function applyPoNextContinuationState({ query, extracted, previousMemory 
     };
   }
 
+  const previousReturnedCount = Array.isArray(previousMemory?.data) ? previousMemory.data.length : 0;
+  const continuationStep = previousReturnedCount > 0 ? previousReturnedCount : Number(previousPoExtracted.limit) || 10;
   const nextLimit = requestedNextCount ?? (Number(previousPoExtracted.limit) || extracted.limit || 10);
-  const nextSkip = (Number(previousPoExtracted.skip) || 0) + (Number(previousPoExtracted.limit) || 10);
+  const nextSkip = (Number(previousPoExtracted.skip) || 0) + continuationStep;
 
   return {
     nextIntent: true,
@@ -202,7 +204,7 @@ function buildStructuredEntitySetQuery({
   }
 
   if (count === true) {
-    query.$count = "true";
+    query.$inlinecount = "allpages";
   }
 
   return buildEntitySetQuery(entitySet, query, { maxTop: 200 });
@@ -294,6 +296,36 @@ function isLatestQuery(query, extracted) {
   const q = String(query || "").toLowerCase();
   if (String(extracted?.listMode || "").toLowerCase() === "latest_po") return true;
   return /\b(latest|recent|newest|most\s+recent)\b/.test(q);
+}
+
+function isExplicitLatestPoQuery(query) {
+  const q = String(query || "").toLowerCase();
+  return /\b(latest|recent|newest|most\s+recent)\b/.test(q);
+}
+
+export { isExplicitLatestPoQuery };
+
+export function isSingleLatestPoRequest(query) {
+  const q = String(query || "").toLowerCase();
+  return (
+    /\b(latest|newest|most\s+recent)\s+(purchase\s+order|po)\b(?!s)/.test(q) ||
+    /\blatest\s+po\b/.test(q) ||
+    /\bmost\s+recent\s+po\b/.test(q)
+  );
+}
+
+function hasDateFilter(filters) {
+  return (Array.isArray(filters) ? filters : []).some((filter) => {
+    if (!filter || typeof filter !== "object") return false;
+    const field = String(filter.field || "").toLowerCase();
+    const type = String(filter.type || "").toLowerCase();
+    return type === "datetime" || /date/.test(field);
+  });
+}
+
+function startOfCurrentYearIso() {
+  const now = new Date();
+  return `${now.getFullYear()}-01-01T00:00:00`;
 }
 
 const LATEST_DATE_CANDIDATES = [
@@ -398,6 +430,35 @@ function parseDateValue(value) {
   if (!Number.isNaN(dt.getTime())) return dt.getTime();
 
   return null;
+}
+
+export function sortRowsByLatestDate(rows, dateFields) {
+  const data = Array.isArray(rows) ? [...rows] : [];
+  const candidates = Array.isArray(dateFields) && dateFields.length > 0 ? dateFields : ["CrtDate"];
+
+  return data.sort((left, right) => {
+    for (const field of candidates) {
+      const leftTs = parseDateValue(left?.[field]);
+      const rightTs = parseDateValue(right?.[field]);
+      const leftValid = Number.isFinite(leftTs);
+      const rightValid = Number.isFinite(rightTs);
+
+      if (leftValid && rightValid && leftTs !== rightTs) {
+        return rightTs - leftTs;
+      }
+
+      if (leftValid && !rightValid) return -1;
+      if (!leftValid && rightValid) return 1;
+    }
+
+    const leftPoNo = String(left?.PoNo || "");
+    const rightPoNo = String(right?.PoNo || "");
+    if (leftPoNo !== rightPoNo) {
+      return rightPoNo.localeCompare(leftPoNo, undefined, { numeric: true, sensitivity: "base" });
+    }
+
+    return 0;
+  });
 }
 
 function scoreRowsFreshness(rows, dateFields) {
@@ -715,6 +776,16 @@ export async function handleS4poChatStream({
     ? normalizeNumericId(extracted.docItem, Number(service.itemPad) || null)
     : null;
 
+  if (isExplicitLatestPoQuery(query) && !docNumber && !docItem && !hasDateFilter(extracted.filters)) {
+    extracted.filters = Array.isArray(extracted.filters) ? extracted.filters : [];
+    extracted.filters.push({
+      field: "CrtDate",
+      op: "ge",
+      type: "datetime",
+      value: startOfCurrentYearIso(),
+    });
+  }
+
   const limit = Math.min(200, Math.max(1, Number(extracted.limit) || 10));
   const skip = Number.isFinite(Number(extracted.skip)) ? Math.max(0, Number(extracted.skip)) : 0;
 
@@ -799,6 +870,10 @@ export async function handleS4poChatStream({
   sse.send("phase", { phase: "formatting", message: "Preparing results..." });
 
   const safeRows = toResultsArray(sapData);
+  const sortedRows = isLatestQuery(query, extracted)
+    ? sortRowsByLatestDate(safeRows, ["CrtDate"])
+    : safeRows;
+  const responseRows = isSingleLatestPoRequest(query) && !docNumber && !docItem ? sortedRows.slice(0, 1) : sortedRows;
 
   const title =
     Array.isArray(extracted?.filters) && extracted.filters.length > 0
@@ -811,7 +886,7 @@ export async function handleS4poChatStream({
 
   const reply = buildGenericTableReply({
     title,
-    rows: safeRows,
+    rows: responseRows,
     fields: extracted.fields,
     startIndex: skip + 1,
   });
@@ -819,10 +894,10 @@ export async function handleS4poChatStream({
   const summary = await step("generateSummaryLLM", () =>
     generateSummaryLLM({
       entityLabel: service.entityTypeName || "SAP Documents",
-      count: safeRows.length,
+      count: responseRows.length,
       totalCount,
       extracted,
-      sample: safeRows.slice(0, 10),
+      sample: responseRows.slice(0, 10),
       columns: extracted.fields || [],
     })
   );
@@ -835,12 +910,12 @@ export async function handleS4poChatStream({
       summary,
       extracted: { ...extracted, limit, skip },
       sapRequest: selectedRelativePath,
-      data: safeRows,
+      data: responseRows,
       suggestions: generateSuggestions(query, extracted, safeRows),
       responseMeta: {
         ok: true,
         kind: "stream",
-        returned: safeRows.length,
+        returned: responseRows.length,
         routingSystemId,
         executionSystemId: actualSystemId,
         sapUser: effectiveSapUser,
@@ -864,11 +939,11 @@ export async function handleS4poChatStream({
     entitySet: service.entitySet,
     extracted: { ...extracted, limit, skip },
     sapRequest: selectedRelativePath,
-    data: safeRows,
+    data: responseRows,
     reply,
     summary,
-    returned: safeRows.length,
-    suggestions: generateSuggestions(query, extracted, safeRows),
+    returned: responseRows.length,
+    suggestions: generateSuggestions(query, extracted, responseRows),
   });
 
   sse.send("done", { ok: true });

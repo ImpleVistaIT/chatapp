@@ -12,6 +12,7 @@ import {
 import {
   extractCreateChangeRequestEntitiesFromText,
 } from "../src/services/routing/promptClassifier.service.js";
+import { detectTransportQueryIntent } from "../src/services/routing/detectors/genericRuleDetector.js";
 import { normalizeSolmanStatusChart } from "../../frontend/src/utils/solmanChart.js";
 
 test("show CR status stays on the SolMan list flow without inventing a process type", () => {
@@ -91,4 +92,28 @@ test("create CR prompt text extracts label-based field values", () => {
   assert.equal(extracted.DeliveryResponsible, "IMVT0001");
   assert.equal(extracted.Landscape, "Z_DXB_ECC");
   assert.equal(extracted.WorkItemReference, "1256906");
+});
+
+test("transport query variants normalize to the same canonical intent", () => {
+  const cases = [
+    "show transports of cr 8000003218",
+    "show transports cr 8000003218",
+    "get transports of cr 8000003218",
+    "fetch transports for cr 8000003218",
+    "please show transports of cr 8000003218",
+    "transport details of cr 8000003218",
+    "shwo transports of cr 8000003218",
+    "tranports of cr 8000003218",
+  ];
+
+  for (const query of cases) {
+    const result = detectTransportQueryIntent(query);
+
+    assert.equal(result.matched, true, query);
+    assert.equal(result.intent, "SHOW_TRANSPORTS", query);
+    assert.equal(result.routeIntent, "transport_list", query);
+    assert.equal(result.canonicalQuery, "show transports cr 8000003218", query);
+    assert.equal(result.entities.cr_number, "8000003218", query);
+    assert.equal(result.shouldUseLlm, false, query);
+  }
 });

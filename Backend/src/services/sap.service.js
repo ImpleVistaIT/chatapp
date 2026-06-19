@@ -255,6 +255,15 @@ export async function fetchFromSap({ system, service, relativePath }, authOverri
     const body = String(res.data || "").trim();
     const contentType = String(res.headers?.["content-type"] || "").toLowerCase();
 
+    if (/^\d+$/.test(body)) {
+      parsed = {
+        d: {
+          __count: body,
+          results: [],
+        },
+      };
+    } else
+
     if (contentType.includes("json") || body.startsWith("{") || body.startsWith("[")) {
       parsed = JSON.parse(body);
     } else if (

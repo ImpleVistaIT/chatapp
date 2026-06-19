@@ -3,6 +3,7 @@ import { generateJson } from "../llm/ollama.client.js";
 import { ROUTING_CONFIG } from "../../config/routing.config.js";
 import { normalizeRoutingResult } from "../../config/routing.schema.js";
 import { isSupportedIntent } from "../../config/routing.registry.js";
+import { detectTransportQueryIntent } from "./detectors/genericRuleDetector.js";
 
 function normalizeSystem(value) {
   const v = String(value || "").trim().toLowerCase();
@@ -36,6 +37,7 @@ function normalizeIntent(value) {
     list_change_requests: "list_change_requests",
     cr_status_distribution: "cr_status_distribution",
     create_transport: "create_transport",
+    transport_list: "transport_list",
     unknown: "unknown",
   };
   return map[v] || "unknown";
@@ -125,6 +127,18 @@ function normalizeCreateChangeRequestEntities(raw = {}) {
       raw.WorkItemReference || raw.workItemReference || raw.work_item_reference || raw.ticket || raw.incident
     ),
     Landscape: cleanString(raw.Landscape || raw.landscape),
+  };
+}
+function normalizeTransportListEntities(raw = {}) {
+  const objectId = cleanString(
+    raw.objectId || raw.OBJECT_ID || raw.changeRequestId || raw.crId || raw.crNumber || raw.cr_number
+  );
+
+  return {
+    objectId,
+    changeRequestId: objectId,
+    cr_number: objectId,
+    processType: cleanString(raw.processType || raw.PROCESS_TYPE) || "",
   };
 }
 
@@ -285,6 +299,9 @@ function normalizeEntitiesByIntent(intent, rawEntities = {}, queryText = "") {
     case "cr_status_distribution":
       return normalizeCrStatusDistributionEntities(raw);
 
+    case "transport_list":
+      return normalizeTransportListEntities(raw);
+
     default:
       return raw;
   }
@@ -295,6 +312,29 @@ function keywordFallback(query) {
   const objectId = extractCrNumber(query);
   const { fromDate, toDate } = extractDateRange(query);
   const processType = inferProcessType(query);
+
+  const transportMatch = detectTransportQueryIntent(query);
+
+  if (transportMatch.matched) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "transport",
+      intent: "transport_list",
+      confidence: transportMatch.confidence,
+      reason:
+        transportMatch.matchedBy === "exact"
+          ? "Matched canonical transport query"
+          : transportMatch.matchedBy === "fuzzy"
+            ? "Matched transport query using fuzzy normalization"
+            : "Matched transport query using token similarity",
+      source: "keyword",
+      entities: normalizeEntitiesByIntent("transport_list", {
+        changeRequestId: transportMatch.entities?.cr_number,
+        objectId: transportMatch.entities?.cr_number,
+        cr_number: transportMatch.entities?.cr_number,
+      }),
+    });
+  }
 
   const mentionsPo = /\bpo\b/.test(q) || q.includes("purchase order") || q.includes("purchase orders");
   const wantsDetails = /\b(details?|info|information|show details|full details|complete details)\b/.test(q);
@@ -467,6 +507,28 @@ function keywordFallback(query) {
 }
 
 export async function classifyPrompt({ query, sessionContext = null }) {
+  const transportMatch = detectTransportQueryIntent(query);
+  if (transportMatch.matched && transportMatch.confidence >= ROUTING_CONFIG.confidence.high) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "transport",
+      intent: "transport_list",
+      confidence: transportMatch.confidence,
+      reason:
+        transportMatch.matchedBy === "exact"
+          ? "Matched canonical transport query"
+          : transportMatch.matchedBy === "fuzzy"
+            ? "Matched transport query using fuzzy normalization"
+            : "Matched transport query using token similarity",
+      source: "rule",
+      entities: normalizeEntitiesByIntent("transport_list", {
+        changeRequestId: transportMatch.entities?.cr_number,
+        objectId: transportMatch.entities?.cr_number,
+        cr_number: transportMatch.entities?.cr_number,
+      }),
+    });
+  }
+
   const prompt = buildClassifierPrompt({ query, sessionContext });
 
   const llm = await generateJson({
@@ -509,6 +571,22 @@ export async function classifyPrompt({ query, sessionContext = null }) {
       q.includes("cr list") ||
       q.includes("list crs") ||
       q.includes("change request list");
+
+    if (transportMatch.matched && normalizedIntent === "unknown") {
+      return normalizeRoutingResult({
+        system: "solman",
+        module: "transport",
+        intent: "transport_list",
+        confidence: transportMatch.confidence,
+        reason: "Matched transport query before LLM fallback",
+        source: "rule",
+        entities: normalizeEntitiesByIntent("transport_list", {
+          changeRequestId: transportMatch.entities?.cr_number,
+          objectId: transportMatch.entities?.cr_number,
+          cr_number: transportMatch.entities?.cr_number,
+        }),
+      });
+    }
 
     if (candidate.system === "solman" && crListQuery && !explicitAnalyticsQuery) {
       return normalizeRoutingResult({
@@ -581,6 +659,22 @@ export async function classifyPrompt({ query, sessionContext = null }) {
     ) {
       return candidate;
     }
+  }
+
+  if (transportMatch.matched) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "transport",
+      intent: "transport_list",
+      confidence: transportMatch.confidence,
+      reason: "Transport query resolved by rule fallback",
+      source: "rule",
+      entities: normalizeEntitiesByIntent("transport_list", {
+        changeRequestId: transportMatch.entities?.cr_number,
+        objectId: transportMatch.entities?.cr_number,
+        cr_number: transportMatch.entities?.cr_number,
+      }),
+    });
   }
 
   return keywordFallback(query);

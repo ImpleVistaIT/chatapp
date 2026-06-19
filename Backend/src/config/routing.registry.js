@@ -96,6 +96,14 @@ export const ROUTING_INTENT_REGISTRY = {
         entityHints: ["changeRequestId", "description"],
         executor: "solman.transport.createTransport",
       },
+
+      transport_list: {
+        label: "List transports for CR",
+        action: "execute_api",
+        requiredInputs: ["changeRequestId"],
+        entityHints: ["changeRequestId", "objectId", "processType"],
+        executor: "solman.transport.listTransports",
+      },
     },
   },
 };
