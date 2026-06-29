@@ -67,9 +67,14 @@ function parseBool(value, defaultValue = true) {
   return defaultValue;
 }
 
-function inferSystemKind(system = {}) {
+export function inferSystemKind(system = {}) {
   const name = String(system?.name || "").toLowerCase();
   const host = String(system?.host || "").toLowerCase();
+  const systemId = normalizeSystemId(system?.systemId || system?.id || system?.code);
+
+  if (systemId === "HSD") {
+    return "solman";
+  }
 
   if (
     name.includes("solman") ||

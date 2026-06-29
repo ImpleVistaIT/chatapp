@@ -8,6 +8,7 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from "recharts";
+import { FiAlertTriangle, FiArrowRight } from "react-icons/fi";
 import { normalizeSolmanStatusChart } from "../utils/solmanChart.js";
 
 // =========================
@@ -180,6 +181,7 @@ export default function MessageBubble({
   data,
   chart = null,
   suggestions,
+  action,
   onSuggestionClick,
   showAvatar = true,
 }) {
@@ -221,6 +223,50 @@ export default function MessageBubble({
 
   const safeSuggestions = Array.isArray(suggestions) ? suggestions : [];
   const safeSummary = String(summary || "").trim();
+  const reconnectAction = action?.type === "reconnect_system" ? action : null;
+  const isDisconnectedNotice = Boolean(reconnectAction);
+
+  if (isDisconnectedNotice) {
+    return (
+      <div className="flex items-start justify-start gap-3 w-full">
+        <Avatar role={role} showAvatar={showAvatar} />
+
+        <div className="max-w-[95%] sm:max-w-full min-w-0 overflow-hidden space-y-2">
+          <div className="rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-orange-50 shadow-sm">
+            <div className="flex items-start gap-3 px-4 py-4 sm:px-5">
+              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+                <FiAlertTriangle className="text-lg" />
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">
+                  Connection required
+                </div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {String(text || "The selected SAP system is disconnected.").trim()}
+                </div>
+                <div className="mt-1 text-sm leading-relaxed text-slate-600">
+                  Reconnect the target system to continue this request. Once the system is active,
+                  you can retry the same prompt.
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onSuggestionClick?.({ action: reconnectAction, label: reconnectAction.label })}
+                    className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                  >
+                    <FiArrowRight className="text-base" />
+                    <span>{reconnectAction.label}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-start justify-start gap-3 w-full">

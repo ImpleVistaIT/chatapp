@@ -264,7 +264,8 @@ const isConnected = useMemo(() => {
   activeSystemId,
   normalizeSystemId,
 ]);
-  const canInteract = isConnected && !connectingSystemId;
+  const hasAnySystems = normalizedAvailableSystems.length > 0;
+  const canInteract = Boolean(!connectingSystemId && (hasAnySystems || activeSystemId));
 
   const [msgNextBefore, setMsgNextBefore] = useState(null);
   const [msgLoadingMore, setMsgLoadingMore] = useState(false);
@@ -632,6 +633,18 @@ const isConnected = useMemo(() => {
   const handleDisconnectSystem = useCallback(async (system) => {
   try {
     const sid = normalizeSystemId(system?.systemId);
+    const sapUser = String(system?.sapUser || system?.system?.sapUser || system?.user || "").trim();
+    const disconnectedSelection = sid
+      ? {
+          ...(system || {}),
+          systemId: sid,
+          sapUser,
+          connected: false,
+          isConnected: false,
+          status: "disconnected",
+          active: false,
+        }
+      : null;
 
     // optional backend disconnect API
     await authFetch(`${apiBase}/sap/disconnect`, {
@@ -648,6 +661,11 @@ const isConnected = useMemo(() => {
     setLocalConnectedSession(null);
 
     setActiveSession?.(null);
+
+    if (disconnectedSelection) {
+      localStorage.setItem("sapSelectedSystem", JSON.stringify(disconnectedSelection));
+      window.dispatchEvent(new Event("sapSelectedSystemChanged"));
+    }
 
     // clear storage
     localStorage.removeItem("sapConnected");
@@ -949,3 +967,6 @@ const isConnected = useMemo(() => {
     </main>
   );
 }
+
+
+//old logicy

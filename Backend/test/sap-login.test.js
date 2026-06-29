@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { loginToSolman } from "../src/services/systems/solman/login.service.js";
+import { inferSystemKind } from "../src/routes/sap.routes.js";
 
 function makeXmlResponse(message = "Login successful", userName = "IMVT0001") {
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -45,6 +46,10 @@ test("HSD maps to ZNEW_USER_LOGIN_SRV", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("HSD is treated as SolMan during login validation", () => {
+  assert.equal(inferSystemKind({ systemId: "HSD", name: "HSD" }), "solman");
 });
 
 test("S4D maps to ZSAP_USER_LOGIN_SRV", async () => {

@@ -70,6 +70,73 @@ function normalizeActiveSession(v) {
   };
 }
 
+function normalizeSelectedSystem(v) {
+  if (!v || !v.systemId) return null;
+
+  const systemId = normalizeSystemId(v.systemId);
+  const sapUser = String(v.sapUser || "").trim() || "";
+  const status = String(v.status || (v.connected ? "connected" : "disconnected") || "").trim().toLowerCase();
+  const connected = Boolean(
+    v.connected === true ||
+      v.isConnected === true ||
+      status === "connected" ||
+      status === "online" ||
+      status === "active"
+  );
+
+  return {
+    ...v,
+    systemId,
+    sapUser,
+    connected,
+    isConnected: connected,
+    status: connected ? "connected" : "disconnected",
+    active: connected,
+  };
+}
+
+function buildDisconnectedSystemNotice(system = null) {
+  const systemId = normalizeSystemId(system?.systemId || system?.SystemId || "");
+  const systemName = String(system?.name || system?.title || systemId || "selected system").trim();
+  const reconnectAction = {
+    type: "reconnect_system",
+    systemId: systemId || null,
+    label: systemId ? `Connect ${systemId}` : "Connect system",
+  };
+
+  return {
+    text: systemId
+      ? `The selected system ${systemName} is disconnected. Please connect it and try again.`
+      : "The selected system is disconnected. Please connect it and try again.",
+    suggestions: [
+      {
+        label: reconnectAction.label,
+        action: reconnectAction,
+      },
+    ],
+    action: reconnectAction,
+  };
+}
+
+function isPurchaseOrderPrompt(text) {
+  const normalizedText = String(text || "").trim().toLowerCase();
+  if (!normalizedText) return false;
+
+  return (
+    normalizedText.includes("purchase order") ||
+    normalizedText.includes("purchase orders") ||
+    /\bpo\b/.test(normalizedText)
+  );
+}
+
+function readStoredSelectedSystem() {
+  try {
+    return normalizeSelectedSystem(JSON.parse(localStorage.getItem("sapSelectedSystem") || "null"));
+  } catch {
+    return null;
+  }
+}
+
 function buildAvailableSystemsFromTiles(tiles = []) {
   if (!Array.isArray(tiles)) return [];
 
@@ -231,6 +298,78 @@ function getCurrentConnectedSystem({ activeSession, selectedSystem, availableSys
   };
 }
 
+function getSystemConnectionState(systemId, availableSystems) {
+  const normalizedSystemId = normalizeSystemId(systemId);
+  const matched = normalizedSystemId
+    ? (Array.isArray(availableSystems) ? availableSystems : []).find(
+        (item) => normalizeSystemId(item?.systemId) === normalizedSystemId
+      ) || null
+    : null;
+
+  const connected = Boolean(
+    matched &&
+      (matched?.connected === true ||
+        matched?.isConnected === true ||
+        matched?.status === "connected" ||
+        matched?.active === true)
+  );
+
+  return {
+    systemId: normalizedSystemId,
+    connected,
+    status: connected ? "Connected" : "Disconnected",
+    matched,
+  };
+}
+
+
+function findSystemMentionInText(text, availableSystems) {
+  const normalizedText = String(text || "").trim().toUpperCase();
+  if (!normalizedText) return null;
+
+  const systems = Array.isArray(availableSystems) ? availableSystems : [];
+
+  const ranked = systems
+    .map((item) => {
+      const systemId = normalizeSystemId(item?.systemId || item?.id || item?.code || "");
+      const name = String(item?.name || item?.label || item?.description || "").trim();
+      const aliases = Array.isArray(item?.aliases)
+        ? item.aliases.map((alias) => String(alias || "").trim()).filter(Boolean)
+        : [];
+
+      const candidates = [systemId, name, ...aliases]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+
+      const matched = candidates.find((candidate) => {
+        const normalizedCandidate = candidate.toUpperCase();
+        if (!normalizedCandidate) return false;
+        return (
+          normalizedText === normalizedCandidate ||
+          normalizedText.includes(` ${normalizedCandidate} `) ||
+          normalizedText.startsWith(`${normalizedCandidate} `) ||
+          normalizedText.endsWith(` ${normalizedCandidate}`) ||
+          normalizedText.includes(` ${normalizedCandidate}`) ||
+          normalizedText.includes(`${normalizedCandidate} `)
+        );
+      });
+
+      if (!matched) return null;
+
+      return {
+        systemId,
+        name,
+        sapUser: String(item?.sapUser || "").trim(),
+        connected: Boolean(item?.connected === true || item?.isConnected === true || item?.status === "connected"),
+        matchedText: matched,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => String(b.matchedText || "").length - String(a.matchedText || "").length);
+
+  return ranked[0] || null;
+}
+
 //---------------------------------------------//
 // Main component
 //---------------------------------------------//
@@ -255,7 +394,7 @@ export default function Chat({ onToast = null } = {}) {
     return "chat";
   });
 
-  const [selectedSystem, setSelectedSystem] = useState(null);
+  const [selectedSystem, setSelectedSystem] = useState(() => readStoredSelectedSystem());
   const [statusText, setStatusText] = useState("");
   const [showSolmanCrForm, setShowSolmanCrForm] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
@@ -275,6 +414,14 @@ export default function Chat({ onToast = null } = {}) {
       localStorage.removeItem("sapActiveSession");
     }
   }, [activeSession]);
+
+  useEffect(() => {
+    if (selectedSystem) {
+      localStorage.setItem("sapSelectedSystem", JSON.stringify(selectedSystem));
+    } else {
+      localStorage.removeItem("sapSelectedSystem");
+    }
+  }, [selectedSystem]);
 
   const [systems, setSystems] = useState([]);
   const [tiles, setTiles] = useState([]);
@@ -338,12 +485,17 @@ export default function Chat({ onToast = null } = {}) {
 
     function onStorage(e) {
       if (e.key === "sapActiveSession") syncActiveSessionFromStorage();
+      if (e.key === "sapSelectedSystem") setSelectedSystem(readStoredSelectedSystem());
     }
 
     function onSapSessionChanged() {
       syncActiveSessionFromStorage();
       loadSystems();
       loadTiles();
+    }
+
+    function onSelectedSystemChanged() {
+      setSelectedSystem(readStoredSelectedSystem());
     }
 
     function onSapConnectionChanged() {
@@ -354,11 +506,13 @@ export default function Chat({ onToast = null } = {}) {
 
     window.addEventListener("storage", onStorage);
     window.addEventListener("sapActiveSessionChanged", onSapSessionChanged);
+    window.addEventListener("sapSelectedSystemChanged", onSelectedSystemChanged);
     window.addEventListener("sapConnectionChanged", onSapConnectionChanged);
 
     return () => {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("sapActiveSessionChanged", onSapSessionChanged);
+      window.removeEventListener("sapSelectedSystemChanged", onSelectedSystemChanged);
       window.removeEventListener("sapConnectionChanged", onSapConnectionChanged);
     };
   }, [loadSystems, loadTiles]);
@@ -537,45 +691,25 @@ export default function Chat({ onToast = null } = {}) {
   }, [availableSystems]);
 
   const canSendMessage = useMemo(() => {
-    const optimisticActiveId = normalizeSystemId(activeSession?.systemId);
-    const optimisticSapUser = String(activeSession?.sapUser || "").trim();
-
-    if (optimisticActiveId && optimisticSapUser) {
-      return true;
-    }
-
-    if (hasConnectedSystems) return true;
-
-    if (activeSession?.systemId) {
-      const matchedActive = availableSystems.find(
-        (item) => item.systemId === normalizeSystemId(activeSession.systemId)
-      );
-      if (matchedActive?.connected) return true;
-    }
-
-    if (selectedSystem?.systemId) {
-      const matchedSelected = availableSystems.find(
-        (item) => item.systemId === normalizeSystemId(selectedSystem.systemId)
-      );
-      if (matchedSelected?.connected) return true;
-    }
-
-    try {
-      const stored = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
-      const sid = normalizeSystemId(stored?.systemId || "");
-      if (sid) {
-        const matched = availableSystems.find((item) => item.systemId === sid);
-        if (matched?.connected) return true;
-      }
-    } catch {}
-
-    return false;
+    return Boolean(
+      hasConnectedSystems ||
+        selectedSystem?.systemId ||
+        activeSession?.systemId ||
+        (() => {
+          try {
+            const stored = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
+            return normalizeSystemId(stored?.systemId || "");
+          } catch {
+            return "";
+          }
+        })()
+    );
   }, [
     hasConnectedSystems,
-    availableSystems,
     activeSession?.systemId,
     activeSession?.sapUser,
     selectedSystem?.systemId,
+    selectedSystem?.sapUser,
   ]);
 
   useEffect(() => {
@@ -764,6 +898,8 @@ export default function Chat({ onToast = null } = {}) {
     displayText = "",
     fromEdit = false,
     forcedSystemId = null,
+    systemId = null,
+    sapUser = null,
     businessScope = "",
     pendingContext = null,
     sessionId = null,
@@ -782,9 +918,11 @@ export default function Chat({ onToast = null } = {}) {
     if (!text || loading) return;
     if (sendingRef.current) return;
 
-    const explicitSystemId = String(forcedSystemId || "")
+    const explicitSystemId = String(forcedSystemId || systemId || "")
       .trim()
       .toUpperCase();
+
+    const explicitSapUser = String(sapUser || "").trim();
 
     const optimisticActiveId = normalizeSystemId(activeSession?.systemId);
     const optimisticSapUser = String(activeSession?.sapUser || "").trim();
@@ -816,8 +954,63 @@ export default function Chat({ onToast = null } = {}) {
       availableSystems,
     });
 
-    const fallbackConnectedSystemId = currentConnected.systemId || null;
-    const fallbackSapUser = currentConnected.sapUser || "";
+    const mentionedSystem = findSystemMentionInText(text, availableSystems);
+    const mentionedSystemId = normalizeSystemId(mentionedSystem?.systemId || "");
+
+    const requestedSystemId = normalizeSystemId(explicitSystemId || mentionedSystemId || "");
+    const selectedSystemId = normalizeSystemId(selectedSystem?.systemId || "");
+    const selectedConnectionState = getSystemConnectionState(selectedSystemId, availableSystems);
+    const storedSelectedSystemId = normalizeSystemId(selectedSystem?.systemId || "");
+    const storedSelectedState = getSystemConnectionState(storedSelectedSystemId, availableSystems);
+    const activeSystemState = getSystemConnectionState(normalizeSystemId(activeSession?.systemId || ""), availableSystems);
+
+    if (isPurchaseOrderPrompt(text) && selectedSystemId && !selectedConnectionState.connected) {
+      const notice = buildDisconnectedSystemNotice(selectedSystem);
+      updateConversationById(currentConvId, (m) => [
+        ...m,
+        {
+          role: "assistant",
+          text: notice.text,
+          suggestions: notice.suggestions,
+          action: notice.action,
+        },
+      ]);
+      setInput("");
+      return;
+    }
+
+    if (
+      requestedSystemId &&
+      !getSystemConnectionState(requestedSystemId, availableSystems).connected
+    ) {
+      const notice = buildDisconnectedSystemNotice(
+        getSystemConnectionState(requestedSystemId, availableSystems).matched || {
+          systemId: requestedSystemId,
+        }
+      );
+      updateConversationById(currentConvId, (m) => [
+        ...m,
+        {
+          role: "assistant",
+          text: notice.text,
+          suggestions: notice.suggestions,
+          action: notice.action,
+        },
+      ]);
+      setInput("");
+      return;
+    }
+
+    const fallbackConnectedSystemId = activeSystemState.connected
+      ? activeSystemState.systemId
+      : storedSelectedState.connected
+        ? storedSelectedState.systemId
+        : null;
+    const fallbackSapUser = String(
+      activeSession?.sapUser || selectedSystem?.sapUser || currentConnected.sapUser || ""
+    ).trim();
+
+    const effectiveSapUser = explicitSapUser || fallbackSapUser || selectedSystem?.sapUser || "";
 
     const safeExplicitSystemId =
       explicitSystemId &&
@@ -916,7 +1109,7 @@ export default function Chat({ onToast = null } = {}) {
       await sendChatMessageStream(text, {
         apiBase,
         systemId: safeExplicitSystemId || fallbackConnectedSystemId || null,
-        sapUser: fallbackSapUser || null,
+        sapUser: effectiveSapUser || null,
         sessionId: sessionIdToSend,
         availableSystems:
           requestAvailableSystems.length > 0 ? requestAvailableSystems : effectiveAvailableSystems,
@@ -1059,36 +1252,22 @@ export default function Chat({ onToast = null } = {}) {
           },
         ]);
       } else if (payload?.status === "disconnected_system") {
-        const targetSystemId = String(
-          payload?.action?.systemId || payload?.systemResolution?.targetSystemId || ""
-        )
-          .trim()
-          .toUpperCase();
-
-        const reconnectAction = {
-          type: "reconnect_system",
-          systemId: targetSystemId || null,
-          label: targetSystemId ? `Connect ${targetSystemId}` : "Connect system",
-        };
+        const targetSystem =
+          payload?.systemResolution?.targetSystem ||
+          payload?.action?.system ||
+          payload?.action ||
+          selectedSystem ||
+          activeSession ||
+          null;
+        const notice = buildDisconnectedSystemNotice(targetSystem);
 
         updateConversationById(errorConvId, (m) => [
           ...m,
           {
             role: "assistant",
-            text:
-              payload?.message ||
-              `The requested system${
-                payload?.systemResolution?.targetSystemId
-                  ? ` ${payload.systemResolution.targetSystemId}`
-                  : ""
-              } is disconnected. Please connect that system and try again.`,
-            suggestions: [
-              {
-                label: reconnectAction.label,
-                action: reconnectAction,
-              },
-            ],
-            action: reconnectAction,
+            text: notice.text,
+            suggestions: notice.suggestions,
+            action: notice.action,
           },
         ]);
       } else {
@@ -1302,6 +1481,13 @@ export default function Chat({ onToast = null } = {}) {
       ...(fallbackFilters || {}),
     };
 
+    const selectedSystemId = normalizeSystemId(selectedSystem?.systemId || activeSession?.systemId || "");
+    const selectedState = getSystemConnectionState(selectedSystemId, availableSystems);
+    if (selectedSystemId && !selectedState.connected) {
+      const notice = buildDisconnectedSystemNotice();
+      throw new Error(notice.text);
+    }
+
     let storedActiveSystem = null;
     try {
       storedActiveSystem = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
@@ -1437,6 +1623,13 @@ export default function Chat({ onToast = null } = {}) {
       ...(fallbackFilters || {}),
       ...(message?.extracted?.filters || {}),
     };
+
+    const selectedSystemId = normalizeSystemId(selectedSystem?.systemId || activeSession?.systemId || "");
+    const selectedState = getSystemConnectionState(selectedSystemId, availableSystems);
+    if (selectedSystemId && !selectedState.connected) {
+      const notice = buildDisconnectedSystemNotice();
+      throw new Error(notice.text);
+    }
     let storedActiveSystem = null;
     try {
       storedActiveSystem = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
@@ -1952,6 +2145,7 @@ export default function Chat({ onToast = null } = {}) {
     }
   }
 
+  
   function onMessagesScroll(e) {
     const el = e.target;
     const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
@@ -1959,7 +2153,28 @@ export default function Chat({ onToast = null } = {}) {
   }
 
   async function handleViewCrStatus({ objectId, processType = "YMHF" }) {
-    const resolvedConnection = resolvedConnectedSystem;
+    const selectedId = normalizeSystemId(selectedSystem?.systemId || activeSession?.systemId || "");
+    const selectedState = getSystemConnectionState(selectedId, availableSystems);
+
+    if (selectedId && !selectedState.connected) {
+      const notice = buildDisconnectedSystemNotice();
+      updateActiveMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          text: notice.text,
+          suggestions: notice.suggestions,
+        },
+      ]);
+      return;
+    }
+
+    const resolvedConnection = selectedState.connected
+      ? {
+          systemId: selectedState.systemId,
+          sapUser: String(selectedState.matched?.sapUser || activeSession?.sapUser || selectedSystem?.sapUser || "").trim(),
+        }
+      : resolvedConnectedSystem;
 
     if (!resolvedConnection?.systemId) {
       updateActiveMessages((m) => [
@@ -2039,15 +2254,7 @@ export default function Chat({ onToast = null } = {}) {
     const sapUser = String(payload?.sapUser || payload?.system?.sapUser || "").trim();
 
     if (sid) {
-      const next = normalizeActiveSession({
-        systemId: sid,
-        sapUser,
-        firstName: payload?.firstName,
-        fullName: payload?.fullName,
-      });
-
-      setActiveSession(next);
-      setSelectedSystem({
+      const connectedSystem = normalizeSelectedSystem({
         systemId: sid,
         sapUser,
         name: payload?.system?.name || sid,
@@ -2057,8 +2264,21 @@ export default function Chat({ onToast = null } = {}) {
         active: true,
       });
 
+      const next = normalizeActiveSession({
+        systemId: sid,
+        sapUser,
+        firstName: payload?.firstName,
+        fullName: payload?.fullName,
+      });
+
+      setActiveSession(next);
+      setSelectedSystem(connectedSystem);
+
       localStorage.setItem("sapActiveSession", JSON.stringify(next));
+      localStorage.setItem("sapSelectedSystem", JSON.stringify(connectedSystem));
+      localStorage.setItem("sapConnected", "true");
       window.dispatchEvent(new Event("sapActiveSessionChanged"));
+      window.dispatchEvent(new Event("sapSelectedSystemChanged"));
     }
 
     await loadTiles();
@@ -2075,14 +2295,35 @@ export default function Chat({ onToast = null } = {}) {
         selectedSystem?.systemId
       );
 
+      const disconnectedSelection = sid
+        ? normalizeSelectedSystem({
+            ...(system || selectedSystem || {}),
+            systemId: sid,
+            sapUser: String(
+              system?.sapUser || activeSession?.sapUser || selectedSystem?.sapUser || ""
+            ).trim(),
+            connected: false,
+            isConnected: false,
+            status: "disconnected",
+            active: false,
+          })
+        : null;
+
+      if (disconnectedSelection) {
+        setSelectedSystem(disconnectedSelection);
+      }
+
       setActiveSession(null);
-      setSelectedSystem(null);
       setShowSolmanCrForm(false);
       setPendingAction(null);
 
       localStorage.removeItem("sapActiveSession");
       localStorage.removeItem("sapConnected");
+      if (disconnectedSelection) {
+        localStorage.setItem("sapSelectedSystem", JSON.stringify(disconnectedSelection));
+      }
       window.dispatchEvent(new Event("sapActiveSessionChanged"));
+      window.dispatchEvent(new Event("sapSelectedSystemChanged"));
 
       await authFetch(`${apiBase}/sap/disconnect`, {
         method: "POST",
@@ -2121,6 +2362,22 @@ export default function Chat({ onToast = null } = {}) {
       if (payload.systemId) {
         localStorage.setItem("sapActiveSystem", JSON.stringify(payload));
       }
+
+      localStorage.setItem(
+        "sapSelectedSystem",
+        JSON.stringify(
+          normalizeSelectedSystem({
+            ...system,
+            systemId: payload.systemId,
+            sapUser: system?.sapUser || prev?.sapUser || null,
+            connected: true,
+            isConnected: true,
+            status: "connected",
+            active: true,
+          })
+        )
+      );
+      window.dispatchEvent(new Event("sapSelectedSystemChanged"));
     } catch {}
 
     localStorage.removeItem("chatSessionId");
@@ -2265,3 +2522,5 @@ export default function Chat({ onToast = null } = {}) {
     </div>
   );
 }
+
+//old logic

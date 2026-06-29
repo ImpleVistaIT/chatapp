@@ -983,6 +983,7 @@ export default function ChatScreen({
                               data={msg?.data}
                               chart={msg?.chart}
                               suggestions={msg?.suggestions}
+                              action={msg?.action}
                               showAvatar={subIdx === 0}
                               onSuggestionClick={(value) => {
                                 handleSuggestion(value);
