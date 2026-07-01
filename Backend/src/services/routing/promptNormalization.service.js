@@ -148,7 +148,17 @@ export function shouldRunPromptNormalizer(query) {
 }
 
 function buildPromptNormalizerPrompt(query) {
-  return `You normalize SAP chatbot user prompts.
+  return `You are the prompt normalizer for an SAP chatbot.
+
+Your job is to rewrite the user's text into one clean canonical prompt that preserves business meaning.
+Always return JSON only. Do not answer the user's question.
+
+Normalize all natural-language variations into the same structure by:
+- fixing spelling and grammar
+- ignoring filler words and word order differences
+- keeping IDs, usernames, system codes, dates, and quoted values exactly as provided
+- treating quoted and unquoted values the same
+- preserving the intent and entities, not the exact wording
 
 Return ONLY JSON with exactly this shape:
 {
@@ -161,28 +171,108 @@ Return ONLY JSON with exactly this shape:
 
 Rules:
 - Keep business meaning unchanged.
-- Fix spelling/typing mistakes (example: "showss po creatd by S4H_MM" -> "show po created by S4H_MM").
-- Keep IDs, usernames, codes exactly as user typed.
-- If prompt is random gibberish, set shouldReject=true and isMeaningful=false.
+- Fix spelling/typing mistakes.
+- Keep IDs, usernames, codes, object numbers, and dates exactly as the user typed them.
+- If the prompt is gibberish or not a meaningful SAP request, set shouldReject=true and isMeaningful=false.
 - confidence must be between 0 and 1.
-- No extra keys and no explanation outside JSON.
+- No extra keys, no markdown, no explanation outside JSON.
+
+Supported request patterns include:
+- SolMan change request details, status, and status distribution
+- purchase orders, vendor data, invoices, materials, approvals
+- date filters such as today, yesterday, this month, last 30 days, last year, and explicit from/to ranges
+
+Examples:
+
+Example 1
+User prompt: "showss po creatd by S4H_MM"
+Return:
+{
+  "normalizedQuery": "show po created by S4H_MM",
+  "isMeaningful": true,
+  "shouldReject": false,
+  "confidence": 0.97,
+  "reason": "Fixed spelling while preserving the system code"
+}
+
+Example 2
+User prompt: "show status of change request '8000003191'"
+Return:
+{
+  "normalizedQuery": "show status of change request 8000003191",
+  "isMeaningful": true,
+  "shouldReject": false,
+  "confidence": 0.98,
+  "reason": "Normalized quoted identifier without changing meaning"
+}
+
+Example 3
+User prompt: "list crs for india last month"
+Return:
+{
+  "normalizedQuery": "list CRs for INDIA last month",
+  "isMeaningful": true,
+  "shouldReject": false,
+  "confidence": 0.95,
+  "reason": "Normalized casing and kept the business filters"
+}
+
+Example 4
+User prompt: "asdf qwe zzz"
+Return:
+{
+  "normalizedQuery": "asdf qwe zzz",
+  "isMeaningful": false,
+  "shouldReject": true,
+  "confidence": 0.05,
+  "reason": "Gibberish input"
+}
 
 User prompt:
 ${JSON.stringify(String(query || ""))}`.trim();
 }
 
+function normalizePromptNormalizerResult(data, original) {
+  const normalizedQuery =
+    cleanString(data?.normalizedQuery) ||
+    cleanString(data?.normalized_query) ||
+    cleanString(data?.rewrittenQuery) ||
+    cleanString(data?.rewritten_query) ||
+    cleanString(data?.query) ||
+    original;
+
+  const reason =
+    cleanString(data?.reason) ||
+    cleanString(data?.message) ||
+    cleanString(data?.explanation) ||
+    null;
+
+  const confidence = clampConfidence(data?.confidence ?? data?.score ?? 0);
+  const isMeaningful = data?.isMeaningful !== false && data?.meaningful !== false;
+  const shouldReject = Boolean(data?.shouldReject || data?.reject || data?.rejected);
+
+  return {
+    normalizedQuery,
+    isMeaningful,
+    shouldReject,
+    confidence,
+    reason,
+  };
+}
+
 export async function normalizePromptWithLlm({ query }) {
   const original = cleanString(query);
-  if (!shouldRunPromptNormalizer(original)) {
-    return {
-      normalizedQuery: original,
-      rejected: false,
-      confidence: 0,
-      usedLlm: false,
-      error: null,
-      reason: "skipped",
-    };
-  }
+  // NOTE: Keep the previous grammar-suspicion gate for easy rollback.
+  // if (!shouldRunPromptNormalizer(original)) {
+  //   return {
+  //     normalizedQuery: original,
+  //     rejected: false,
+  //     confidence: 0,
+  //     usedLlm: false,
+  //     error: null,
+  //     reason: "skipped",
+  //   };
+  // }
 
   const timeoutMs = Number(process.env.PROMPT_NORMALIZER_TIMEOUT_MS || 2500);
   const prompt = buildPromptNormalizerPrompt(original);
@@ -191,6 +281,7 @@ export async function normalizePromptWithLlm({ query }) {
     prompt,
     schemaHint: "prompt_normalizer",
     timeoutMs,
+    forceProvider: "groq",
   });
 
   if (!out?.ok || !out?.data || typeof out.data !== "object") {
@@ -204,7 +295,7 @@ export async function normalizePromptWithLlm({ query }) {
     };
   }
 
-  const data = out.data;
+  const data = normalizePromptNormalizerResult(out.data, original);
   const normalized = cleanString(data.normalizedQuery) || original;
   const confidence = clampConfidence(data.confidence);
   const isMeaningful = data.isMeaningful !== false;

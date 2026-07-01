@@ -7,7 +7,10 @@ async function getFetch() {
 }
 
 function safeJsonFromText(text) {
-  const s = String(text || "").trim();
+  const s = String(text || "")
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "");
   const start = s.indexOf("{");
   const end = s.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) return null;
@@ -207,8 +210,10 @@ export async function generateJson({
   prompt,
   schemaHint = null,
   timeoutMs = null,
+  forceProvider = null,
 } = {}) {
-  const provider = getProvider();
+  const forcedProvider = String(forceProvider || "").trim().toLowerCase();
+  const provider = forcedProvider || getProvider();
   const finalTimeout = Number(timeoutMs || LLM_CONFIG.timeoutMs || 8000);
   const runner = provider === "groq" ? callGroq : callOllama;
   const out = await runner({ prompt, timeoutMs: finalTimeout });

@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   inferCrListIntent,
   pickCrListEntities,
+  getSolmanCrStatusMaxRows,
+  inferCreatedByFilterFromQuery,
 } from "../src/controllers/stream/solman/solman.shared.js";
 import {
   isSolmanCrQuery,
@@ -71,6 +73,24 @@ test("valid status distribution chart normalizes for rendering", () => {
   assert.equal(chart.totalCRs, 4);
 });
 
+test("SolMan CR status row cap is configurable", () => {
+  const originalValue = process.env.SOLMAN_CR_STATUS_MAX_ROWS;
+
+  try {
+    delete process.env.SOLMAN_CR_STATUS_MAX_ROWS;
+    assert.equal(getSolmanCrStatusMaxRows(), 30);
+
+    process.env.SOLMAN_CR_STATUS_MAX_ROWS = "12";
+    assert.equal(getSolmanCrStatusMaxRows(), 12);
+  } finally {
+    if (originalValue === undefined) {
+      delete process.env.SOLMAN_CR_STATUS_MAX_ROWS;
+    } else {
+      process.env.SOLMAN_CR_STATUS_MAX_ROWS = originalValue;
+    }
+  }
+});
+
 test("PO created-by prompt must not trigger SolMan CR routing", () => {
   assert.equal(isSolmanCrQuery("show po created by S4H_MM"), false);
 });
@@ -81,6 +101,13 @@ test("PO next-page prompt must not trigger SolMan CR routing", () => {
 
 test("CR created-by prompt should still trigger SolMan CR routing", () => {
   assert.equal(isSolmanCrQuery("show change requests created by IRAM"), true);
+});
+
+test("SolMan created-by inference accepts quoted filler-word phrasing", () => {
+  const result = inferCreatedByFilterFromQuery('show change requests created by the user "ISLM"');
+
+  assert.equal(result.createdBy, "ISLM");
+  assert.equal(result.createdByMode, "explicit");
 });
 
 test("create CR prompt text extracts label-based field values", () => {

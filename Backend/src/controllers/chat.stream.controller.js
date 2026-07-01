@@ -30,6 +30,16 @@ function isLandscapeOnlyQuery(query) {
   return ["ROW", "INDIA", "PRD", "QAS", "DEV", "QA", "UAT", "PROD"].includes(q);
 }
 
+function isPurchaseOrderQuery(query) {
+  const q = cleanString(query).toLowerCase();
+  if (!q) return false;
+
+  const hasPoKeyword = /\b(po|purchase\s*order|purchase\s*orders)\b/i.test(q);
+  const hasSolmanCrKeyword = /\b(change\s*request|change\s*requests|cr\b|charm|transport|solman)\b/i.test(q);
+
+  return hasPoKeyword && !hasSolmanCrKeyword;
+}
+
 const ROUTING_KEYWORD_REGEX =
   /\b(po|purchase\s*order|purchase\s*orders|invoice|vendor|supplier|material|delivery|sales\s*order|change\s*request|change\s*requests|cr|charm|transport|solman|s4|s4hana|created|date|month|year|count|top|skip|offset|order\s*by|latest|recent|newest|status)\b/i;
 
@@ -449,6 +459,7 @@ export async function handleChatStream(req, res) {
     }
 
     const rawQuery = cleanString(query);
+    const queryLooksLikePo = isPurchaseOrderQuery(rawQuery);
     const sessionPendingAction =
       pendingAction ||
       (sessionId
@@ -462,7 +473,15 @@ export async function handleChatStream(req, res) {
       detectConversationIntent({ query: rawQuery })
     );
 
-    if (conversationIntent?.handled && !isExactSolmanContinuation) {
+    if (!isExactSolmanContinuation && !queryLooksLikePo && isLikelyGibberishQuery(rawQuery)) {
+      sse.send("error", {
+        message: buildInvalidPromptMessage(),
+        status: "invalid_prompt",
+      });
+      return sse.end();
+    }
+
+    if (conversationIntent?.handled && !isExactSolmanContinuation && !queryLooksLikePo) {
       console.log("Skipping SAP API call - General Conversation");
       sse.send("reply", buildGeneralConversationResponse(conversationIntent));
       sse.send("done", { ok: true });
@@ -471,14 +490,6 @@ export async function handleChatStream(req, res) {
 
     console.log("SAP Query Detected - Calling SAP API");
 
-    if (!isExactSolmanContinuation && isLikelyGibberishQuery(rawQuery)) {
-      sse.send("error", {
-        message: buildInvalidPromptMessage(),
-        status: "invalid_prompt",
-      });
-      return sse.end();
-    }
-
     const normalizedPrompt = await step("normalizePromptWithLlm", () =>
       normalizePromptWithLlm({ query: rawQuery })
     );
@@ -486,7 +497,7 @@ export async function handleChatStream(req, res) {
     const effectiveQuery =
       cleanString(normalizedPrompt?.normalizedQuery || rawQuery) || rawQuery;
 
-    if (normalizedPrompt?.rejected && !isExactSolmanContinuation) {
+    if (normalizedPrompt?.rejected && !isExactSolmanContinuation && !queryLooksLikePo) {
       sse.send("error", {
         message: buildInvalidPromptMessage(),
         status: "invalid_prompt",
@@ -532,6 +543,7 @@ export async function handleChatStream(req, res) {
       Boolean(effectivePendingAction) &&
       pendingSystem === "solman" &&
       supportedPendingIntents.has(pendingIntent) &&
+      !queryLooksLikePo &&
       (queryIsNextPage || queryIsLandscapeOnly);
 
     if (
@@ -705,6 +717,7 @@ export async function handleChatStream(req, res) {
 
     const forcedSolman =
       !queryLooksLikePoContinuation &&
+      !queryLooksLikePo &&
       (isSolmanCrQuery(effectiveQuery) ||
         cleanString(classified?.system).toLowerCase() === "solman");
 
@@ -721,7 +734,10 @@ export async function handleChatStream(req, res) {
       })
     );
 
-    const useSolman = !queryLooksLikePoContinuation && (forcedSolman || classified?.system === "solman");
+    const useSolman =
+      !queryLooksLikePoContinuation &&
+      !queryLooksLikePo &&
+      (forcedSolman || classified?.system === "solman");
 
     if (systemResolution.status === "disconnected") {
       sse.send("error", {

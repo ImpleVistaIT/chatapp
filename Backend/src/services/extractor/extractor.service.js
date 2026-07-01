@@ -547,6 +547,10 @@ function pickPoDateField(message, allowedFields) {
     }
   }
 
+  if (set.has("podocdate")) {
+    return "PoDocDate";
+  }
+
   for (const c of [...createdCandidates, ...documentCandidates]) {
     if (set.has(String(c).toLowerCase())) return c;
   }
@@ -561,15 +565,35 @@ function extractUserCreatedFilters(message, allowedFields) {
   const allowedSet = new Set((allowedFields || []).map((f) => String(f).toLowerCase()));
   if (!allowedSet.has("usercreated")) return [];
 
+  if (
+    /\bmy\s+(po|pos|purchase\s*orders?)\b/i.test(text) ||
+    /\bshow\s+my\s+(po|pos|purchase\s*orders?)\b/i.test(text) ||
+    /\bcreated\s+by\s+me\b/i.test(text) ||
+    /\bmy\s+po\s+created\s+by\s+me\b/i.test(text)
+  ) {
+    return [
+      {
+        field: "UserCreated",
+        op: "eq",
+        type: "string",
+        value: "ME",
+      },
+    ];
+  }
+
   const directMatch =
-    text.match(/\bcreated\s*by\s*[:=]?\s*([A-Za-z0-9_@.\-]+)\b/i) ||
-    text.match(/\bcreatedby\s*[:=]?\s*([A-Za-z0-9_@.\-]+)\b/i) ||
-    text.match(/\b(?:user(?:name)?|user\s*id|userid|sap\s*user)\s*[:=]?\s*([A-Za-z0-9_@.\-]+)\b/i);
+    text.match(/\bcreated\s*by\s*(?:the\s+)?(?:user(?:name)?|sap\s*user)?\s*[:=]?\s*["'`]?([A-Za-z0-9_@.\-]+)["'`]?/i) ||
+    text.match(/\bcreatedby\s*[:=]?\s*["'`]?([A-Za-z0-9_@.\-]+)["'`]?/i) ||
+    text.match(/\b(?:user(?:name)?|user\s*id|userid|sap\s*user)\s*[:=]?\s*["'`]?([A-Za-z0-9_@.\-]+)["'`]?/i);
 
   let user = directMatch?.[1] ? String(directMatch[1]).trim() : "";
 
   if (!user) {
-    const byRegex = /\bby\s+([A-Za-z0-9_@.\-]+)\b/gi;
+    if (!/\bby\b/i.test(text)) {
+      return [];
+    }
+
+    const byRegex = /\b(?:by\s+(?:the\s+)?(?:user(?:name)?|sap\s*user)?\s*[:=]?\s*)?["'`]?([A-Za-z0-9_@.\-]+)["'`]?(?=\b|$)/gi;
     const byMatches = [...text.matchAll(byRegex)];
     const hasCreationContext =
       /\b(created|creation|created\s+on|created\s+in|created\s+during)\b/i.test(text) ||
@@ -629,6 +653,27 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
   out.filters.push(...extractDateFilters(truncated, poDateField));
   out.filters.push(...extractNumericFilters(truncated, allowedFields));
   out.filters.push(...extractUserCreatedFilters(truncated, allowedFields));
+
+  if (/\b(?:from|between)\b/i.test(truncated) && /\b(?:to|and)\b/i.test(truncated)) {
+    const startDateFilter = out.filters.find(
+      (filter) => filter?.field === poDateField && filter?.op === "ge" && filter?.type === "datetime"
+    );
+    const endDateFilter = out.filters.find(
+      (filter) => filter?.field === poDateField && filter?.op === "lt" && filter?.type === "datetime"
+    );
+
+    if (startDateFilter?.value && endDateFilter?.value) {
+      const parsedEnd = new Date(String(endDateFilter.value).endsWith("Z") ? String(endDateFilter.value) : `${endDateFilter.value}Z`);
+      if (!Number.isNaN(parsedEnd.getTime())) {
+        const inclusiveEnd = new Date(parsedEnd.getTime() - 1000);
+        const yyyy = inclusiveEnd.getUTCFullYear();
+        const mm = String(inclusiveEnd.getUTCMonth() + 1).padStart(2, "0");
+        const dd = String(inclusiveEnd.getUTCDate()).padStart(2, "0");
+        endDateFilter.op = "le";
+        endDateFilter.value = `${yyyy}-${mm}-${dd}T23:59:59`;
+      }
+    }
+  }
 
   out.orderBy = extractOrderBy(truncated, allowedFields, poDateField) || [];
   out.limit = extractLimit(truncated);
@@ -851,7 +896,7 @@ export async function extractDocQuery({ query, allowedFields, fieldLabels }) {
 
 export async function extractPoQuery({ query, allowedFields, fieldLabels }) {
   const r = await extractDocQuery({ query, allowedFields, fieldLabels });
-  console.log("🧠 EXTRACTOR OUTPUT:", JSON.stringify(r, null, 2));
+  console.log("EXTRACTOR OUTPUT:", JSON.stringify(r, null, 2));
   return {
     fields: r.fields,
     poNumber: r.docNumber,

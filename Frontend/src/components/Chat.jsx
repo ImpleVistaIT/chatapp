@@ -1162,7 +1162,10 @@ export default function Chat({ onToast = null } = {}) {
           summary: data.summary || "",
           summaryStatus: data.summary ? "done" : "pending",
           data: data.data || null,
-          chart: data.chart || (data?.type === "status_distribution" ? data : null),
+          chart:
+            data.chart ||
+            (data?.type === "status_distribution" ? data : null) ||
+            (data?.data?.statusDistribution ? data.data.statusDistribution : null),
           extracted: data.extracted || null,
           responseMeta: data.responseMeta || null,
           query: text,

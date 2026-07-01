@@ -208,6 +208,17 @@ function parseMonthExpression(message) {
     }
   }
 
+  const tokens = normalized.match(/[a-z]{3,9}/g) || [];
+  for (const token of tokens) {
+    const monthIndex0 = monthNameToIndex0(token);
+    if (monthIndex0 == null) continue;
+    const today = getTodayUtcDate();
+    const year = today.getUTCFullYear();
+    const start = startOfMonth(year, monthIndex0);
+    const end = monthIndex0 === 11 ? startOfMonth(year + 1, 0) : startOfMonth(year, monthIndex0 + 1);
+    return normalizeDateResult("month", toStartString(start), toStartString(end), 0.9);
+  }
+
   return null;
 }
 

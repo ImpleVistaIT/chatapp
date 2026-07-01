@@ -22,12 +22,146 @@ function compactService(service) {
   };
 }
 
+function getServiceSearchText(service) {
+  const fieldText = Array.isArray(service?.fields)
+    ? service.fields
+        .map((field) => `${String(field?.name || "")} ${String(field?.label || "")}`.trim())
+        .join(" ")
+    : "";
+
+  return [
+    service?.serviceName,
+    service?.entitySet,
+    service?.entityTypeName,
+    service?.labelsText,
+    Array.isArray(service?.domainHints) ? service.domainHints.join(" ") : "",
+    Array.isArray(service?.keys) ? service.keys.join(" ") : "",
+    fieldText,
+  ]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+}
+
+function scoreCatalogService(service, query) {
+  const q = String(query || "").toLowerCase();
+  const text = getServiceSearchText(service);
+  let score = 0;
+
+  if (/\b(po|purchase\s*order|purchase\s*orders)\b/i.test(q)) {
+    score += 25;
+  }
+
+  if (/\b(detail|details|specific|single)\b/i.test(q)) {
+    score += 20;
+  }
+
+  if (/\b(show|get|view|display|fetch|open)\b/i.test(q)) {
+    score += 5;
+  }
+
+  if (quickExtractDocNumber(q)) {
+    score += 30;
+  }
+
+  if (text.includes("purchase order")) {
+    score += 30;
+  }
+
+  if (text.includes("detail")) {
+    score += 40;
+  }
+
+  if (/\bpo\b/i.test(text)) {
+    score += 10;
+  }
+
+  if (/\b(po|purchase\s*order)\b/i.test(text) && quickExtractDocNumber(q)) {
+    score += 15;
+  }
+
+  if (Array.isArray(service?.keys) && service.keys.some((key) => /po|purchase/i.test(String(key || "")))) {
+    score += 12;
+  }
+
+  if (
+    Array.isArray(service?.fields) &&
+    service.fields.some((field) => /po|purchase/i.test(String(field?.name || field?.label || "")))
+  ) {
+    score += 12;
+  }
+
+  if (/\blist\b/i.test(text) && /\bdetail|details\b/i.test(q)) {
+    score -= 5;
+  }
+
+  return score;
+}
+
+export function pickBestCatalogService(catalog, query) {
+  const services = Array.isArray(catalog) ? catalog.filter(Boolean) : [];
+  if (!services.length) {
+    return null;
+  }
+
+  let bestService = services[0];
+  let bestScore = scoreCatalogService(bestService, query);
+
+  for (let i = 1; i < services.length; i += 1) {
+    const candidate = services[i];
+    const candidateScore = scoreCatalogService(candidate, query);
+    if (candidateScore > bestScore) {
+      bestService = candidate;
+      bestScore = candidateScore;
+    }
+  }
+
+  return {
+    service: bestService,
+    score: bestScore,
+  };
+}
+
+function buildHeuristicFallback(catalog, query) {
+  const docNumber = quickExtractDocNumber(query);
+  if (!docNumber) {
+    return null;
+  }
+
+  const best = pickBestCatalogService(catalog, query);
+  if (!best?.service) {
+    return null;
+  }
+
+  return {
+    matchFound: true,
+    confidence: 0.9,
+    systemId: String(best.service?.systemId || "").trim().toUpperCase(),
+    serviceName: String(best.service?.serviceName || "").trim(),
+    entitySet: String(best.service?.entitySet || "").trim(),
+    entityTypeName: String(best.service?.entityTypeName || "").trim(),
+    operation: inferOperation(query),
+    docNumber,
+    docItem: null,
+    fields: [],
+    filters: [],
+    orderBy: [],
+    limit: 10,
+    reason: "Heuristic fallback matched numbered purchase order query",
+    candidatesConsidered: Array.isArray(catalog) ? catalog.length : 0,
+  };
+}
+
 function buildRoutingPrompt({ query, services }) {
   return `
 You are an SAP OData routing engine.
 
 Task:
 Given a user query and a catalog of SAP OData services, select the single best matching service and extract a query plan.
+
+You must normalize different phrasings into the same structured plan.
+Do not depend on exact keyword matching. Focus on intent, entity meaning, field labels, filters, and sort preferences.
+Treat quoted and unquoted values the same.
+Preserve IDs, usernames, and document numbers exactly as typed.
 
 Rules:
 - Return JSON only.
@@ -38,6 +172,74 @@ Rules:
 - If the query contains a document number, include it in docNumber.
 - Do not invent fields not present in the chosen service.
 - If unsure, still return the best candidate with a lower confidence.
+
+Common meaning groups:
+- "show", "list", "fetch", "display", "give me" -> list-style request when no specific document number is present
+- "details of PO 4500...", "show purchase order 4500...", "purchase order number 4500..." -> detail request with docNumber
+- "created by", "creator", "user", "posted by" -> filter on the corresponding field if present in the catalog
+- "this month", "last 30 days", "from X to Y", quoted dates, and unquoted dates -> date filters
+
+Examples:
+
+Example 1
+User query: "show PO details for 4500012345"
+Return:
+{
+  "matchFound": true,
+  "confidence": 0.98,
+  "systemId": "",
+  "serviceName": "",
+  "entitySet": "",
+  "entityTypeName": "",
+  "operation": "detail",
+  "docNumber": "4500012345",
+  "docItem": null,
+  "fields": [],
+  "filters": [],
+  "orderBy": [],
+  "limit": 10,
+  "reason": "Detail request with a document number"
+}
+
+Example 2
+User query: "show purchase orders created by S4H_MM this month"
+Return:
+{
+  "matchFound": true,
+  "confidence": 0.96,
+  "systemId": "",
+  "serviceName": "",
+  "entitySet": "",
+  "entityTypeName": "",
+  "operation": "list",
+  "docNumber": null,
+  "docItem": null,
+  "fields": [],
+  "filters": [],
+  "orderBy": [],
+  "limit": 10,
+  "reason": "List request with creator and date filters"
+}
+
+Example 3
+User query: "list crs for row"
+Return:
+{
+  "matchFound": true,
+  "confidence": 0.95,
+  "systemId": "",
+  "serviceName": "",
+  "entitySet": "",
+  "entityTypeName": "",
+  "operation": "list",
+  "docNumber": null,
+  "docItem": null,
+  "fields": [],
+  "filters": [],
+  "orderBy": [],
+  "limit": 10,
+  "reason": "Normalized list request from natural language variation"
+}
 
 Required JSON shape:
 {
@@ -183,6 +385,14 @@ export async function resolveServiceIntent({
   });
 
   const data = llm?.ok ? llm.data : null;
+  const heuristicFallback = buildHeuristicFallback(catalog, query);
+
+  if (!data?.matchFound || !data?.serviceName || !data?.entitySet) {
+    if (heuristicFallback) {
+      console.log("[SERVICE_INTENT] using heuristic fallback:", heuristicFallback);
+      return heuristicFallback;
+    }
+  }
 
   return {
     matchFound: Boolean(data?.matchFound),

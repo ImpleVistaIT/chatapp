@@ -58,7 +58,12 @@ function mapDbMessageToUi(message = {}) {
     text: message?.text,
     summary: message?.summary,
     data: message?.data,
-    chart: message?.chart || message?.data?.chart || (message?.data?.type === "status_distribution" ? message.data : null),
+    chart:
+      message?.chart ||
+      message?.data?.chart ||
+      (message?.data?.type === "status_distribution" ? message.data : null) ||
+      message?.data?.statusDistribution ||
+      null,
     extracted: message?.extracted || null,
     responseMeta: message?.responseMeta || null,
     suggestions: mapSuggestionsFromMessage(message),

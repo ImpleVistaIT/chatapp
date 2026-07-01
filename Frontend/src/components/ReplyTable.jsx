@@ -65,6 +65,17 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
     Menge: "Quantity",
     NetPrice: "Net Price",
     CurKey: "Currency",
+    SuppAcoutNo: "Supplier Account Number",
+    UserCreated: "Created By",
+    CrtDate: "Created Date",
+    ExcngRate: "Exchange Rate",
+    Wemng: "Goods Receipt Quantity",
+    CompanyCode: "Company Code",
+
+
+
+
+
   };
 
   useEffect(() => {

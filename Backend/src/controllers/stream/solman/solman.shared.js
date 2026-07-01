@@ -277,6 +277,13 @@ export function isNextPageQuery(query = "") {
 }
 
 export function inferCreatedByFilterFromQuery(query = "", raw = {}) {
+  const normalizeCreatedByValue = (value = "") =>
+    cleanString(value)
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .replace(/^the\s+/i, "")
+      .replace(/^(?:user(?:name)?|sap\s*user)\s+/i, "")
+      .trim();
+
   const rawCreatedBy = cleanString(
     raw.createdBy ||
       raw.CREATED_BY ||
@@ -288,7 +295,7 @@ export function inferCreatedByFilterFromQuery(query = "", raw = {}) {
   );
 
   if (rawCreatedBy) {
-    const normalized = rawCreatedBy.toLowerCase();
+    const normalized = normalizeCreatedByValue(rawCreatedBy).toLowerCase();
 
     if (["me", "my", "mine", "myself"].includes(normalized)) {
       return {
@@ -298,7 +305,7 @@ export function inferCreatedByFilterFromQuery(query = "", raw = {}) {
     }
 
     return {
-      createdBy: normalizeSapUsername(rawCreatedBy),
+      createdBy: normalizeSapUsername(normalized),
       createdByMode: "explicit",
     };
   }
@@ -328,10 +335,10 @@ export function inferCreatedByFilterFromQuery(query = "", raw = {}) {
     };
   }
 
-  const createdByMatch = q.match(/\bcreated by\s+([a-z0-9._-]+)\b/i);
+  const createdByMatch = q.match(/\bcreated\s+by\s*(?:the\s+)?(?:user(?:name)?|sap\s*user)?\s*[:=]?\s*["'`]?([a-z0-9._-]+)["'`]?/i);
   if (createdByMatch) {
     return {
-      createdBy: normalizeSapUsername(createdByMatch[1]),
+      createdBy: normalizeSapUsername(normalizeCreatedByValue(createdByMatch[1])),
       createdByMode: "explicit",
     };
   }
@@ -695,4 +702,14 @@ export function buildStatusDistributionChart(rows = [], meta = {}) {
       percentage: calculatePercentage(item.count, totalCRs),
     })),
   };
+}
+
+export function getSolmanCrStatusMaxRows(defaultValue = 30) {
+  const configuredValue = Number(process.env.SOLMAN_CR_STATUS_MAX_ROWS || defaultValue);
+
+  if (!Number.isFinite(configuredValue) || configuredValue <= 0) {
+    return defaultValue;
+  }
+
+  return Math.min(Math.floor(configuredValue), 500);
 }

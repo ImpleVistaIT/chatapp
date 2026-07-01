@@ -77,6 +77,38 @@ test("extracts year + created-by username filter", async () => {
   delete process.env.FIXED_TODAY;
 });
 
+test("extracts quoted created-by username with filler words", async () => {
+  const allowedFields = ["CrtDate", "UserCreated", "PoNo", "NetPrice"];
+
+  const extracted = await extractDocQuery({
+    query: 'show po created by the user "ISLM"',
+    allowedFields,
+    fieldLabels: {},
+  });
+
+  const userFilter = (extracted.filters || []).find(
+    (f) => f?.field === "UserCreated" && f?.op === "eq"
+  );
+
+  assert.equal(userFilter?.value, "ISLM");
+});
+
+test("my PO phrasing resolves to self-user creator filter", async () => {
+  const allowedFields = ["CrtDate", "UserCreated", "PoNo", "NetPrice"];
+
+  const extracted = await extractDocQuery({
+    query: "Show my POs",
+    allowedFields,
+    fieldLabels: {},
+  });
+
+  const userFilter = (extracted.filters || []).find(
+    (f) => f?.field === "UserCreated" && f?.op === "eq"
+  );
+
+  assert.equal(userFilter?.value, "ME");
+});
+
 test("extracts explicit ISO date ranges as inclusive PoDocDate filters", async () => {
   const allowedFields = ["PoDocDate", "CrtDate", "UserCreated", "PoNo"];
 

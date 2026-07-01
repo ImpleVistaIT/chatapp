@@ -58,6 +58,17 @@ function buildConversationPrompt(query) {
   return `
 You are a strict conversation-intent classifier for an SAP assistant.
 
+Normalize natural language variations so equivalent user requests produce the same JSON output.
+Do not require exact keywords. Handle grammar mistakes, extra filler words, and quoted/unquoted values consistently.
+
+Return ONLY valid JSON in this exact shape:
+{
+  "intent": "greeting|small_talk|bot_identity|bot_capability|thanks|bye|general_conversation|sap_query|unknown",
+  "confidence": 0.0,
+  "reply": "short direct reply only for non-SAP intents, empty string for sap_query",
+  "reason": "short reason"
+}
+
 Classify the user message into exactly one intent:
 - greeting
 - small_talk
@@ -87,6 +98,19 @@ Rules:
 - bye: Bye, goodbye, see you
 - sap_query: any business request about POs, invoices, vendors, reports, analytics, change requests, approvals, transports, SAP data, or transactions
 - unknown: anything else
+
+Examples:
+- "hey" -> greeting
+- "how r u" -> small_talk
+- "what can you do" -> bot_capability
+- "thank u" -> thanks
+- "show cr 8000003191" -> sap_query
+- "show change request '8000003191' status" -> sap_query
+
+Rules:
+- If the message is business-related, choose sap_query instead of small talk.
+- If the message is not about SAP business data, use the conversational intents above.
+- The same meaning must always map to the same intent.
 
 User message: ${JSON.stringify(cleanString(query))}
 `;
@@ -139,6 +163,19 @@ function buildClassifierFallback(query) {
   return { handled: true, intent: "general_conversation", reply: buildReplyForIntent("general_conversation"), confidence: 0.7 };
 }
 
+function normalizeConversationIntentResponse(data = {}) {
+  const intent = normalizeIntent(
+    data?.intent || data?.routeIntent || data?.classification || data?.label
+  );
+
+  return {
+    intent,
+    confidence: Number(data?.confidence ?? data?.score ?? 0) || 0,
+    reply: cleanString(data?.reply || data?.message || data?.response),
+    reason: cleanString(data?.reason || data?.explanation || data?.message) || "",
+  };
+}
+
 export async function detectConversationIntent({ query }) {
   const userInput = cleanString(query);
   console.log("User Query:", userInput);
@@ -149,9 +186,10 @@ export async function detectConversationIntent({ query }) {
     schemaHint: "conversation-intent",
   });
 
-  const rawIntent = normalizeIntent(llm?.ok ? llm?.data?.intent : null);
-  const confidence = Number(llm?.ok ? llm?.data?.confidence : 0) || 0;
-  const llmReply = cleanString(llm?.ok ? llm?.data?.reply : "");
+  const normalizedLlm = llm?.ok ? normalizeConversationIntentResponse(llm.data) : null;
+  const rawIntent = normalizeIntent(normalizedLlm?.intent || null);
+  const confidence = Number(normalizedLlm?.confidence || 0) || 0;
+  const llmReply = cleanString(normalizedLlm?.reply || "");
   const llmLooksLikeSap = looksLikeSapQuery(userInput);
 
   const fallback = buildClassifierFallback(userInput);
