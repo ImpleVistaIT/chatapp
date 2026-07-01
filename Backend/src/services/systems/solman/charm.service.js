@@ -1,5 +1,7 @@
 import { postToSap } from "../../sap/sapWrite.service.js";
 import { fetchFromSap } from "../../sap.service.js";
+import { SapServiceMap } from "../../../models/SapServiceMap.model.js";
+import { verifyEntitySetInMetadata } from "../../allowlist.service.js";
 
 function cleanString(v) {
   return String(v || "").trim();
@@ -133,6 +135,74 @@ function escapeODataString(value) {
 function normalizeCrDetailsResponse(raw) {
   const results = Array.isArray(raw?.d?.results) ? raw.d.results : [];
   return results;
+}
+
+async function resolveSolmanDataServiceName({ owner, systemId }) {
+  const sid = cleanString(systemId).toUpperCase();
+  const configured = cleanString(process.env.DEFAULT_SOLMAN_CR_SERVICE_NAME || "ZCR_DETAILS_SRV");
+
+  if (configured) {
+    console.log("[SOLMAN] using configured CR service name:", {
+      owner,
+      systemId: sid,
+      serviceName: configured,
+    });
+    return configured;
+  }
+
+  const serviceMaps = await SapServiceMap.find({ owner: { $in: [owner, "local"] }, systemId: sid })
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  const fallbackCandidate =
+    serviceMaps.find((service) => /zcr|charm|cr/i.test(cleanString(service?.serviceName))) || serviceMaps[0] || null;
+
+  const mappedServiceName = cleanString(fallbackCandidate?.serviceName);
+  if (mappedServiceName) {
+    console.log("[SOLMAN] using catalog fallback service name:", {
+      owner,
+      systemId: sid,
+      serviceName: mappedServiceName,
+      entitySet: cleanString(fallbackCandidate?.entitySet),
+      entityTypeName: cleanString(fallbackCandidate?.entityTypeName),
+    });
+    return mappedServiceName;
+  }
+
+  console.log("[SOLMAN] using legacy fallback service name:", { owner, systemId: sid, serviceName: "ZCR_DETAILS_SRV" });
+  return "ZCR_DETAILS_SRV";
+}
+
+function resolveSolmanCrEntitySet() {
+  return String(process.env.DEFAULT_SOLMAN_CR_ENTITYSET || "ZEX_OutputSet").trim() || "ZEX_OutputSet";
+}
+
+async function preflightSolmanCrMetadata({ system, sapAuth, owner, serviceName, entitySetName }) {
+  try {
+    await verifyEntitySetInMetadata({
+      system,
+      service: { serviceName },
+      entitySetName,
+      authOverride: { username: sapAuth?.username || sapAuth?.sapUser || sapAuth?.user, password: sapAuth?.password },
+      allowEnvFallback: false,
+    });
+    console.log("[SOLMAN] metadata preflight ok:", {
+      owner,
+      systemId: system?.systemId || null,
+      serviceName,
+      entitySetName,
+    });
+  } catch (err) {
+    console.log("[SOLMAN] metadata preflight failed:", {
+      owner,
+      systemId: system?.systemId || null,
+      serviceName,
+      entitySetName,
+      error: err?.message || String(err),
+      code: err?.code || null,
+    });
+    throw err;
+  }
 }
 
 function pad2(n) {
@@ -588,7 +658,7 @@ function buildCrListRelativePath({
   }
 
   return {
-    relativePath: `ZEX_OutputSet?${params.join("&")}`,
+    relativePath: `${resolveSolmanCrEntitySet()}?${params.join("&")}`,
     resolvedRange: resolved || null,
     top: finalTop,
     skip: finalSkip,
@@ -639,12 +709,21 @@ export async function getSolmanChangeRequestDetailsById({
     cleanObjectId
   )}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`;
 
-  const relativePath = `ZEX_OutputSet?${filter}`;
+  const relativePath = `${resolveSolmanCrEntitySet()}?${filter}`;
+  const serviceName = await resolveSolmanDataServiceName({ owner: sapAuth?.owner || "local", systemId: system?.systemId });
+
+  await preflightSolmanCrMetadata({
+    system,
+    sapAuth,
+    owner: sapAuth?.owner || "local",
+    serviceName,
+    entitySetName: resolveSolmanCrEntitySet(),
+  });
 
   const raw = await fetchFromSap(
     {
       system,
-      service: { serviceName: "ZCR_DETAILS_SRV" },
+      service: { serviceName },
       relativePath,
     },
     sapAuth
@@ -711,10 +790,20 @@ export async function listSolmanChangeRequestsByDateRange({
     orderBy,
   });
 
+  const serviceName = await resolveSolmanDataServiceName({ owner: sapAuth?.owner || "local", systemId: system?.systemId });
+
+  await preflightSolmanCrMetadata({
+    system,
+    sapAuth,
+    owner: sapAuth?.owner || "local",
+    serviceName,
+    entitySetName: resolveSolmanCrEntitySet(),
+  });
+
   const raw = await fetchFromSap(
     {
       system,
-      service: { serviceName: "ZCR_DETAILS_SRV" },
+      service: { serviceName },
       relativePath: built.relativePath,
     },
     sapAuth

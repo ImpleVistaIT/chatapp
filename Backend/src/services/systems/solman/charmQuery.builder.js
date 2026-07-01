@@ -1,5 +1,9 @@
 import { buildCrDetailsFilter } from "./crFilter.builder.js";
 
+function resolveCrEntitySet() {
+  return String(process.env.DEFAULT_SOLMAN_CR_ENTITYSET || "ZEX_OutputSet").trim() || "ZEX_OutputSet";
+}
+
 export function buildCrListRelativePath({ status, userText, processType = "YMHF" }) {
   const { filter, top } = buildCrDetailsFilter({
     processType,
@@ -14,5 +18,5 @@ export function buildCrListRelativePath({ status, userText, processType = "YMHF"
     params.push(`$top=${top}`);
   }
 
-  return `ZEX_OutputSet?${params.join("&")}`;
+  return `${resolveCrEntitySet()}?${params.join("&")}`;
 }

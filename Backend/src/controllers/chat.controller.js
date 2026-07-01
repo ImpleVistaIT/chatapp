@@ -413,7 +413,7 @@ export async function handleDocChat({ req, res, defaultDocType, docTypeFast }) {
     }
 
     const serviceIntent = await resolveServiceIntent({
-      owner: "local",
+      owner,
       query,
       systemIds: sid ? [sid] : [],
       limitServices: 12,

@@ -263,6 +263,18 @@ function parseFieldsAndLabelsFromEntityXml(entityXml) {
   };
 }
 
+function hasEntitySetInMetadataXml(xml, entitySetName) {
+  const target = String(entitySetName || "").trim();
+  if (!target) return false;
+
+  const pattern = new RegExp(
+    `<(?:\\w+:)?EntitySet\\s+[^>]*Name="${escapeRegExp(target)}"[^>]*>`,
+    "i"
+  );
+
+  return pattern.test(String(xml || ""));
+}
+
 async function refreshCache({ system, service, entityTypeName, authOverride = null, allowEnvFallback = false }) {
   const xml = await fetchMetadataXml({ system, service, authOverride, opts: { allowEnvFallback } });
   const entityXml = parseEntityTypeBlock(xml, entityTypeName);
@@ -339,6 +351,35 @@ export async function getAllowedFieldsWithLabels({
 
     throw err;
   }
+}
+
+export async function verifyEntitySetInMetadata({
+  system,
+  service,
+  entitySetName,
+  authOverride = null,
+  allowEnvFallback = false,
+} = {}) {
+  if (!system) throw new Error("system is required");
+  if (!service) throw new Error("service is required");
+  if (!entitySetName) throw new Error("entitySetName is required");
+
+  const xml = await fetchMetadataXml({ system, service, authOverride, opts: { allowEnvFallback } });
+  if (!hasEntitySetInMetadataXml(xml, entitySetName)) {
+    const err = new Error(
+      `EntitySet "${entitySetName}" was not found in the service metadata for ${service?.serviceName || "unknown service"}.`
+    );
+    err.status = 404;
+    err.code = "ENTITYSET_NOT_FOUND";
+    err.details = {
+      serviceName: service?.serviceName || null,
+      entitySetName,
+      systemId: system?.systemId || null,
+    };
+    throw err;
+  }
+
+  return true;
 }
 
 export async function getAllowedFields(args = {}) {

@@ -40,6 +40,18 @@ function isPurchaseOrderQuery(query) {
   return hasPoKeyword && !hasSolmanCrKeyword;
 }
 
+function isSolmanRelatedQuery(query, classified = null) {
+  const q = cleanString(query).toLowerCase();
+  const system = cleanString(classified?.system || classified?.routing?.system).toLowerCase();
+  const intent = cleanString(classified?.intent || classified?.routing?.intent).toLowerCase();
+
+  if (system === "solman" || intent.includes("change_request") || intent.includes("transport")) {
+    return true;
+  }
+
+  return /\b(change request|change requests|cr\b|charm|transport|solman)\b/i.test(q);
+}
+
 const ROUTING_KEYWORD_REGEX =
   /\b(po|purchase\s*order|purchase\s*orders|invoice|vendor|supplier|material|delivery|sales\s*order|change\s*request|change\s*requests|cr|charm|transport|solman|s4|s4hana|created|date|month|year|count|top|skip|offset|order\s*by|latest|recent|newest|status)\b/i;
 
@@ -460,6 +472,13 @@ export async function handleChatStream(req, res) {
 
     const rawQuery = cleanString(query);
     const queryLooksLikePo = isPurchaseOrderQuery(rawQuery);
+    const preclassifiedRouting = {
+      po: queryLooksLikePo,
+      solman: false,
+      fallback: false,
+      systemId: null,
+      reason: "",
+    };
     const sessionPendingAction =
       pendingAction ||
       (sessionId
@@ -714,32 +733,76 @@ export async function handleChatStream(req, res) {
 
     const queryLooksLikePoContinuation =
       queryIsNextPage && /\bpo\b|purchase\s+orders?/i.test(effectiveQuery);
+    const queryLooksLikeSolman = isSolmanRelatedQuery(effectiveQuery, classified);
 
-    const forcedSolman =
-      !queryLooksLikePoContinuation &&
-      !queryLooksLikePo &&
-      (isSolmanCrQuery(effectiveQuery) ||
-        cleanString(classified?.system).toLowerCase() === "solman");
+    const routingMode = queryLooksLikePo
+      ? "po"
+      : queryLooksLikeSolman || queryLooksLikePoContinuation
+        ? "solman"
+        : "fallback";
 
-    if (forcedSolman) {
-      console.log("[SSE] forcing SolMan routing based on CR query pattern");
+    if (queryLooksLikePo) {
+      preclassifiedRouting.solman = false;
+      preclassifiedRouting.fallback = false;
+      preclassifiedRouting.systemId = normalizeSystemId(systemId) || null;
+      preclassifiedRouting.reason = "purchase_order_query";
+    } else if (queryLooksLikeSolman || queryLooksLikePoContinuation) {
+      preclassifiedRouting.solman = true;
+      preclassifiedRouting.systemId = normalizeSystemId(systemId) || null;
+      preclassifiedRouting.reason = queryLooksLikePoContinuation
+        ? "po_continuation_kept_out_of_solman"
+        : "solman_related_query";
+    } else {
+      preclassifiedRouting.fallback = true;
+      preclassifiedRouting.reason = "fallback_system_resolution";
     }
 
-    const systemResolution = await step("resolveTargetSystem", () =>
+    let systemResolution = null;
+    let useSolman = false;
+    let resolvedSystemId = normalizeSystemId(systemId || "");
+    let resolvedSapUser = cleanString(sapUser);
+
+    const routingRequestSystemId = routingMode === "fallback" ? systemId : "";
+
+    systemResolution = await step("resolveTargetSystem", () =>
       resolveTargetSystem({
         query: effectiveQuery,
-        classified,
-        requestedSystemId: systemId,
+        classified:
+          routingMode === "solman"
+            ? { ...classified, system: "solman", module: "charm", intent: classified?.intent || "list_change_requests" }
+            : routingMode === "po"
+              ? { ...classified, system: "s4hana", module: "mm", intent: classified?.intent || "list_purchase_orders" }
+              : classified,
+        requestedSystemId: routingRequestSystemId,
         availableSystems: effectiveAvailableSystems,
       })
     );
 
-    const useSolman =
-      !queryLooksLikePoContinuation &&
-      !queryLooksLikePo &&
-      (forcedSolman || classified?.system === "solman");
+    if (routingMode === "po") {
+      useSolman = false;
+      resolvedSystemId = normalizeSystemId(systemResolution.targetSystemId || systemId || "");
+    } else if (routingMode === "solman") {
+      useSolman = true;
+      resolvedSystemId = normalizeSystemId(systemResolution.targetSystemId || systemId || "");
+    } else {
+      resolvedSystemId = normalizeSystemId(systemResolution.targetSystemId || systemId || "");
+      useSolman = cleanString(systemResolution?.targetSystemId || "") !== "" && cleanString(classified?.system).toLowerCase() === "solman";
+    }
 
-    if (systemResolution.status === "disconnected") {
+    const finalDecision = {
+      query: rawQuery,
+      detectedIntent: cleanString(conversationIntent?.intent || classified?.intent || ""),
+      selectedSystemId: resolvedSystemId || null,
+      reason: routingMode === "po"
+        ? "purchase_order_query"
+        : routingMode === "solman"
+          ? "solman_related_query"
+          : "fallback_system_resolution",
+    };
+
+    console.log("[SSE] FINAL_DECISION:", finalDecision);
+
+    if (systemResolution?.status === "disconnected") {
       sse.send("error", {
         message: `The system ${
           systemResolution.targetSystemId || "target"
@@ -757,7 +820,7 @@ export async function handleChatStream(req, res) {
       return sse.end();
     }
 
-    if (systemResolution.status === "ambiguous" && !useSolman) {
+    if (systemResolution?.status === "ambiguous" && !useSolman) {
       sse.send("error", {
         message:
           systemResolution.candidates.length > 0
@@ -772,25 +835,9 @@ export async function handleChatStream(req, res) {
       return sse.end();
     }
 
-    let resolvedSystemId = normalizeSystemId(
-      systemResolution.targetSystemId || systemId
-    );
-
-    let resolvedSapUser = cleanString(sapUser);
-
     if (useSolman) {
-      resolvedSystemId = resolveSolmanSystemId({
-        systemResolution,
-        systemId,
-      });
-
       console.log("[SSE] resolved system for SolMan:", resolvedSystemId || "(none)");
       console.log("[SSE] SolMan system resolution detail:", systemResolution);
-
-      if (!resolvedSystemId) {
-        sse.send("error", buildSolmanSystemError(systemResolution));
-        return sse.end();
-      }
 
       resolvedSapUser = await step("resolveSolmanSapUser", () =>
         resolveSolmanSapUser({
@@ -823,7 +870,7 @@ export async function handleChatStream(req, res) {
       classified: useSolman
         ? { ...classified, system: "solman" }
         : classified,
-      systemResolution,
+      systemResolution: systemResolution || { status: "resolved", targetSystemId: resolvedSystemId },
     };
 
     if (useSolman) {

@@ -531,7 +531,7 @@ export async function handleS4poChatStream({
 
   const serviceIntent = await step("resolveServiceIntent", () =>
     resolveServiceIntent({
-      owner: "local",
+      owner,
       query,
       systemIds: requestedSystemId ? [requestedSystemId] : [],
       limitServices: 12,

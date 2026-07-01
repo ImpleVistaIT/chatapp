@@ -22,6 +22,50 @@ function compactService(service) {
   };
 }
 
+function logCatalogSnapshot({ owner, systemIds, catalog }) {
+  console.log(
+    "[SERVICE_INTENT] catalog snapshot:",
+    JSON.stringify(
+      {
+        owner,
+        systemIds,
+        count: Array.isArray(catalog) ? catalog.length : 0,
+        services: (Array.isArray(catalog) ? catalog : []).map((service) => ({
+          owner: String(service?.owner || "").trim(),
+          systemId: String(service?.systemId || "").trim().toUpperCase(),
+          serviceName: String(service?.serviceName || "").trim(),
+          entitySet: String(service?.entitySet || "").trim(),
+          entityTypeName: String(service?.entityTypeName || "").trim(),
+          isActive: Boolean(service?.isActive),
+          fieldNames: Array.isArray(service?.fields)
+            ? service.fields.map((field) => String(field?.name || "").trim()).filter(Boolean)
+            : [],
+        })),
+      },
+      null,
+      2
+    )
+  );
+}
+
+function explainCandidate(service, query) {
+  const q = String(query || "").toLowerCase();
+  const text = getServiceSearchText(service);
+  const reasons = [];
+
+  if (/\b(po|purchase\s*order|purchase\s*orders)\b/i.test(q)) reasons.push("query_mentions_po");
+  if (/\b(detail|details|specific|single)\b/i.test(q)) reasons.push("query_mentions_detail");
+  if (/\b(show|get|view|display|fetch|open)\b/i.test(q)) reasons.push("query_mentions_retrieval_verb");
+  if (quickExtractDocNumber(q)) reasons.push("query_has_document_number");
+  if (text.includes("purchase order")) reasons.push("service_text_mentions_purchase_order");
+  if (text.includes("detail")) reasons.push("service_text_mentions_detail");
+  if (/\bpo\b/i.test(text)) reasons.push("service_text_mentions_po");
+  if (Array.isArray(service?.keys) && service.keys.some((key) => /po|purchase/i.test(String(key || "")))) reasons.push("service_key_mentions_po");
+  if (Array.isArray(service?.fields) && service.fields.some((field) => /po|purchase/i.test(String(field?.name || field?.label || "")))) reasons.push("service_field_mentions_po");
+
+  return reasons;
+}
+
 function getServiceSearchText(service) {
   const fieldText = Array.isArray(service?.fields)
     ? service.fields
@@ -322,7 +366,7 @@ export async function resolveServiceIntent({
   const cappedLimit = Math.max(1, Math.min(Number(limitServices) || 12, 50));
 
   const baseQuery = {
-    owner,
+    owner: { $in: [owner, "local"] },
     isActive: true,
   };
 
@@ -332,6 +376,7 @@ export async function resolveServiceIntent({
       : baseQuery;
 
   console.log("[SERVICE_INTENT] owner:", owner);
+  console.log("[SERVICE_INTENT] catalog owners searched:", [owner, "local"]);
   console.log("[SERVICE_INTENT] systemIds:", systemIds);
   console.log("[SERVICE_INTENT] normalizedSystemIds:", normalizedSystemIds);
   console.log("[SERVICE_INTENT] scopedQuery:", JSON.stringify(scopedQuery));
@@ -341,12 +386,16 @@ export async function resolveServiceIntent({
     .limit(cappedLimit)
     .lean();
 
+  logCatalogSnapshot({ owner, systemIds: normalizedSystemIds, catalog });
+
   if (!catalog.length && normalizedSystemIds.length > 0) {
     console.log("[SERVICE_INTENT] scoped query returned 0; falling back to all active catalogs for owner");
     catalog = await SapServiceCatalog.find(baseQuery)
       .sort({ updatedAt: -1 })
       .limit(cappedLimit)
       .lean();
+
+    logCatalogSnapshot({ owner, systemIds: [], catalog });
   }
 
   console.log("[SERVICE_INTENT] catalogCount:", catalog.length);
@@ -377,6 +426,17 @@ export async function resolveServiceIntent({
   }
 
   const services = catalog.map(compactService);
+  const candidateDiagnostics = catalog.map((service) => ({
+    owner: String(service?.owner || "").trim(),
+    systemId: String(service?.systemId || "").trim().toUpperCase(),
+    serviceName: String(service?.serviceName || "").trim(),
+    entitySet: String(service?.entitySet || "").trim(),
+    entityTypeName: String(service?.entityTypeName || "").trim(),
+    score: scoreCatalogService(service, query),
+    accepted: false,
+    reasons: explainCandidate(service, query),
+  }));
+
   const prompt = buildRoutingPrompt({ query, services });
   const llm = await generateJson({
     prompt,
@@ -386,6 +446,21 @@ export async function resolveServiceIntent({
 
   const data = llm?.ok ? llm.data : null;
   const heuristicFallback = buildHeuristicFallback(catalog, query);
+
+  if (Array.isArray(candidateDiagnostics) && candidateDiagnostics.length > 0) {
+    const selectedName = String(data?.serviceName || "").trim();
+    const selectedSet = String(data?.entitySet || "").trim();
+    const selectedType = String(data?.entityTypeName || "").trim();
+
+    for (const candidate of candidateDiagnostics) {
+      candidate.accepted = Boolean(
+        selectedName &&
+          (candidate.serviceName === selectedName || candidate.entitySet === selectedSet || candidate.entityTypeName === selectedType)
+      );
+    }
+
+    console.log("[SERVICE_INTENT] candidate evaluation:", JSON.stringify(candidateDiagnostics, null, 2));
+  }
 
   if (!data?.matchFound || !data?.serviceName || !data?.entitySet) {
     if (heuristicFallback) {
