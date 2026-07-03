@@ -25,6 +25,9 @@ import { handleTransportList } from "./solman.transport-list.handler.js";
 function normalizeIntentQuery(query = "") {
   return cleanString(query)
     .toLowerCase()
+    .replace(/\bc\.?r\.?['’]?s?\b/g, "cr")
+    .replace(/\bchange requests?\b/g, "cr")
+    .replace(/\brejected\b/g, "withdrawn")
     .replace(/\btr['’]s\b/g, "tr")
     .replace(/\btrs\b/g, "tr")
     .replace(/\btransport requests\b/g, "transport")

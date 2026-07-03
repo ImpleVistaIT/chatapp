@@ -414,6 +414,16 @@ function buildSolmanStatusTableRows(rows = []) {
   ]);
 }
 
+function buildSolmanListTableRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).map((row, index) => [
+    String(index + 1),
+    getSolmanCrNumber(row),
+    getSolmanStatusLabel(row),
+    formatSolmanDate(row?.CREATED_ON || row?.CREATEDON || row?.CREATED_AT || row?.CreatedOn || ""),
+    String(row?.SHORT_DESC || row?.SHORT_DESCRIPTION || row?.DESCRIPTION || "-").trim() || "-",
+  ]);
+}
+
 const INITIAL_CR_BATCH_SIZE = 30;
 const LOAD_MORE_CR_BATCH_SIZE = 20;
 
@@ -437,6 +447,13 @@ export default function MessageBubble({
     data?.viewType === "solman_cr_status" ||
       Array.isArray(data?.allCRRecords)
   );
+  const isSolmanListResponse = Boolean(
+    data?.viewType !== "transport_list_table" &&
+      data?.viewType !== "transport_dependency_table" &&
+      (data?.viewType === "solman_cr_list" || Array.isArray(data?.rows)) &&
+      Array.isArray(data?.rows)
+  );
+  const isSolmanCollectionResponse = isSolmanStatusResponse || isSolmanListResponse;
   const safeSummary = String(summary || "").trim();
   const safeSuggestions = Array.isArray(suggestions) ? suggestions : [];
   const [isSmallScreen, setIsSmallScreen] = useState(false);
@@ -487,7 +504,7 @@ export default function MessageBubble({
   const [visibleRecordCount, setVisibleRecordCount] = useState(INITIAL_CR_BATCH_SIZE);
 
   useEffect(() => {
-    if (!isSolmanStatusResponse) {
+    if (!isSolmanCollectionResponse) {
       setAllCRRecords([]);
       setSelectedStatus("");
       setStatusDistribution(null);
@@ -507,9 +524,9 @@ export default function MessageBubble({
 
     setAllCRRecords(sourceRows);
     setSelectedStatus("");
-    setStatusDistribution(buildSolmanStatusDistribution(sourceRows));
+    setStatusDistribution(isSolmanStatusResponse ? buildSolmanStatusDistribution(sourceRows) : null);
     setVisibleRecordCount(INITIAL_CR_BATCH_SIZE);
-  }, [data, isSolmanStatusResponse]);
+  }, [data, isSolmanCollectionResponse, isSolmanStatusResponse]);
 
   const statusFilteredRecords = useMemo(() => {
     if (!selectedStatus) return allCRRecords;
@@ -564,9 +581,9 @@ export default function MessageBubble({
   );
   const hasMoreRecords = searchFilteredRecords.length > visibleRows.length;
   const visibleCRRecords = useMemo(() => {
-    if (!isSolmanStatusResponse) return [];
+    if (!isSolmanCollectionResponse) return [];
     return visibleRows;
-  }, [isSolmanStatusResponse, visibleRows]);
+  }, [isSolmanCollectionResponse, visibleRows]);
 
   const selectedRecordCount = visibleCRRecords.length;
   const emptyTableMessage = !allCRRecords.length
@@ -919,6 +936,151 @@ export default function MessageBubble({
               })}
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (isSolmanListResponse) {
+    const tableColumns = ["Serial No", "CR Number", "Status", "Created On", "Short Description"];
+    const tableRows = buildSolmanListTableRows(data.rows);
+
+    return (
+      <div className="flex items-start justify-start gap-3 w-full">
+        <Avatar role={role} showAvatar={showAvatar} />
+
+        <div className="max-w-[95%] sm:max-w-full min-w-0 overflow-hidden space-y-2">
+          {safeSummary && (
+            <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-900">
+              {summaryText}
+            </div>
+          )}
+
+          <div className="overflow-hidden rounded-2xl rounded-tl-sm border border-green-200 bg-white shadow-sm">
+            <div className="border-b border-green-100 bg-gradient-to-r from-green-50 to-white px-4 py-3">
+              <div className="text-sm font-semibold text-slate-900">
+                Change Requests
+              </div>
+              <div className="mt-1 text-xs text-slate-600">
+                {allCRRecords.length ? `${visibleCRRecords.length} of ${searchFilteredRecords.length} loaded` : "No Data Available"}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-green-100 px-4 py-3">
+              <button
+                type="button"
+                onClick={handleToggleSearchPanel}
+                className="inline-flex items-center justify-center rounded-xl border border-green-300 bg-white p-2 text-green-800 transition hover:bg-green-50"
+                title={isSearchOpen ? "Hide search" : "Show search"}
+                aria-label={isSearchOpen ? "Hide search" : "Show search"}
+              >
+                <FiSearch className="text-sm" />
+              </button>
+
+              {hasAppliedSearch ? (
+                <button
+                  type="button"
+                  onClick={handleClearSearch}
+                  className="inline-flex items-center justify-center rounded-xl border border-green-300 bg-white px-3 py-2 text-xs font-semibold text-green-800 transition hover:bg-green-50"
+                >
+                  Clear Search
+                </button>
+              ) : null}
+            </div>
+
+            {isSearchOpen ? (
+              <div className="border-b border-green-100 bg-white px-4 py-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">
+                    CR Number
+                    <input
+                      type="text"
+                      value={searchDraft.crNumber || searchDraft.poNumber || ""}
+                      onChange={(e) =>
+                        setSearchDraft((current) => ({
+                          ...current,
+                          crNumber: e.target.value,
+                          poNumber: e.target.value,
+                        }))
+                      }
+                      placeholder="Enter CR number"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-green-400 focus:bg-white focus:ring-2 focus:ring-green-400/20"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">
+                    Short Description
+                    <input
+                      type="text"
+                      value={searchDraft.shortDescription}
+                      onChange={(e) =>
+                        setSearchDraft((current) => ({ ...current, shortDescription: e.target.value }))
+                      }
+                      placeholder="Enter description"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-green-400 focus:bg-white focus:ring-2 focus:ring-green-400/20"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">
+                    Created On
+                    <input
+                      type="date"
+                      value={searchDraft.createdOn}
+                      onChange={(e) =>
+                        setSearchDraft((current) => ({ ...current, createdOn: e.target.value }))
+                      }
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-green-400 focus:bg-white focus:ring-2 focus:ring-green-400/20"
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleApplySearch}
+                    className="inline-flex items-center justify-center rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-800"
+                  >
+                    Search
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleClearSearch}
+                    className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {visibleCRRecords.length > 0 ? (
+              <>
+                <ReplyTable columns={tableColumns} rows={buildSolmanListTableRows(visibleCRRecords)} forceGrid={true} />
+
+                <div className="flex flex-col gap-2 border-t border-green-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-xs text-slate-600">
+                    {hasMoreRecords
+                      ? `${visibleCRRecords.length} of ${searchFilteredRecords.length} loaded`
+                      : "No more records found."}
+                  </div>
+
+                  {hasMoreRecords ? (
+                    <button
+                      type="button"
+                      onClick={handleLoadMoreRecords}
+                      className="inline-flex items-center justify-center rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={!hasMoreRecords}
+                    >
+                      Show More
+                    </button>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <div className="px-4 py-6 text-sm text-slate-700">No records found for the given criteria.</div>
+            )}
+          </div>
         </div>
       </div>
     );

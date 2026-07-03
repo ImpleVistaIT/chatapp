@@ -21,6 +21,16 @@ function cleanString(v) {
   return String(v || "").trim();
 }
 
+function normalizeSolmanQueryText(query = "") {
+  return cleanString(query)
+    .toLowerCase()
+    .replace(/\bc\.?r\.?['’]?s?\b/g, "cr")
+    .replace(/\bchange requests?\b/g, "cr")
+    .replace(/\brejected\b/g, "withdrawn")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function isNextPageQuery(query) {
   return /\b(?:show\s+)?next\s+\d+\b/.test(cleanString(query).toLowerCase());
 }
@@ -49,7 +59,7 @@ function isSolmanRelatedQuery(query, classified = null) {
     return true;
   }
 
-  return /\b(change request|change requests|cr\b|charm|transport|solman)\b/i.test(q);
+  return /\b(change request|change requests|crs?|charm|transport|solman|latest\s+\d+\s+crs?|last\s+\d+\s+crs?|most\s+recent\s+\d+\s+crs?|top\s+\d+\s+crs?)\b/i.test(q);
 }
 
 const ROUTING_KEYWORD_REGEX =
@@ -172,8 +182,24 @@ function scopeToProcessType(scope) {
   return "";
 }
 
+export function resolveRestoredSolmanQuery({
+  queryIsNextPage,
+  queryIsLandscapeOnly,
+  effectivePendingActionQuery,
+  rawQuery,
+  effectiveQuery,
+}) {
+  return cleanString(
+    queryIsNextPage
+      ? effectivePendingActionQuery || "show cr list"
+      : queryIsLandscapeOnly
+        ? effectivePendingActionQuery || rawQuery || "show cr list"
+        : effectiveQuery || effectivePendingActionQuery
+  );
+}
+
 export function isSolmanCrQuery(query) {
-  const q = cleanString(query).toLowerCase();
+  const q = normalizeSolmanQueryText(query);
 
   if (!q) return false;
 
@@ -657,13 +683,13 @@ export async function handleChatStream(req, res) {
         return sse.end();
       }
 
-      const restoredQuery = cleanString(
-        queryIsNextPage
-          ? effectivePendingAction?.query || "show cr list"
-          : queryIsLandscapeOnly
-            ? rawQuery || effectivePendingAction?.query || "show cr list"
-            : effectiveQuery || effectivePendingAction?.query
-      );
+      const restoredQuery = resolveRestoredSolmanQuery({
+        queryIsNextPage,
+        queryIsLandscapeOnly,
+        effectivePendingActionQuery: effectivePendingAction?.query,
+        rawQuery,
+        effectiveQuery,
+      });
 
       const restoredClassified = {
         intent: pendingIntent,
@@ -676,11 +702,11 @@ export async function handleChatStream(req, res) {
             restoredProcessType ||
             cleanString(pendingFilters.processType),
           status: cleanString(pendingFilters.status),
-          dateText: cleanString(pendingFilters.dateText || effectivePendingAction?.query),
+          dateText: cleanString(restoredQuery),
           triggerAll: cleanString(pendingFilters.triggerAll || "X") || "X",
           createdBy: cleanString(pendingFilters.createdBy),
           createdByMode: cleanString(pendingFilters.createdByMode),
-          top: queryIsNextPage ? null : pendingFilters.top ?? null,
+          top: queryIsNextPage ? null : null,
           skip: queryIsNextPage
             ? pendingFilters.nextSkip ?? pendingFilters.skip ?? 0
             : pendingFilters.skip ?? 0,
@@ -692,8 +718,8 @@ export async function handleChatStream(req, res) {
           orderBy:
             cleanString(pendingFilters.orderBy || "CREATED_ON desc") ||
             "CREATED_ON desc",
-          fromDate: cleanString(pendingFilters.fromDate),
-          toDate: cleanString(pendingFilters.toDate),
+          fromDate: "",
+          toDate: "",
           statusMode: cleanString(pendingFilters.statusMode),
           excludeStatuses: Array.isArray(pendingFilters.excludeStatuses)
             ? pendingFilters.excludeStatuses

@@ -2,6 +2,7 @@ import { listSolmanChangeRequestsByDateRange } from "../../../services/systems/s
 import {
   buildCrSuggestions,
   buildStatusDistributionChart,
+  buildSolmanAppliedFiltersSummary,
   cleanString,
   getSolmanCrStatusMaxRows,
   inferCreatedByFilterFromQuery,
@@ -44,19 +45,6 @@ function pad2(value) {
 
 function formatYmd(date) {
   return `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}`;
-}
-
-function buildStatusDistributionSummary(chart) {
-  if (!chart || !Array.isArray(chart.data) || chart.data.length === 0) {
-    return "No change requests found for the selected filters.";
-  }
-
-  const parts = chart.data.map((item) => {
-    const status = item.status || "unknown";
-    return `${item.percentage}% are ${status}`;
-  });
-
-  return `Out of ${chart.totalCRs} Change Requests, ${parts.join(", ")}.`;
 }
 
 function toSapPageCount(result) {
@@ -302,6 +290,16 @@ export async function handleCrStatusDistribution(context) {
   const requestFromDate = listInput.fromDate || inferredDateRange.fromDate || "";
   const requestToDate = listInput.toDate || inferredDateRange.toDate || "";
 
+  console.log("[SOLMAN] status date filters:", {
+    query,
+    fromDate: cleanString(requestFromDate),
+    toDate: cleanString(requestToDate),
+    status: cleanString(listInput.status || ""),
+    statusMode: cleanString(listInput.statusMode || ""),
+    createdBy: cleanString(resolvedCreatedBy || ""),
+    businessScope: cleanString(listInput.businessScope || ""),
+  });
+
   const fullFetch = await step("fetchAllMatchingCrRows", () =>
     fetchAllMatchingCrRows({
       system,
@@ -447,7 +445,16 @@ export async function handleCrStatusDistribution(context) {
     limit: CR_STATUS_MAX_ROWS,
   };
 
-  const summary = buildStatusDistributionSummary(chart);
+  const summary =
+    buildSolmanAppliedFiltersSummary({
+      status: result?.result?.status || listInput.status,
+      statusMode: result?.result?.statusMode || listInput.statusMode,
+      excludeStatuses: result?.result?.excludeStatuses || listInput.excludeStatuses || [],
+      fromDate: effectiveFromDate,
+      toDate: effectiveToDate,
+      createdBy: resolvedCreatedBy || "",
+      businessScope: listInput.businessScope,
+    }) || "No records found for the given criteria.";
 
   await persistAssistantAndTouchSession({
     owner,

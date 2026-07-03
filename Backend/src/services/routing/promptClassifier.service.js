@@ -80,6 +80,42 @@ function extractCrNumber(query) {
   return fallback ? fallback[1] : null;
 }
 
+function normalizeCreateCrText(query = "") {
+  return String(query || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\b(?:i\s+want\s+to|i\s+need\s+to|please|can\s+you|could\s+you|help\s+me|help\s+me\s+to|kindly)\b/g, " ")
+    .replace(/\b(?:a|an|the|one|new|newly)\b/g, " ")
+      .replace(/\b(?:transport\s+change\s+request|transport\s+change|transport\s+request|change\s+request|change\s+requests?|crs?|cr's)\b/g, " CR_ENTITY ")
+    .replace(/\b(?:create|raise|submit|open|initiate|start|generate|make|add|request|need|want)\b/g, " ACTION ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasCreateAction(query = "") {
+  return /\b(create|raise|submit|open|initiate|start|generate|make|add|request|need|want)\b/i.test(query);
+}
+
+function hasCrEntity(query = "") {
+  return /\b(change request|change requests?|transport change request|transport change|transport request|crs?|cr's)\b/i.test(query);
+}
+
+function detectCreateChangeRequestIntent(query = "") {
+  const q = String(query || "");
+  if (!q.trim()) return false;
+
+  if (!hasCreateAction(q) || !hasCrEntity(q)) {
+    return false;
+  }
+
+  const normalized = normalizeCreateCrText(q);
+  return Boolean(normalized.includes("ACTION") && normalized.includes("CR_ENTITY"));
+}
+
+export function isCreateChangeRequestQuery(query = "") {
+  return detectCreateChangeRequestIntent(query);
+}
+
 function extractDateRange(query) {
   const q = String(query || "");
 
@@ -127,7 +163,40 @@ function normalizeCreateChangeRequestEntities(raw = {}) {
       raw.WorkItemReference || raw.workItemReference || raw.work_item_reference || raw.ticket || raw.incident
     ),
     Landscape: cleanString(raw.Landscape || raw.landscape),
+    ChangeType: cleanString(raw.ChangeType || raw.changeType || raw.change_type),
+    Category: cleanString(raw.Category || raw.category),
+    Purpose: cleanString(raw.Purpose || raw.purpose),
+    Workflow: cleanString(raw.Workflow || raw.workflow),
   };
+}
+
+function extractCreateChangeRequestQualifiersFromText(query = "") {
+  const q = String(query || "").toLowerCase();
+
+  const changeType = /\bemergency\b/.test(q)
+    ? "Emergency"
+    : /\bnormal\b/.test(q)
+      ? "Normal"
+      : null;
+
+  const category = /\btransport\b/.test(q) ? "Transport" : null;
+
+  const purpose = /\bsystem deployment\b|\bdeploy(?:ment)?\b|\bproduction transport\b/.test(q)
+    ? "System Deployment"
+    : null;
+
+  const workflow = /\bapproval\b/.test(q) ? "Approval" : null;
+
+  return {
+    ChangeType: changeType,
+    Category: category,
+    Purpose: purpose,
+    Workflow: workflow,
+  };
+}
+
+export function getCreateChangeRequestQualifiers(query = "") {
+  return extractCreateChangeRequestQualifiersFromText(query);
 }
 function normalizeTransportListEntities(raw = {}) {
   const objectId = cleanString(
@@ -529,6 +598,25 @@ export async function classifyPrompt({ query, sessionContext = null }) {
     });
   }
 
+  if (detectCreateChangeRequestIntent(query)) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "create_change_request",
+      confidence: 0.96,
+      reason: "Matched create change request intent from natural language",
+      source: "rule",
+      entities: normalizeEntitiesByIntent(
+        "create_change_request",
+        {
+          ...extractCreateChangeRequestEntitiesFromText(query),
+          ...extractCreateChangeRequestQualifiersFromText(query),
+        },
+        query
+      ),
+    });
+  }
+
   const prompt = buildClassifierPrompt({ query, sessionContext });
 
   const llm = await generateJson({
@@ -548,6 +636,27 @@ export async function classifyPrompt({ query, sessionContext = null }) {
       source: "llm",
       entities: normalizeEntitiesByIntent(normalizedIntent, llm.data.entities, query),
     });
+
+    if (normalizedIntent === "create_change_request" && detectCreateChangeRequestIntent(query)) {
+      return normalizeRoutingResult({
+        ...candidate,
+        system: "solman",
+        module: "charm",
+        intent: "create_change_request",
+        confidence: Math.max(candidate.confidence, 0.96),
+        source: candidate.source === "llm" ? "llm" : "rule",
+        entities: normalizeEntitiesByIntent(
+          "create_change_request",
+          {
+            ...extractCreateChangeRequestEntitiesFromText(query),
+            ...extractCreateChangeRequestQualifiersFromText(query),
+            ...candidate.entities,
+          },
+          query
+        ),
+        reason: candidate.reason || "Matched create change request intent",
+      });
+    }
 
     const q = String(query || "").toLowerCase();
     const explicitAnalyticsQuery =

@@ -51,7 +51,7 @@ Supported routing targets:
 
 3. SolMan / ChaRM
 - intent: "create_change_request"
-  Use when user wants to create or raise a change request
+  Use when user wants to create, raise, submit, open, initiate, start, generate, make, or request a new change request / CR / transport change request
 - intent: "get_change_request_details"
   Use when user asks for details or status of an existing change request
 - intent: "list_change_requests"
@@ -90,8 +90,21 @@ For intent = "create_change_request", try to extract these entities when present
   "Developer": string | null,
   "Tester": string | null,
   "WorkItemReference": string | null,
-  "Landscape": string | null
+  "Landscape": string | null,
+  "ChangeType": string | null,
+  "Category": string | null,
+  "Purpose": string | null,
+  "Workflow": string | null
 }
+
+Create intent examples and hints:
+- "change request", "cr", "crs", "cr's", "transport change request", and "transport request" all count as the same create-able entity when combined with a creation verb.
+- Ignore filler words such as "a", "an", "new", "please", "can you", "help me", "I want to", and "I need to".
+- If the user says "emergency", set ChangeType to "Emergency".
+- If the user says "normal", set ChangeType to "Normal".
+- If the user says "transport", set Category to "Transport".
+- If the user says "system deployment" or similar deployment wording, set Purpose to "System Deployment".
+- If the user says "approval", set Workflow to "Approval".
 
 For intent = "get_change_request_details", try to extract:
 {
@@ -113,6 +126,13 @@ For intent = "cr_status_distribution", try to extract:
   "triggerAll": string | null,
   "dateText": string | null
 }
+
+Status rules for CR list and CR status queries:
+- "open" and "pending" mean pending-style filters, so set statusMode to "pending" and excludeStatuses to ["CLOSED", "REJECTED"]
+- "closed" means exact status CLOSED
+- "rejected" means exact status REJECTED
+- when a status phrase appears with any date phrase, extract both together
+- preserve the date phrase in dateText when it is needed to infer the range
 
 For intent = "get_purchase_order_details", try to extract:
 {
@@ -149,6 +169,18 @@ then classify as:
 - system = "solman"
 - module = "transport"
 - intent = "transport_list"
+
+If the user asks to create / raise / submit / open / initiate / start / generate / make / request a CR or change request, including phrases like:
+- "create a new CR"
+- "raise a change request"
+- "submit CR"
+- "open a CR"
+- "start a transport change"
+- "create an emergency transport request"
+then classify as:
+- system = "solman"
+- module = "charm"
+- intent = "create_change_request"
 
 If the user asks to browse or list CRs without explicit analytics language, including phrases like:
 - "show CRs"
@@ -371,6 +403,30 @@ Return:
     "excludeStatuses": [],
     "triggerAll": "X",
     "dateText": "last 30 days"
+  }
+}
+
+Example 11
+User: "show open CRs created this month"
+Return:
+{
+  "system": "solman",
+  "module": "charm",
+  "intent": "list_change_requests",
+  "confidence": 0.96,
+  "reason": "User asked for open CRs with a date filter",
+  "entities": {
+    "processType": null,
+    "fromDate": null,
+    "toDate": null,
+    "businessScope": null,
+    "createdBy": null,
+    "createdByMode": null,
+    "status": null,
+    "statusMode": "pending",
+    "excludeStatuses": ["CLOSED", "REJECTED"],
+    "triggerAll": "X",
+    "dateText": "this month"
   }
 }
 

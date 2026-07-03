@@ -18,46 +18,62 @@ function unique(values = []) {
   return [...new Set(values.map((x) => cleanString(x)).filter(Boolean))];
 }
 
+function pickString(item, keys = []) {
+  for (const key of Array.isArray(keys) ? keys : []) {
+    const value = cleanString(item?.[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
 function normalizeTransportsFromCr(raw) {
   const rows = asArray(raw);
 
   const transports = unique(
     rows.flatMap((item) => [
-      item?.Trkorr,
+      pickString(item, ["Trkorr", "TRKORR", "Transport", "TRANSPORT", "TransportNo", "TRANSPORT_NO"]),
     ])
   );
 
   const changeRequestId =
-    cleanString(rows[0]?.ZchangeRequest) ||
-    cleanString(rows[0]?.ChangeRequestId);
+    pickString(rows[0], [
+      "ZchangeRequest",
+      "ZCHANGE_REQUEST",
+      "ChangeRequestId",
+      "CHANGE_REQUEST_ID",
+      "ChangeRequest",
+      "CHANGE_REQUEST",
+      "OBJECT_ID",
+      "OBJ_ID",
+    ]);
 
   const normalizedRows = rows.map((item) => ({
-    ChangeRequestId: cleanString(item?.ChangeRequestId) || cleanString(item?.ZchangeRequest),
-    Trkorr: cleanString(item?.Trkorr),
-    Trfunction: cleanString(item?.Trfunction),
-    TrfuncDescription: cleanString(item?.TrfuncDescription),
-    ZchangeRequest: cleanString(item?.ZchangeRequest),
-    DevCreatedDate: item?.DevCreatedDate || "",
-    DevCreatedTime: cleanString(item?.DevCreatedTime),
-    DevReleasedDate: item?.DevReleasedDate || "",
-    DevReleasedTime: cleanString(item?.DevReleasedTime),
-    Desc: cleanString(item?.Desc),
-    Owner: cleanString(item?.Owner),
-    TaskExdate: item?.TaskExdate || "",
-    TaskExtime: cleanString(item?.TaskExtime),
-    Hgq: cleanString(item?.Hgq),
-    DateQua: cleanString(item?.DateQua),
-    Hgd: cleanString(item?.Hgd),
-    Hep: cleanString(item?.Hep),
-    DatePrd: cleanString(item?.DatePrd),
-    Hdv: cleanString(item?.Hdv),
-    Hqa: cleanString(item?.Hqa),
-    Hdp: cleanString(item?.Hdp),
-    Tasks: cleanString(item?.Tasks),
-    TaskOwner: cleanString(item?.TaskOwner),
-    TaskFunc: cleanString(item?.TaskFunc),
-    TaskFuncDescription: cleanString(item?.TaskFuncDescription),
-    Message: cleanString(item?.Message),
+    ChangeRequestId: pickString(item, ["ChangeRequestId", "CHANGE_REQUEST_ID", "ZchangeRequest", "ZCHANGE_REQUEST", "ChangeRequest", "CHANGE_REQUEST"]),
+    Trkorr: pickString(item, ["Trkorr", "TRKORR", "Transport", "TRANSPORT", "TransportNo", "TRANSPORT_NO"]),
+    Trfunction: pickString(item, ["Trfunction", "TRFUNCTION", "TransportType", "TRANSPORT_TYPE", "TRFUNCTION_CODE"]),
+    TrfuncDescription: pickString(item, ["TrfuncDescription", "TRFUNC_DESCRIPTION", "TrfunctionText", "TRFUNCTION_TEXT", "TransportTypeText", "TRANSPORT_TYPE_TEXT"]),
+    ZchangeRequest: pickString(item, ["ZchangeRequest", "ZCHANGE_REQUEST", "ChangeRequestId", "CHANGE_REQUEST_ID", "ChangeRequest", "CHANGE_REQUEST"]),
+    DevCreatedDate: pickString(item, ["DevCreatedDate", "DEV_CREATED_DATE", "CreatedDate", "CREATED_DATE", "CRTD_DATE"]),
+    DevCreatedTime: pickString(item, ["DevCreatedTime", "DEV_CREATED_TIME", "CreatedTime", "CREATED_TIME", "CRTD_TIME"]),
+    DevReleasedDate: pickString(item, ["DevReleasedDate", "DEV_RELEASED_DATE", "ReleasedDate", "RELEASED_DATE", "REL_DATE"]),
+    DevReleasedTime: pickString(item, ["DevReleasedTime", "DEV_RELEASED_TIME", "ReleasedTime", "RELEASED_TIME", "REL_TIME"]),
+    Desc: pickString(item, ["Desc", "DESC", "Description", "DESCRIPTION", "ShortText", "SHORT_TEXT"]),
+    Owner: pickString(item, ["Owner", "OWNER", "CreatedBy", "CREATED_BY", "User", "USERNAME", "AS4USER"]),
+    TaskExdate: pickString(item, ["TaskExdate", "TASK_EXDATE", "TaskExitDate", "TASK_EXIT_DATE", "TaskReleasedDate", "TASK_RELEASED_DATE"]),
+    TaskExtime: pickString(item, ["TaskExtime", "TASK_EXTIME", "TaskExitTime", "TASK_EXIT_TIME", "TaskReleasedTime", "TASK_RELEASED_TIME"]),
+    Hgq: pickString(item, ["Hgq", "HGQ"]),
+    DateQua: pickString(item, ["DateQua", "DATE_QUA"]),
+    Hgd: pickString(item, ["Hgd", "HGD"]),
+    Hep: pickString(item, ["Hep", "HEP"]),
+    DatePrd: pickString(item, ["DatePrd", "DATE_PRD"]),
+    Hdv: pickString(item, ["Hdv", "HDV"]),
+    Hqa: pickString(item, ["Hqa", "HQA"]),
+    Hdp: pickString(item, ["Hdp", "HDP"]),
+    Tasks: pickString(item, ["Tasks", "TASKS", "Task", "TASK"]),
+    TaskOwner: pickString(item, ["TaskOwner", "TASK_OWNER", "Owner", "OWNER", "AS4USER"]),
+    TaskFunc: pickString(item, ["TaskFunc", "TASK_FUNC"]),
+    TaskFuncDescription: pickString(item, ["TaskFuncDescription", "TASK_FUNC_DESCRIPTION", "TaskFuncText", "TASK_FUNC_TEXT"]),
+    Message: pickString(item, ["Message", "MESSAGE", "EV_MESSAGE", "EvMessage"]),
   }));
 
   return {
@@ -221,6 +237,36 @@ function buildCrTransportLookupVariants({ changeRequestId, processType }) {
   return [...new Set(variants)];
 }
 
+function buildCrTransportLookupFallbackVariants({ changeRequestId, processType }) {
+  const cleanCr = cleanString(changeRequestId);
+  const cleanProcessType = cleanString(processType);
+
+  if (!cleanCr) return [];
+
+  const variants = [];
+  const push = (filter) => {
+    if (filter) variants.push(filter);
+  };
+
+  push(`substringof('${escapeODataString(cleanCr)}', ChangeRequestId)`);
+  push(`substringof('${escapeODataString(cleanCr)}', ZchangeRequest)`);
+  push(`substringof('${escapeODataString(cleanCr)}', OBJECT_ID)`);
+
+  if (cleanProcessType) {
+    push(
+      `substringof('${escapeODataString(cleanCr)}', ChangeRequestId) and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`
+    );
+    push(
+      `substringof('${escapeODataString(cleanCr)}', ZchangeRequest) and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`
+    );
+    push(
+      `substringof('${escapeODataString(cleanCr)}', OBJECT_ID) and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`
+    );
+  }
+
+  return [...new Set(variants)];
+}
+
 export async function getTransportNumbersFromCr({
   system,
   sapAuth,
@@ -270,6 +316,42 @@ export async function getTransportNumbersFromCr({
         mapSapServiceError(error, {
           serviceName: "ZNEW_TRS_FROM_CR_SRV",
         });
+      }
+    }
+  }
+
+  if (!raw) {
+    const fallbackVariants = buildCrTransportLookupFallbackVariants({
+      changeRequestId: cleanCr,
+      processType: cleanProcessType,
+    });
+
+    for (const filter of fallbackVariants) {
+      const relativePath = `CR_DetailsSet?$filter=${encodeURIComponent(filter)}`;
+
+      try {
+        raw = await fetchFromSap(
+          {
+            system,
+            service: { serviceName: "ZNEW_TRS_FROM_CR_SRV" },
+            relativePath,
+          },
+          sapAuth
+        );
+
+        if (raw) break;
+      } catch (error) {
+        lastError = error;
+        const msg = cleanString(error?.message).toLowerCase();
+        if (
+          error?.status === 501 ||
+          msg.includes("no service found") ||
+          msg.includes("not implemented in data provider class")
+        ) {
+          mapSapServiceError(error, {
+            serviceName: "ZNEW_TRS_FROM_CR_SRV",
+          });
+        }
       }
     }
   }

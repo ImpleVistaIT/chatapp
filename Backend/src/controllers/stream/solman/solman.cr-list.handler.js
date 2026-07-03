@@ -2,6 +2,7 @@ import { listSolmanChangeRequestsByDateRange } from "../../../services/systems/s
 import {
   buildCrSuggestions,
   buildStatusDistributionChart,
+  buildSolmanAppliedFiltersSummary,
   cleanString,
   formatCrListReply,
   isNextPageQuery,
@@ -10,7 +11,6 @@ import {
   pickCrListEntities,
   toCrDetailsArray,
 } from "./solman.shared.js";
-import { generateSummaryLLM } from "../../../services/responseNarrator.service.js";
 import { step } from "../stream.shared.js";
 
 const LIST_CHART_PAGE_SIZE = 200;
@@ -58,7 +58,7 @@ function formatYmd(date) {
 
 function buildStatusDistributionSummary(chart) {
   if (!chart || !Array.isArray(chart.data) || chart.data.length === 0) {
-    return "No change requests found for the selected filters.";
+    return "No records found for the given criteria.";
   }
 
   const parts = chart.data.map((item) => {
@@ -142,7 +142,7 @@ export async function handleCrList(context) {
     shouldUseInteractiveCrStatusCard(query) ||
     shouldUseInteractiveCrStatusCard(listInput.dateText);
   const defaultCrRange =
-    useInteractiveCrStatusCard && (!cleanString(listInput.fromDate) || !cleanString(listInput.toDate))
+    !cleanString(listInput.fromDate) || !cleanString(listInput.toDate)
       ? getLastYearCrRange()
       : null;
 
@@ -317,20 +317,33 @@ export async function handleCrList(context) {
     message: "Fetching change requests from Solution Manager...",
   });
 
+  const requestFromDate = listInput.fromDate || defaultCrRange?.fromDate || "";
+  const requestToDate = listInput.toDate || defaultCrRange?.toDate || "";
+
+  console.log("[SOLMAN] list date filters:", {
+    query,
+    fromDate: cleanString(requestFromDate),
+    toDate: cleanString(requestToDate),
+    status: cleanString(listInput.status || ""),
+    statusMode: cleanString(listInput.statusMode || ""),
+    createdBy: cleanString(resolvedCreatedBy || ""),
+    businessScope: cleanString(listInput.businessScope || ""),
+  });
+
   const result = await step("listSolmanChangeRequestsByDateRange", () =>
     listSolmanChangeRequestsByDateRange({
       system,
       sapAuth,
       processType: listInput.processType,
       triggerAll: listInput.triggerAll || "X",
-      fromDate: listInput.fromDate || defaultCrRange?.fromDate || "",
-      toDate: listInput.toDate || defaultCrRange?.toDate || "",
+      fromDate: requestFromDate,
+      toDate: requestToDate,
       status: listInput.status || "",
       excludeStatuses: listInput.excludeStatuses || [],
       statusMode: listInput.statusMode || "",
       dateText: listInput.dateText || query,
       createdBy: resolvedCreatedBy || "",
-      top: useInteractiveCrStatusCard ? CR_STATUS_MAX_ROWS : listInput.top ?? 10,
+      top: useInteractiveCrStatusCard ? CR_STATUS_MAX_ROWS : listInput.top ?? null,
       skip: listInput.skip || 0,
       orderBy: listInput.orderBy || "CREATED_ON desc",
     })
@@ -358,7 +371,7 @@ export async function handleCrList(context) {
           excludeStatuses: listInput.excludeStatuses || [],
           createdBy: resolvedCreatedBy || "",
           createdByMode: listInput.createdByMode || "",
-          top: listInput.top ?? 10,
+          top: listInput.top ?? null,
           skip: listInput.skip || 0,
           nextSkip: listInput.nextSkip || 0,
           orderBy: listInput.orderBy || "CREATED_ON desc",
@@ -388,16 +401,17 @@ export async function handleCrList(context) {
 
   const rawRows = toCrDetailsArray(result);
   const rows = dedupeByCrNumber(rawRows);
-  const responseTop = result?.result?.top ?? listInput.top ?? 10;
+  const responseTop = result?.result?.top ?? listInput.top ?? null;
   const responseSkip = result?.result?.skip ?? listInput.skip ?? 0;
   const rawRowCount = Array.isArray(rawRows) ? rawRows.length : 0;
   const normalizedTop = Math.max(0, Number(responseTop) || 0);
   const responseNextSkip =
     result?.result?.nextSkip ??
     responseSkip + (normalizedTop > 0 ? normalizedTop : rows.length);
-  const hasMore = normalizedTop > 0 ? rawRowCount >= normalizedTop : rawRowCount > 0;
   const noMoreMessage = "No more change requests found.";
   const isNextPageRequest = isNextPageQuery(query);
+  const explicitCountRequest = normalizedTop > 0 && !isNextPageRequest;
+  const hasMore = explicitCountRequest ? false : normalizedTop > 0 ? rawRowCount >= normalizedTop : false;
   const responseDisplayOffset = Math.max(
     0,
     Number(listInput.displayOffset ?? responseSkip) || 0
@@ -407,7 +421,7 @@ export async function handleCrList(context) {
   let totalRows = rows.length;
   let chartRows = [];
 
-  if (shouldBuildChart) {
+  if (shouldBuildChart && !explicitCountRequest) {
     const chartFromDate =
       result?.result?.fromDate || listInput.fromDate || defaultCrRange?.fromDate || "";
     const chartToDate =
@@ -429,7 +443,6 @@ export async function handleCrList(context) {
       if (fullChartFetch?.ok !== false) {
         chartRows = dedupeByCrNumber(fullChartFetch?.rows || []);
         totalRows = Math.max(totalRows, chartRows.length);
-
         chart = buildStatusDistributionChart(chartRows, {
           title: "CR Status Distribution",
           filters: {
@@ -505,7 +518,7 @@ export async function handleCrList(context) {
     }
   }
 
-  if (!useInteractiveCrStatusCard && rows.length > 0 && totalRows === rows.length) {
+  if (!explicitCountRequest && !useInteractiveCrStatusCard && rows.length > 0 && totalRows === rows.length) {
     const fullRowsFetch = await step("fetchAllCrRowsForListSummary", () =>
       fetchAllCrRowsForListChart({
         system,
@@ -550,7 +563,7 @@ export async function handleCrList(context) {
   };
 
   if (rows.length === 0 && !isNextPageRequest) {
-    const noResultsMessage = "No change requests found.";
+    const noResultsMessage = "No records found for the given criteria.";
 
     await persistAssistantAndTouchSession({
       owner,
@@ -719,8 +732,8 @@ export async function handleCrList(context) {
 
   let reply = formatCrListReply(rows, {
     businessScope: listInput.businessScope,
-    fromDate: result?.result?.fromDate || listInput.fromDate,
-    toDate: result?.result?.toDate || listInput.toDate,
+    fromDate: result?.result?.fromDate || requestFromDate,
+    toDate: result?.result?.toDate || requestToDate,
     status: result?.result?.status || listInput.status,
     statusMode: result?.result?.statusMode || listInput.statusMode,
     createdBy: resolvedCreatedBy || "",
@@ -734,27 +747,17 @@ export async function handleCrList(context) {
   }
 
   const summary =
-    useInteractiveCrStatusCard && chart
-      ? buildStatusDistributionSummary(chart)
-      : rows.length > 0
-        ? await step("generateSummaryLLM", () =>
-            generateSummaryLLM({
-              entityLabel: "change requests",
-              count: rows.length,
-              totalCount: totalRows,
-              extracted: {
-                businessScope: listInput.businessScope,
-                processType: result?.result?.processType || listInput.processType,
-                createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
-                status: result?.result?.status || listInput.status,
-                dateFrom: result?.result?.fromDate || listInput.fromDate,
-                dateTo: result?.result?.toDate || listInput.toDate,
-              },
-              sample: rows.slice(0, 5),
-              columns: Object.keys(rows[0] || {}).slice(0, 8),
-            })
-          )
-        : "No change requests found.";
+    rows.length > 0
+      ? buildSolmanAppliedFiltersSummary({
+          status: result?.result?.status || listInput.status,
+          statusMode: result?.result?.statusMode || listInput.statusMode,
+          excludeStatuses: result?.result?.excludeStatuses || listInput.excludeStatuses || [],
+          fromDate: result?.result?.fromDate || requestFromDate,
+          toDate: result?.result?.toDate || requestToDate,
+          createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+          businessScope: listInput.businessScope,
+        }) || "No records found for the given criteria."
+      : "No records found for the given criteria.";
 
   const persistedPendingAction = {
     system: "solman",
@@ -772,8 +775,8 @@ export async function handleCrList(context) {
       displayOffset: responseDisplayOffset,
       nextDisplayOffset: responseDisplayOffset + rows.length,
       orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
-      fromDate: result?.result?.fromDate || listInput.fromDate,
-      toDate: result?.result?.toDate || listInput.toDate,
+      fromDate: result?.result?.fromDate || requestFromDate,
+      toDate: result?.result?.toDate || requestToDate,
       statusMode: result?.result?.statusMode || listInput.statusMode,
       excludeStatuses: result?.result?.excludeStatuses || listInput.excludeStatuses || [],
       createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
