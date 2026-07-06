@@ -51,12 +51,15 @@ Supported routing targets:
 
 3. SolMan / ChaRM
 - intent: "create_change_request"
-  Use when user wants to create, raise, submit, open, initiate, start, generate, make, or request a new change request / CR / transport change request
+  Use only when the user explicitly wants to create a new change request / CR / transport change request.
+  Typical creation language is create, raise, submit, open a new CR, initiate, start, generate, make, or request a new change request.
 - intent: "get_change_request_details"
   Use when user asks for details or status of an existing change request
 - intent: "list_change_requests"
-  Use when user wants to list or browse change requests, including phrases like show CRs, show CR status, list change requests, CR list, or show change requests.
-  This is the normal list flow and should be used unless the user explicitly asks for analytics or chart language.
+  Use when the user is asking about existing change requests and wants to retrieve, browse, inspect, or search them.
+  Retrieval intent has priority whenever the message includes verbs such as show, list, display, find, search, get, fetch, view, latest, last, or recent together with CR/change request language.
+  Treat created, open, closed, pending, rejected, approved, today, yesterday, this week, this month, between, by me, latest 25, last 50, and similar phrases as filters on existing CRs, not as create intent.
+  This is the normal list flow and should be used unless the user explicitly asks to create a new CR.
 
 4. SolMan / ChaRM Analytics
 - intent: "cr_status_distribution"
@@ -181,6 +184,10 @@ then classify as:
 - system = "solman"
 - module = "charm"
 - intent = "create_change_request"
+
+If the user asks about existing CRs using retrieval language such as show, list, display, find, search, get, fetch, view, latest, last, or recent, classify as list_change_requests even if the query also includes filters like created, open, closed, pending, rejected, approved, today, yesterday, this week, this month, between dates, by me, latest 25, or last 50.
+
+If both retrieval language and creation language appear, prefer list_change_requests unless the phrase clearly asks to create a new CR.
 
 If the user asks to browse or list CRs without explicit analytics language, including phrases like:
 - "show CRs"

@@ -98,6 +98,27 @@ test("create CR intent recognizes natural language variations", () => {
   }
 });
 
+test("retrieval-style CR queries do not trigger create intent", () => {
+  const phrases = [
+    "Show CRs created between 2026-07-01 and 2026-07-05 by me",
+    "Show the latest 25 CRs from this month",
+    "Show open CRs created this week",
+    "Show open CRs created this month",
+    "Show closed CRs created this month",
+    "Show pending CRs created by me",
+    "Show rejected CRs created yesterday",
+    "Show the last 50 open CRs",
+    "List CRs created today",
+    "Find rejected CRs",
+    "Get latest 25 CRs",
+    "Display closed CRs",
+  ];
+
+  for (const phrase of phrases) {
+    assert.equal(isCreateChangeRequestQuery(phrase), false, phrase);
+  }
+});
+
 test("create CR qualifiers are extracted from plain language", () => {
   const emergency = getCreateChangeRequestQualifiers("Create an emergency change request");
   assert.equal(emergency.ChangeType, "Emergency");
@@ -215,7 +236,7 @@ test("SolMan date parser matches the requested relative-period phrases", () => {
   const startOfWeek = (date) => {
     const value = startOfDay(date);
     const day = value.getDay();
-    const diff = day === 0 ? -6 : 1 - day;
+    const diff = -day;
     return addDays(value, diff);
   };
   const startOfMonth = (date) => new Date(date.getFullYear(), date.getMonth(), 1);
@@ -259,13 +280,19 @@ test("SolMan date parser matches the requested relative-period phrases", () => {
       period: "this_week",
       query: "Retrieve CRs from this week",
       startDate: ymd(startOfWeek(today)),
-      endDate: ymd(startOfDay(today)),
+      endDate: ymd(addDays(startOfWeek(today), 6)),
     },
     {
       period: "last_week",
       query: "Show last week's CRs",
       startDate: ymd(addDays(startOfWeek(today), -7)),
       endDate: ymd(addDays(startOfWeek(today), -1)),
+    },
+    {
+      period: "next_week",
+      query: "Show next week's CRs",
+      startDate: ymd(addDays(startOfWeek(today), 7)),
+      endDate: ymd(addDays(startOfWeek(today), 13)),
     },
     {
       period: "this_month",

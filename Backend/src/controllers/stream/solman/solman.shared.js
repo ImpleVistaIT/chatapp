@@ -1,4 +1,5 @@
 import { ChatSession } from "../../../models/ChatSession.model.js";
+import { getWeekDateRange } from "../../../services/filters/dateFilters.js";
 import { saveAssistantMessage, step } from "../stream.shared.js";
 
 export function cleanString(v) {
@@ -468,13 +469,20 @@ export function inferDateRangeFromQuery(query = "") {
   }
 
   if (/\bthis week\b/.test(cleanQuery)) {
-    return makeDatePeriod("this_week", startOfWeek(today), today);
+    const { startOfWeek, endOfWeek } = getWeekDateRange(today, 0);
+    return makeDatePeriod("this_week", startOfWeek, endOfWeek);
   }
 
   if (/\blast week\b/.test(cleanQuery)) {
-    const start = addDays(startOfWeek(today), -7);
-    const end = addDays(start, 6);
+    const { startOfWeek, endOfWeek } = getWeekDateRange(today, -1);
+    const start = startOfWeek;
+    const end = endOfWeek;
     return makeDatePeriod("last_week", start, end);
+  }
+
+  if (/\bnext week\b/.test(cleanQuery)) {
+    const { startOfWeek, endOfWeek } = getWeekDateRange(today, 1);
+    return makeDatePeriod("next_week", startOfWeek, endOfWeek);
   }
 
   if (/\bthis month\b/.test(cleanQuery)) {

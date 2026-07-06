@@ -56,6 +56,10 @@ function cleanString(value) {
   return v || null;
 }
 
+function normalizeRoutingQuery(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
 function normalizeDateYYYYMMDD(value) {
   const v = cleanString(value);
   if (!v) return null;
@@ -86,30 +90,63 @@ function normalizeCreateCrText(query = "") {
     .toLowerCase()
     .replace(/\b(?:i\s+want\s+to|i\s+need\s+to|please|can\s+you|could\s+you|help\s+me|help\s+me\s+to|kindly)\b/g, " ")
     .replace(/\b(?:a|an|the|one|new|newly)\b/g, " ")
-      .replace(/\b(?:transport\s+change\s+request|transport\s+change|transport\s+request|change\s+request|change\s+requests?|crs?|cr's)\b/g, " CR_ENTITY ")
+    .replace(/\b(?:transport\s+change\s+request|transport\s+change|transport\s+request|change\s+request|change\s+requests?|crs?|cr's)\b/g, " CR_ENTITY ")
     .replace(/\b(?:create|raise|submit|open|initiate|start|generate|make|add|request|need|want)\b/g, " ACTION ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function hasCreateAction(query = "") {
-  return /\b(create|raise|submit|open|initiate|start|generate|make|add|request|need|want)\b/i.test(query);
+function hasCrEntityReference(query = "") {
+  return /\b(?:change request|change requests?|transport change request|transport change|crs?|cr's)\b/i.test(query);
 }
 
-function hasCrEntity(query = "") {
-  return /\b(change request|change requests?|transport change request|transport change|transport request|crs?|cr's)\b/i.test(query);
+function hasRetrievalVerb(query = "") {
+  return /\b(show|list|display|find|search|get|fetch|view|browse|latest|last|recent)\b/i.test(query);
 }
 
-function detectCreateChangeRequestIntent(query = "") {
-  const q = String(query || "");
-  if (!q.trim()) return false;
+function hasListFilterCue(query = "") {
+  return /\b(created|open|closed|pending|rejected|approved|today|yesterday|this week|this month|between|by me|my)\b/i.test(query);
+}
 
-  if (!hasCreateAction(q) || !hasCrEntity(q)) {
+function isExplicitCreatePhrase(query = "") {
+  const q = normalizeRoutingQuery(query);
+
+  return (
+    /\b(?:create|raise|submit|initiate|start|generate|make|add)\b[\s\S]{0,40}\b(?:new\s+)?(?:change request|change requests?|crs?|cr's)\b/i.test(q) ||
+    /\bopen\b[\s\S]{0,20}\bnew\b[\s\S]{0,40}\b(?:change request|change requests?|crs?|cr's)\b/i.test(q) ||
+    /\bcreate\b[\s\S]{0,40}\bemergency\b[\s\S]{0,40}\b(?:change request|change requests?|crs?|cr's|change)\b/i.test(q) ||
+    /\b(?:change request|change requests?|crs?|cr's)\b[\s\S]{0,40}\b(?:create|raise|submit|initiate|start|generate|make|add)\b/i.test(q) ||
+    /\bstart\b[\s\S]{0,40}\btransport\s+change\b/i.test(q)
+  );
+}
+
+function detectListChangeRequestIntent(query = "") {
+  const q = normalizeRoutingQuery(query);
+  if (!q) return false;
+
+  if (!hasCrEntityReference(q)) {
     return false;
   }
 
-  const normalized = normalizeCreateCrText(q);
-  return Boolean(normalized.includes("ACTION") && normalized.includes("CR_ENTITY"));
+  return hasRetrievalVerb(q) || hasListFilterCue(q) || /\bshow\s+my\s+crs?\b/i.test(q) || /\bcreated\s+by\s+me\b/i.test(q) || /\bopen\s+crs?\b/i.test(q) || /\bclosed\s+crs?\b/i.test(q) || /\bpending\s+crs?\b/i.test(q) || /\brejected\s+crs?\b/i.test(q) || /\bapproved\s+crs?\b/i.test(q);
+}
+
+function detectCreateChangeRequestIntent(query = "") {
+  const q = normalizeRoutingQuery(query);
+  if (!q) return false;
+
+  const hasCreateVerb = /\b(create|raise|submit|initiate|start|generate|make|add|request)\b/i.test(q);
+  const hasNeedOrWant = /\b(need|want)\b/i.test(q);
+  const hasCrNoun = /\b(?:change request|change requests?|transport change request|transport change|crs?|cr's)\b/i.test(q);
+  const hasExplicitNew = /\bnew\s+(?:change request|change requests?|transport change request|transport change|crs?|cr's)\b/i.test(q);
+  const hasEmergencyCreate = /\bemergency\b/i.test(q) && /\b(?:change request|change requests?|transport change request|transport change|change)\b/i.test(q);
+
+  return (
+    (hasCreateVerb && hasCrNoun) ||
+    (hasNeedOrWant && hasEmergencyCreate) ||
+    hasExplicitNew ||
+    /\bstart\b[\s\S]{0,40}\btransport\s+change\b/i.test(q)
+  );
 }
 
 export function isCreateChangeRequestQuery(query = "") {
@@ -412,6 +449,8 @@ function keywordFallback(query) {
     q.includes("change request") ||
     /\bcr\b/.test(q);
 
+  const wantsCrRetrieval = mentionsCr && (hasRetrievalVerb(q) || hasListFilterCue(q));
+
   const wantsCrDetails =
     q.includes("details") ||
     q.includes("detail") ||
@@ -445,7 +484,8 @@ function keywordFallback(query) {
     q.includes("list crs") ||
     q.includes("change request list") ||
     q.includes("browse crs") ||
-    q.includes("browse change requests");
+    q.includes("browse change requests") ||
+    wantsCrRetrieval;
 
   if (wantsCrAnalytics) {
     return normalizeRoutingResult({
@@ -516,7 +556,7 @@ function keywordFallback(query) {
     });
   }
 
-  if (q.includes("create change request") || q.includes("raise change request") || q.includes("create solman cr")) {
+  if (detectCreateChangeRequestIntent(query)) {
     return normalizeRoutingResult({
       system: "solman",
       module: "charm",
@@ -598,7 +638,10 @@ export async function classifyPrompt({ query, sessionContext = null }) {
     });
   }
 
-  if (detectCreateChangeRequestIntent(query)) {
+  const listLikeIntent = detectListChangeRequestIntent(query);
+  const createLikeIntent = detectCreateChangeRequestIntent(query);
+
+  if (createLikeIntent) {
     return normalizeRoutingResult({
       system: "solman",
       module: "charm",
@@ -614,6 +657,18 @@ export async function classifyPrompt({ query, sessionContext = null }) {
         },
         query
       ),
+    });
+  }
+
+  if (listLikeIntent) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "list_change_requests",
+      confidence: 0.95,
+      reason: "Matched SolMan CR retrieval intent from natural language",
+      source: "rule",
+      entities: normalizeEntitiesByIntent("list_change_requests", {}, query),
     });
   }
 
@@ -637,7 +692,20 @@ export async function classifyPrompt({ query, sessionContext = null }) {
       entities: normalizeEntitiesByIntent(normalizedIntent, llm.data.entities, query),
     });
 
-    if (normalizedIntent === "create_change_request" && detectCreateChangeRequestIntent(query)) {
+    if (normalizedIntent === "create_change_request" && listLikeIntent && !createLikeIntent) {
+      return normalizeRoutingResult({
+        ...candidate,
+        system: "solman",
+        module: "charm",
+        intent: "list_change_requests",
+        confidence: Math.max(candidate.confidence, 0.95),
+        source: candidate.source === "llm" ? "llm" : "rule",
+        entities: normalizeEntitiesByIntent("list_change_requests", llm.data.entities, query),
+        reason: candidate.reason || "Normalized SolMan CR retrieval request",
+      });
+    }
+
+    if (normalizedIntent === "create_change_request" && createLikeIntent) {
       return normalizeRoutingResult({
         ...candidate,
         system: "solman",
@@ -679,7 +747,8 @@ export async function classifyPrompt({ query, sessionContext = null }) {
       q.includes("show change requests") ||
       q.includes("cr list") ||
       q.includes("list crs") ||
-      q.includes("change request list");
+      q.includes("change request list") ||
+      listLikeIntent;
 
     if (transportMatch.matched && normalizedIntent === "unknown") {
       return normalizeRoutingResult({
@@ -702,7 +771,7 @@ export async function classifyPrompt({ query, sessionContext = null }) {
         ...candidate,
         module: "charm",
         intent: "list_change_requests",
-        entities: normalizeEntitiesByIntent("list_change_requests", llm.data.entities),
+        entities: normalizeEntitiesByIntent("list_change_requests", llm.data.entities, query),
         reason: candidate.reason || "Normalized SolMan CR list request",
       });
     }
@@ -717,7 +786,7 @@ export async function classifyPrompt({ query, sessionContext = null }) {
         ...candidate,
         module: "charm",
         intent: "list_change_requests",
-        entities: normalizeEntitiesByIntent("list_change_requests", llm.data.entities),
+        entities: normalizeEntitiesByIntent("list_change_requests", llm.data.entities, query),
         reason: candidate.reason || "Normalized SolMan CR list request",
       });
     }

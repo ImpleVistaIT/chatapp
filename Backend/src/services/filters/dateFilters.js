@@ -29,6 +29,19 @@ function addUtcDays(date, days) {
   return new Date(date.getTime() + days * DAY_MS);
 }
 
+function startOfUtcDay(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+export function getWeekDateRange(referenceDate = new Date(), weekOffset = 0) {
+  const reference = startOfUtcDay(referenceDate);
+  const currentWeekStart = addUtcDays(reference, -reference.getUTCDay());
+  const startOfWeek = addUtcDays(currentWeekStart, weekOffset * 7);
+  const endOfWeek = addUtcDays(startOfWeek, 6);
+
+  return { startOfWeek, endOfWeek };
+}
+
 function startOfMonth(year, monthIndex0) {
   return makeUtcDate(year, monthIndex0, 1);
 }
@@ -275,6 +288,21 @@ function parseRelativeExpression(message) {
     const days = Math.max(1, Math.min(365, Number(daysMatch[2])));
     const start = addUtcDays(today, -(days - 1));
     return normalizeDateResult("relative", toStartString(start), toStartString(addUtcDays(today, 1)), 0.98);
+  }
+
+  if (/\bthis\s+week\b/.test(normalized)) {
+    const { startOfWeek, endOfWeek } = getWeekDateRange(today, 0);
+    return normalizeDateResult("relative", toStartString(startOfWeek), toStartString(addUtcDays(endOfWeek, 1)), 0.99);
+  }
+
+  if (/\blast\s+week\b/.test(normalized)) {
+    const { startOfWeek, endOfWeek } = getWeekDateRange(today, -1);
+    return normalizeDateResult("relative", toStartString(startOfWeek), toStartString(addUtcDays(endOfWeek, 1)), 0.99);
+  }
+
+  if (/\bnext\s+week\b/.test(normalized)) {
+    const { startOfWeek, endOfWeek } = getWeekDateRange(today, 1);
+    return normalizeDateResult("relative", toStartString(startOfWeek), toStartString(addUtcDays(endOfWeek, 1)), 0.99);
   }
 
   if (/\bthis\s+month\b/.test(normalized)) {

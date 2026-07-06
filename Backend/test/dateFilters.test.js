@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { extractDocQuery } from "../src/services/extractor/extractor.service.js";
-import { buildDateFilter, extractDateFilters, normalizeDateQuery } from "../src/services/filters/dateFilters.js";
+import { buildDateFilter, extractDateFilters, getWeekDateRange, normalizeDateQuery } from "../src/services/filters/dateFilters.js";
 
 function filterString(filters) {
   return filters.map((filter) => `${filter.field} ${filter.op} ${filter.value}`).join(" | ");
@@ -98,6 +98,98 @@ test("supports relative date queries", () => {
   assert.equal(thisYear?.endDate, "2027-01-01T00:00:00");
   assert.equal(lastYear?.startDate, "2025-01-01T00:00:00");
   assert.equal(lastYear?.endDate, "2026-01-01T00:00:00");
+
+  delete process.env.FIXED_TODAY;
+});
+
+test("supports Sunday through Saturday week ranges", () => {
+  const ymd = (date) =>
+    `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+
+  const cases = [
+    {
+      label: "Monday reference",
+      referenceDate: new Date(Date.UTC(2026, 6, 6)),
+      offset: 0,
+      start: "2026-07-05",
+      end: "2026-07-11",
+    },
+    {
+      label: "Sunday reference",
+      referenceDate: new Date(Date.UTC(2026, 6, 5)),
+      offset: 0,
+      start: "2026-07-05",
+      end: "2026-07-11",
+    },
+    {
+      label: "Saturday reference",
+      referenceDate: new Date(Date.UTC(2026, 6, 11)),
+      offset: 0,
+      start: "2026-07-05",
+      end: "2026-07-11",
+    },
+    {
+      label: "Month boundary",
+      referenceDate: new Date(Date.UTC(2026, 7, 1)),
+      offset: 0,
+      start: "2026-07-26",
+      end: "2026-08-01",
+    },
+    {
+      label: "Year boundary",
+      referenceDate: new Date(Date.UTC(2026, 0, 1)),
+      offset: 0,
+      start: "2025-12-28",
+      end: "2026-01-03",
+    },
+    {
+      label: "Leap year",
+      referenceDate: new Date(Date.UTC(2024, 1, 29)),
+      offset: 0,
+      start: "2024-02-25",
+      end: "2024-03-02",
+    },
+    {
+      label: "Last week",
+      referenceDate: new Date(Date.UTC(2026, 6, 6)),
+      offset: -1,
+      start: "2026-06-28",
+      end: "2026-07-04",
+    },
+    {
+      label: "Next week",
+      referenceDate: new Date(Date.UTC(2026, 6, 6)),
+      offset: 1,
+      start: "2026-07-12",
+      end: "2026-07-18",
+    },
+  ];
+
+  for (const testCase of cases) {
+    const range = getWeekDateRange(testCase.referenceDate, testCase.offset);
+    assert.equal(ymd(range.startOfWeek), testCase.start, testCase.label);
+    assert.equal(ymd(range.endOfWeek), testCase.end, testCase.label);
+  }
+});
+
+test("recognizes week phrases as explicit Sunday-Saturday ranges", () => {
+  process.env.FIXED_TODAY = "2026-07-06";
+
+  const thisWeek = normalizeDateQuery("this week");
+  const lastWeek = normalizeDateQuery("last week");
+  const nextWeek = normalizeDateQuery("next week");
+
+  assert.equal(thisWeek?.type, "relative");
+  assert.equal(thisWeek?.startDate, "2026-07-05T00:00:00");
+  assert.equal(thisWeek?.endDate, "2026-07-12T00:00:00");
+
+  assert.equal(lastWeek?.type, "relative");
+  assert.equal(lastWeek?.startDate, "2026-06-28T00:00:00");
+  assert.equal(lastWeek?.endDate, "2026-07-05T00:00:00");
+
+  assert.equal(nextWeek?.type, "relative");
+  assert.equal(nextWeek?.startDate, "2026-07-12T00:00:00");
+  assert.equal(nextWeek?.endDate, "2026-07-19T00:00:00");
 
   delete process.env.FIXED_TODAY;
 });
