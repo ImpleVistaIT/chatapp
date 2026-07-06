@@ -275,6 +275,10 @@ function normalizeCreatedByValue(value) {
   return cleanString(value).toUpperCase();
 }
 
+function normalizeCreatedByComparable(value) {
+  return normalizeCreatedByValue(value).replace(/[^A-Z0-9]/g, "");
+}
+
 function matchesRequestedStatus(item, requestedStatus) {
   const wanted = normalizeStatusValue(requestedStatus);
   if (!wanted) return true;
@@ -312,26 +316,41 @@ function matchesCreatedBy(item, requestedCreatedBy) {
   const wanted = normalizeCreatedByValue(requestedCreatedBy);
   if (!wanted) return true;
 
-  const actual = normalizeCreatedByValue(
-    item?.CREATED_BY ||
-      item?.ERNAM ||
-      item?.CREATEDBY ||
-      item?.CREATOR ||
-      item?.AUTHOR ||
-      item?.CREATEDBYNAME ||
-      item?.CREATED_BY_NAME ||
-      item?.USER_NAME ||
-      item?.USERNAME ||
-      item?.SAP_USER ||
-      item?.LAST_CHANGED_BY ||
-      ""
-  );
+  const wantedComparable = normalizeCreatedByComparable(wanted);
 
-  if (!actual) {
+  const actualCandidates = [
+    item?.CREATED_BY,
+    item?.ERNAM,
+    item?.CREATEDBY,
+    item?.CREATOR,
+    item?.AUTHOR,
+    item?.CREATEDBYNAME,
+    item?.CREATED_BY_NAME,
+    item?.USER_NAME,
+    item?.USERNAME,
+    item?.SAP_USER,
+    item?.LAST_CHANGED_BY,
+    "",
+  ]
+    .map((value) => normalizeCreatedByValue(value))
+    .filter(Boolean);
+
+  if (actualCandidates.length === 0 || !wantedComparable) {
     return false;
   }
 
-  return actual === wanted;
+  return actualCandidates.some((actual) => {
+    if (actual === wanted) {
+      return true;
+    }
+
+    const actualComparable = normalizeCreatedByComparable(actual);
+    return (
+      actualComparable === wantedComparable ||
+      actualComparable.includes(wantedComparable) ||
+      wantedComparable.includes(actualComparable)
+    );
+  });
 }
 
 function isExcludedStatus(item, excludeStatuses = []) {
