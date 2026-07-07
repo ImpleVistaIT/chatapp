@@ -347,7 +347,7 @@ export async function handleCrList(context) {
       statusMode: listInput.statusMode || "",
       dateText: listInput.dateText || query,
       createdBy: resolvedCreatedBy || "",
-      top: useInteractiveCrStatusCard ? CR_STATUS_MAX_ROWS : listInput.top ?? null,
+      top: listInput.top ?? null,
       skip: listInput.skip || 0,
       orderBy: listInput.orderBy || "CREATED_ON desc",
     })
@@ -542,7 +542,7 @@ export async function handleCrList(context) {
 
   const responseData = {
     viewType: useInteractiveCrStatusCard ? "solman_cr_status" : "solman_cr_list",
-    rows: useInteractiveCrStatusCard ? rows.slice(0, CR_STATUS_MAX_ROWS) : rows,
+    rows,
     ...(chart ? { chart } : {}),
     ...(chart && Array.isArray(chartRows) && chartRows.length > 0
       ? {
@@ -553,7 +553,7 @@ export async function handleCrList(context) {
     ...(useInteractiveCrStatusCard
       ? {
           allCRRecords: Array.isArray(chartRows) && chartRows.length > 0 ? chartRows : rows,
-          tableRecords: rows.slice(0, CR_STATUS_MAX_ROWS),
+          tableRecords: rows,
           statusDistribution: chart,
           dateRange: {
             fromDate:
