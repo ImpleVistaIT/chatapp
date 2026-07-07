@@ -128,8 +128,25 @@ test("CR details prompts route to get_change_request_details instead of create",
   assert.equal(result.intent, "get_change_request_details");
 });
 
+test("CR status by number routes to get_change_request_details instead of list", async () => {
+  const result = await classifyPrompt({ query: "show status of the CR 8000003208" });
+
+  assert.equal(result.system, "solman");
+  assert.equal(result.module, "charm");
+  assert.equal(result.intent, "get_change_request_details");
+  assert.equal(result.entities.objectId, "8000003208");
+});
+
 test("open CR prompts route to list_change_requests instead of create", async () => {
   const result = await classifyPrompt({ query: "Show open CRs" });
+
+  assert.equal(result.system, "solman");
+  assert.equal(result.module, "charm");
+  assert.equal(result.intent, "list_change_requests");
+});
+
+test("plain CR status prompts stay on the list flow", async () => {
+  const result = await classifyPrompt({ query: "show CR status" });
 
   assert.equal(result.system, "solman");
   assert.equal(result.module, "charm");

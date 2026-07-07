@@ -128,6 +128,17 @@ function detectListChangeRequestIntent(query = "") {
     return false;
   }
 
+  const detailCue =
+    /details?\b/i.test(q) ||
+    /status of\s+(?:the\s+)?(?:change request|cr)\b/i.test(q) ||
+    /(?:change request|cr)\s+status\b/i.test(q) ||
+    /cr details\b/i.test(q) ||
+    /all change request details\b/i.test(q);
+
+  if (detailCue) {
+    return false;
+  }
+
   return hasRetrievalVerb(q) || hasListFilterCue(q) || /\bshow\s+my\s+crs?\b/i.test(q) || /\bcreated\s+by\s+me\b/i.test(q) || /\bopen\s+crs?\b/i.test(q) || /\bclosed\s+crs?\b/i.test(q) || /\bpending\s+crs?\b/i.test(q) || /\brejected\s+crs?\b/i.test(q) || /\bapproved\s+crs?\b/i.test(q);
 }
 
@@ -482,10 +493,11 @@ function keywordFallback(query) {
     q.includes("all change request details") ||
     q.includes("change request details") ||
     q.includes("cr details") ||
-    q.includes("status of change request") ||
-    q.includes("status of cr") ||
+    (objectId && /status of\s+(?:the\s+)?(?:change request|cr)\b/i.test(q)) ||
+    (objectId && /(?:change request|cr)\s+status\b/i.test(q)) ||
     q.includes("change request status") ||
-    q.includes("cr status");
+    (objectId && q.includes("cr status")) ||
+    /details\s+of\s+(?:the\s+)?(?:change request|cr)\b/i.test(q);
 
   const wantsCrList =
     q.includes("list change requests") ||
@@ -518,6 +530,21 @@ function keywordFallback(query) {
     });
   }
 
+  if (mentionsCr && wantsCrDetailView) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "get_change_request_details",
+      confidence: 0.94,
+      reason: "Matched SolMan CR detail/status keywords",
+      source: "keyword",
+      entities: {
+        objectId,
+        processType,
+      },
+    });
+  }
+
   if (mentionsCr && wantsCrList) {
     return normalizeRoutingResult({
       system: "solman",
@@ -531,21 +558,6 @@ function keywordFallback(query) {
         toDate,
         processType,
         triggerAll: "X",
-      },
-    });
-  }
-
-  if (mentionsCr && wantsCrDetailView) {
-    return normalizeRoutingResult({
-      system: "solman",
-      module: "charm",
-      intent: "get_change_request_details",
-      confidence: 0.94,
-      reason: "Matched SolMan CR detail/status keywords",
-      source: "keyword",
-      entities: {
-        objectId,
-        processType,
       },
     });
   }

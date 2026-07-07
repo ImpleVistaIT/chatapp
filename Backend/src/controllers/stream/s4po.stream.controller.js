@@ -27,6 +27,11 @@ import {
 import { loadLastAssistantMemory } from "../_chat/memory.js";
 import { isNextIntent, parseNextCount } from "../_chat/pagination.js";
 
+function getDeploymentOwner(baseOwner = "local") {
+  const scope = String(process.env.MONGODB_DB_NAME || process.env.APP_NAMESPACE || "").trim();
+  return scope ? `${baseOwner}:${scope}` : baseOwner;
+}
+
 export function applyPoNextContinuationState({ query, extracted, previousMemory }) {
   const nextIntent = isNextIntent(query);
   const requestedNextCount = parseNextCount(query);
@@ -620,13 +625,13 @@ export async function handleS4poChatStream({
   const service = await step("load SapServiceMap", async () => {
     return (
       (await SapServiceMap.findOne({
-        owner: "local",
+        owner: getDeploymentOwner("local"),
         systemId: actualSystemId,
         serviceName: serviceIntent.serviceName,
         entitySet: serviceIntent.entitySet,
       }).lean()) ||
       (await SapServiceMap.findOne({
-        owner: "local",
+        owner: getDeploymentOwner("local"),
         systemId: routingSystemId,
         serviceName: serviceIntent.serviceName,
         entitySet: serviceIntent.entitySet,

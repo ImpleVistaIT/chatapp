@@ -14,6 +14,11 @@ import { fetchFromSap } from "../sap.service.js";
 import { buildEntitySetQuery, normalizeNumericId } from "../odataQueryBuilder.js";
 import { SapServiceMap } from "../../models/SapServiceMap.model.js";
 
+function getDeploymentOwner(baseOwner = "local") {
+  const scope = String(process.env.MONGODB_DB_NAME || process.env.APP_NAMESPACE || "").trim();
+  return scope ? `${baseOwner}:${scope}` : baseOwner;
+}
+
 function hasDateFilter(filters) {
   return (Array.isArray(filters) ? filters : []).some((filter) => {
     if (!filter || typeof filter !== "object") return false;
@@ -425,7 +430,7 @@ async function executeS4hanaListPurchaseOrders({ payload, req }) {
   });
 
   const service = await SapServiceMap.findOne({
-    owner: "local",
+    owner: getDeploymentOwner("local"),
     systemId,
     serviceType: "PO",
   }).lean();

@@ -14,6 +14,11 @@ import { buildSapLoginRequest } from "../config/sap.config.js";
 
 export const sapRoutes = express.Router();
 
+function getDeploymentOwner(baseOwner = "local") {
+  const scope = String(process.env.MONGODB_DB_NAME || process.env.APP_NAMESPACE || "").trim();
+  return scope ? `${baseOwner}:${scope}` : baseOwner;
+}
+
 function getOwner(req) {
   const owner = String(req.user?.id || "").trim();
   if (!owner) {
@@ -656,7 +661,7 @@ sapRoutes.post("/credentials", async (req, res, next) => {
         }
       } else {
         const authOverride = { username: sapUser, password: sapPassword };
-        const maps = await SapServiceMap.find({ owner: "local", systemId }).lean();
+        const maps = await SapServiceMap.find({ owner: { $in: [getDeploymentOwner("local"), "local"] }, systemId }).lean();
 
         if (!maps || maps.length === 0) {
           return res.status(400).json({
@@ -789,7 +794,7 @@ sapRoutes.post("/connect", async (req, res, next) => {
 
     const sys = await SapSystem.findOne({
       systemId,
-      owner: { $in: [owner, "local"] },
+      owner: { $in: [owner, "local", getDeploymentOwner("local")] },
     }).lean();
 
     if (!sys) {
@@ -854,8 +859,8 @@ sapRoutes.post("/connect", async (req, res, next) => {
         }
       } else {
         const svc =
-          (await SapServiceMap.findOne({ owner: "local", systemId, serviceType: "PO" }).lean()) ||
-          (await SapServiceMap.findOne({ owner: "local", systemId, serviceType: "SO" }).lean());
+          (await SapServiceMap.findOne({ owner: { $in: [getDeploymentOwner("local"), "local"] }, systemId, serviceType: "PO" }).lean()) ||
+          (await SapServiceMap.findOne({ owner: { $in: [getDeploymentOwner("local"), "local"] }, systemId, serviceType: "SO" }).lean());
 
         if (!svc) {
           return res.status(400).json({

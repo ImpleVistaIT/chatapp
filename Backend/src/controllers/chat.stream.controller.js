@@ -40,6 +40,15 @@ function isLandscapeOnlyQuery(query) {
   return ["ROW", "INDIA", "PRD", "QAS", "DEV", "QA", "UAT", "PROD"].includes(q);
 }
 
+function extractCrNumber(query = "") {
+  const text = String(query || "");
+  const explicit = text.match(/\b(?:cr|change request)\s*(?:number\s*)?(\d{6,20})\b/i);
+  if (explicit) return explicit[1];
+
+  const fallback = text.match(/\b(8\d{9,})\b/);
+  return fallback ? fallback[1] : "";
+}
+
 function isPurchaseOrderQuery(query) {
   const q = cleanString(query).toLowerCase();
   if (!q) return false;
@@ -607,6 +616,14 @@ export async function handleChatStream(req, res) {
 
     if (shouldRestorePendingSolman) {
       const pendingFilters = effectivePendingAction?.filters || {};
+      const restoredOriginalQuery = cleanString(effectivePendingAction?.query) || rawQuery || "show cr list";
+
+      const restoredPromptClassification = await step(
+        "classifyRestoredSolmanPrompt",
+        () => classifyPrompt({ query: restoredOriginalQuery, sessionContext: null })
+      );
+
+      const restoredIntent = cleanString(restoredPromptClassification?.intent || pendingIntent) || pendingIntent;
 
       const restoredScope = queryIsLandscapeOnly
         ? rawQuery.toUpperCase()
@@ -619,7 +636,8 @@ export async function handleChatStream(req, res) {
       console.log("[SSE] restoring pending SolMan action:", {
         businessScope: restoredScope,
         processType: restoredProcessType,
-        originalQuery: effectivePendingAction?.query,
+        originalQuery: restoredOriginalQuery,
+        restoredIntent,
         queryIsNextPage,
         queryIsLandscapeOnly,
       });
@@ -628,13 +646,13 @@ export async function handleChatStream(req, res) {
         "resolveTargetSystem (restored SolMan)",
         () =>
           resolveTargetSystem({
-            query: cleanString(effectivePendingAction?.query) || "show cr list",
+            query: restoredOriginalQuery,
             classified: {
               system: "solman",
-              intent: pendingIntent,
+              intent: restoredIntent,
               routing: {
                 system: "solman",
-                intent: pendingIntent,
+                intent: restoredIntent,
               },
             },
             requestedSystemId: cleanString(effectivePendingAction?.systemId) || systemId,
@@ -686,50 +704,68 @@ export async function handleChatStream(req, res) {
       const restoredQuery = resolveRestoredSolmanQuery({
         queryIsNextPage,
         queryIsLandscapeOnly,
-        effectivePendingActionQuery: effectivePendingAction?.query,
+        effectivePendingActionQuery: restoredOriginalQuery,
         rawQuery,
         effectiveQuery,
       });
 
-      const restoredClassified = {
-        intent: pendingIntent,
-        system: "solman",
-        entities: {
-          businessScope:
-            restoredScope ||
-            cleanString(pendingFilters.businessScope),
-          processType:
-            restoredProcessType ||
-            cleanString(pendingFilters.processType),
-          status: cleanString(pendingFilters.status),
-          dateText: cleanString(restoredQuery),
-          triggerAll: cleanString(pendingFilters.triggerAll || "X") || "X",
-          createdBy: cleanString(pendingFilters.createdBy),
-          createdByMode: cleanString(pendingFilters.createdByMode),
-          top: queryIsNextPage ? null : null,
-          skip: queryIsNextPage
-            ? pendingFilters.nextSkip ?? pendingFilters.skip ?? 0
-            : pendingFilters.skip ?? 0,
-          nextSkip: pendingFilters.nextSkip ?? 0,
-          displayOffset: queryIsNextPage
-            ? pendingFilters.nextDisplayOffset ?? pendingFilters.displayOffset ?? 0
-            : pendingFilters.displayOffset ?? 0,
-          nextDisplayOffset: pendingFilters.nextDisplayOffset ?? pendingFilters.displayOffset ?? 0,
-          orderBy:
-            cleanString(pendingFilters.orderBy || "CREATED_ON desc") ||
-            "CREATED_ON desc",
-          fromDate: "",
-          toDate: "",
-          statusMode: cleanString(pendingFilters.statusMode),
-          excludeStatuses: Array.isArray(pendingFilters.excludeStatuses)
-            ? pendingFilters.excludeStatuses
-            : [],
-        },
-      };
+      const crNumber =
+        cleanString(restoredPromptClassification?.entities?.objectId) ||
+        cleanString(restoredPromptClassification?.entities?.OBJECT_ID) ||
+        extractCrNumber(restoredOriginalQuery);
 
-      if (queryIsLandscapeOnly && !restoredClassified.entities.processType) {
-        restoredClassified.entities.processType = scopeToProcessType(restoredScope);
+      const restoredEntities =
+        restoredIntent === "get_change_request_details"
+          ? {
+              objectId: crNumber,
+              processType:
+                cleanString(restoredPromptClassification?.entities?.processType) ||
+                cleanString(restoredPromptClassification?.entities?.PROCESS_TYPE) ||
+                cleanString(pendingFilters.processType) ||
+                scopeToProcessType(restoredScope),
+              businessScope: cleanString(restoredPromptClassification?.entities?.businessScope) || cleanString(restoredScope),
+            }
+          : {
+              businessScope:
+                restoredScope ||
+                cleanString(pendingFilters.businessScope),
+              processType:
+                restoredProcessType ||
+                cleanString(pendingFilters.processType),
+              status: cleanString(pendingFilters.status),
+              dateText: cleanString(restoredQuery),
+              triggerAll: cleanString(pendingFilters.triggerAll || "X") || "X",
+              createdBy: cleanString(pendingFilters.createdBy),
+              createdByMode: cleanString(pendingFilters.createdByMode),
+              top: queryIsNextPage ? null : null,
+              skip: queryIsNextPage
+                ? pendingFilters.nextSkip ?? pendingFilters.skip ?? 0
+                : pendingFilters.skip ?? 0,
+              nextSkip: pendingFilters.nextSkip ?? 0,
+              displayOffset: queryIsNextPage
+                ? pendingFilters.nextDisplayOffset ?? pendingFilters.displayOffset ?? 0
+                : pendingFilters.displayOffset ?? 0,
+              nextDisplayOffset: pendingFilters.nextDisplayOffset ?? pendingFilters.displayOffset ?? 0,
+              orderBy:
+                cleanString(pendingFilters.orderBy || "CREATED_ON desc") ||
+                "CREATED_ON desc",
+              fromDate: "",
+              toDate: "",
+              statusMode: cleanString(pendingFilters.statusMode),
+              excludeStatuses: Array.isArray(pendingFilters.excludeStatuses)
+                ? pendingFilters.excludeStatuses
+                : [],
+            };
+
+      if (queryIsLandscapeOnly && restoredIntent !== "get_change_request_details" && !restoredEntities.processType) {
+        restoredEntities.processType = scopeToProcessType(restoredScope);
       }
+
+      const restoredClassified = {
+        intent: restoredIntent,
+        system: "solman",
+        entities: restoredEntities,
+      };
 
       console.log("[SSE] dispatching restored pending action to SolMan stream handler");
 
