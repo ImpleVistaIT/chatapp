@@ -362,10 +362,9 @@ export async function handleCrCreatedBy(context) {
 
   let rows = toCrDetailsArray(result);
   const rawRowCount = Array.isArray(rows) ? rows.length : 0;
-  rows = dedupeRowsByCrNumber(rows);
 
   if (isSelfRequest && rows.length === 0 && Array.isArray(result?.result?.results)) {
-    rows = dedupeRowsByCrNumber(result.result.results);
+    rows = Array.isArray(result.result.results) ? result.result.results : [];
   }
 
   const responseTop = result?.result?.top ?? listInput.top ?? null;

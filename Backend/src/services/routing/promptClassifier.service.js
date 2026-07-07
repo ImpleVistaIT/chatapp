@@ -4,6 +4,7 @@ import { ROUTING_CONFIG } from "../../config/routing.config.js";
 import { normalizeRoutingResult } from "../../config/routing.schema.js";
 import { isSupportedIntent } from "../../config/routing.registry.js";
 import { detectTransportQueryIntent } from "./detectors/genericRuleDetector.js";
+import { inferCrCreatedByIntent } from "../../controllers/stream/solman/solman.shared.js";
 
 function normalizeSystem(value) {
   const v = String(value || "").trim().toLowerCase();
@@ -415,6 +416,17 @@ function normalizeEntitiesByIntent(intent, rawEntities = {}, queryText = "") {
     case "list_change_requests":
       return normalizeListChangeRequestEntities(raw);
 
+    case "list_change_requests_by_created_by": {
+      const listEntities = normalizeListChangeRequestEntities(raw);
+      const inferredCreatedBy = inferCrCreatedByIntent(queryText, raw);
+
+      return {
+        ...listEntities,
+        createdBy: cleanString(raw.createdBy || raw.CREATED_BY || inferredCreatedBy?.createdBy || ""),
+        createdByMode: cleanString(raw.createdByMode || inferredCreatedBy?.createdByMode || ""),
+      };
+    }
+
     case "cr_status_distribution":
       return normalizeCrStatusDistributionEntities(raw);
 
@@ -461,6 +473,8 @@ function keywordFallback(query) {
   const mentionsCr =
     q.includes("change request") ||
     /\bcr\b/.test(q);
+
+  const createdByIntent = inferCrCreatedByIntent(query);
 
   const wantsCrRetrieval = mentionsCr && (hasRetrievalVerb(q) || hasListFilterCue(q));
 
@@ -512,6 +526,22 @@ function keywordFallback(query) {
     q.includes("browse crs") ||
     q.includes("browse change requests") ||
     wantsCrRetrieval;
+
+  if (mentionsCr && createdByIntent?.intent === "list_change_requests_by_created_by") {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "list_change_requests_by_created_by",
+      confidence: 0.92,
+      reason: "Matched SolMan created-by list keywords",
+      source: "keyword",
+      entities: normalizeEntitiesByIntent(
+        "list_change_requests_by_created_by",
+        createdByIntent,
+        query
+      ),
+    });
+  }
 
   if (wantsCrAnalytics) {
     return normalizeRoutingResult({
@@ -664,8 +694,25 @@ export async function classifyPrompt({ query, sessionContext = null }) {
     });
   }
 
+  const createdByLikeIntent = inferCrCreatedByIntent(query);
   const listLikeIntent = detectListChangeRequestIntent(query);
   const createLikeIntent = detectCreateChangeRequestIntent(query);
+
+  if (createdByLikeIntent?.intent === "list_change_requests_by_created_by") {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "list_change_requests_by_created_by",
+      confidence: 0.95,
+      reason: "Matched SolMan created-by retrieval intent from natural language",
+      source: "rule",
+      entities: normalizeEntitiesByIntent(
+        "list_change_requests_by_created_by",
+        createdByLikeIntent,
+        query
+      ),
+    });
+  }
 
   if (createLikeIntent) {
     return normalizeRoutingResult({

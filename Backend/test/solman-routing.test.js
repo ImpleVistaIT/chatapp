@@ -10,6 +10,7 @@ import {
   inferCrStatusFilterFromQuery,
   inferRequestedTop,
 } from "../src/controllers/stream/solman/solman.shared.js";
+import { getWeekDateRange } from "../src/services/filters/dateFilters.js";
 import {
   isSolmanCrQuery,
   isValidSolmanPendingAction,
@@ -145,6 +146,25 @@ test("open CR prompts route to list_change_requests instead of create", async ()
   assert.equal(result.intent, "list_change_requests");
 });
 
+test("created-by CR prompts route to list_change_requests_by_created_by", async () => {
+  const phrases = [
+    "List my CRs",
+    "Display all CRs I created",
+    "Retrieve my CRs",
+    "Show my submitted change requests",
+    "Show my CR list",
+    "Display my CRs",
+  ];
+
+  for (const query of phrases) {
+    const result = await classifyPrompt({ query });
+
+    assert.equal(result.system, "solman", query);
+    assert.equal(result.module, "charm", query);
+    assert.equal(result.intent, "list_change_requests_by_created_by", query);
+  }
+});
+
 test("plain CR status prompts stay on the list flow", async () => {
   const result = await classifyPrompt({ query: "show CR status" });
 
@@ -255,6 +275,44 @@ test("SolMan date parser supports today yesterday and last N days", () => {
   const start30Ymd = `${start30.getFullYear()}${String(start30.getMonth() + 1).padStart(2, "0")}${String(start30.getDate()).padStart(2, "0")}`;
   assert.equal(last30?.fromDate, start30Ymd);
   assert.equal(last30?.toDate, ymd);
+
+  const past14 = inferDateRangeFromQuery("show CRs past 14 days");
+  const start14 = new Date(today);
+  start14.setDate(start14.getDate() - 14);
+  const start14Ymd = `${start14.getFullYear()}${String(start14.getMonth() + 1).padStart(2, "0")}${String(start14.getDate()).padStart(2, "0")}`;
+  assert.equal(past14?.fromDate, start14Ymd);
+  assert.equal(past14?.toDate, ymd);
+});
+
+test("SolMan date parser supports current week month and year phrasing", () => {
+  const today = new Date();
+  const todayYmd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+
+  const currentWeek = inferDateRangeFromQuery("show CRs in the current week");
+  const weekRange = getWeekDateRange(new Date(today), 0);
+  const weekStart = `${weekRange.startOfWeek.getFullYear()}${String(weekRange.startOfWeek.getMonth() + 1).padStart(2, "0")}${String(weekRange.startOfWeek.getDate()).padStart(2, "0")}`;
+  const weekEnd = `${weekRange.endOfWeek.getFullYear()}${String(weekRange.endOfWeek.getMonth() + 1).padStart(2, "0")}${String(weekRange.endOfWeek.getDate()).padStart(2, "0")}`;
+  assert.equal(currentWeek?.fromDate, weekStart);
+  assert.equal(currentWeek?.toDate, weekEnd);
+  assert.equal(currentWeek?.granularity, "week");
+
+  const currentMonth = inferDateRangeFromQuery("show CRs for the current month");
+  assert.equal(currentMonth?.fromDate, `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}01`);
+  assert.equal(currentMonth?.toDate, todayYmd);
+  assert.equal(currentMonth?.granularity, "month");
+
+  const currentYear = inferDateRangeFromQuery("show CRs for the current year");
+  assert.equal(currentYear?.fromDate, `${today.getFullYear()}0101`);
+  assert.equal(currentYear?.toDate, todayYmd);
+  assert.equal(currentYear?.granularity, "year");
+});
+
+test("SolMan date parser supports single from date prompts", () => {
+  const fromDate = inferDateRangeFromQuery("list CRs from 2026-06-14");
+
+  assert.equal(fromDate?.fromDate, "20260614");
+  assert.equal(fromDate?.toDate, `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, "0")}${String(new Date().getDate()).padStart(2, "0")}`);
+  assert.equal(fromDate?.granularity, "range");
 });
 
 test("SolMan date parser matches the requested relative-period phrases", () => {

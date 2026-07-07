@@ -11,6 +11,8 @@ function normalizeSolmanQueryText(query = "") {
     .toLowerCase()
     .replace(/\bc\.?r\.?['’]?s?\b/g, "cr")
     .replace(/\bchange requests?\b/g, "cr")
+    .replace(/\bcurrent\b/g, "this")
+    .replace(/\bpast\b/g, "last")
     .replace(/\brejected\b/g, "withdrawn")
     .replace(/\s+/g, " ")
     .trim();
@@ -625,6 +627,27 @@ export function inferDateRangeFromQuery(query = "") {
     return makeDatePeriod("day", startOfDay(directDate), startOfDay(directDate));
   }
 
+  const singleDatePrefixMatch = cleanQuery.match(/\b(from|since|after|on)\s+(.+)/);
+  if (singleDatePrefixMatch) {
+    const prefix = singleDatePrefixMatch[1];
+    const suffix = cleanString(singleDatePrefixMatch[2]);
+
+    if (!/\b(?:to|and)\b|\bto\s+\d|\b-\s+\d/.test(suffix)) {
+      const candidate = findDateCandidate(suffix) || suffix;
+      const parsed = parseUserDate(candidate);
+
+      if (parsed) {
+        if (prefix === "on") {
+          return makeDatePeriod("date", startOfDay(parsed), startOfDay(parsed));
+        }
+
+        const adjustedFrom = prefix === "after" ? addDays(startOfDay(parsed), 1) : startOfDay(parsed);
+        const normalized = normalizeDateRange(adjustedFrom, today);
+        return makeDatePeriod("range", ymdStringToDate(normalized.fromDate), ymdStringToDate(normalized.toDate));
+      }
+    }
+  }
+
   const plainYearMatch = cleanQuery.match(/\b(?:in\s+the\s+year\s+of|year\s+of|for|in)\s+(20\d{2})\b/);
   if (plainYearMatch && /\b(cr|change request|status)\b/.test(q)) {
     const year = Number(plainYearMatch[1]);
@@ -831,6 +854,8 @@ export function inferCrListIntent(classified, query = "") {
     /\blast\s+\d+\s+cr\b/.test(q) ||
     /\blast\s+\d+\s+cr\s+status\b/.test(q) ||
     /\bcreated in this week\b/.test(q) ||
+    /\bcreated in this month\b/.test(q) ||
+    /\bcreated in this year\b/.test(q) ||
     /\bcreated from\b/.test(q) ||
     /\bcreated by me\b/.test(q) ||
     /\bcreated by\b/.test(q) ||
@@ -885,26 +910,21 @@ export function inferCrCreatedByIntent(query = "", raw = {}) {
   if (
     /\bcreated by me\b/.test(q) ||
     /\bcreated by myself\b/.test(q) ||
-    /\bshow my cr\b/.test(q) ||
-    /\bshow my crs\b/.test(q) ||
-    /\bmy cr\b/.test(q) ||
-    /\bmy crs\b/.test(q) ||
-    /\bmy change request\b/.test(q) ||
-    /\bmy change requests\b/.test(q)
+    /\b(?:show|list|display|retrieve|get)\s+my\s+crs?\b/.test(q) ||
+    /\b(?:show|list|display|retrieve|get)\s+my\s+change requests?\b/.test(q) ||
+    /\b(?:show|list|display|retrieve|get)\s+my\s+submitted change requests?\b/.test(q) ||
+    /\b(?:show|list|display|retrieve|get)\s+all\s+crs?\s+i\s+created\b/.test(q) ||
+    /\bmy\s+crs?\b/.test(q) ||
+    /\bmy\s+change requests?\b/.test(q) ||
+    /\bmy\s+submitted change requests?\b/.test(q) ||
+    /\bsubmitted change requests?\b/.test(q) ||
+    /\bcrs?\s+i\s+created\b/.test(q) ||
+    /\bchange requests?\s+i\s+created\b/.test(q)
   ) {
     return {
       intent: "list_change_requests_by_created_by",
       createdBy: "ME",
       createdByMode: "self",
-    };
-  }
-
-  const createdByMatch = q.match(/\bcreated by\s+([a-z0-9._-]+)\b/i);
-  if (createdByMatch) {
-    return {
-      intent: "list_change_requests_by_created_by",
-      createdBy: normalizeSapUsername(createdByMatch[1]),
-      createdByMode: "explicit",
     };
   }
 

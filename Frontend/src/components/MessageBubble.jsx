@@ -346,15 +346,7 @@ function formatSolmanDate(value = "") {
 }
 
 function dedupeSolmanRecords(rows = []) {
-  const seen = new Set();
-
-  return (Array.isArray(rows) ? rows : []).filter((row, index) => {
-    const key = String(row?.OBJECT_ID || row?.OBJ_ID || row?.CR_NUMBER || row?.CR_NO || "").trim();
-    if (!key) return true;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return Array.isArray(rows) ? rows : [];
 }
 
 function buildSolmanStatusDistribution(rows = []) {
@@ -525,7 +517,12 @@ export default function MessageBubble({
     setAllCRRecords(sourceRows);
     setSelectedStatus("");
     setStatusDistribution(isSolmanStatusResponse ? buildSolmanStatusDistribution(sourceRows) : null);
-    setVisibleRecordCount(INITIAL_CR_BATCH_SIZE);
+
+    if (isSolmanListResponse) {
+      setVisibleRecordCount(sourceRows.length);
+    } else {
+      setVisibleRecordCount(INITIAL_CR_BATCH_SIZE);
+    }
   }, [data, isSolmanCollectionResponse, isSolmanStatusResponse]);
 
   const statusFilteredRecords = useMemo(() => {
@@ -552,8 +549,9 @@ export default function MessageBubble({
   }, [appliedSearch, hasAppliedSearch, statusFilteredRecords]);
 
   useEffect(() => {
-    if (!isSolmanStatusResponse) return;
-    setVisibleRecordCount(INITIAL_CR_BATCH_SIZE);
+    if (isSolmanStatusResponse) {
+      setVisibleRecordCount(INITIAL_CR_BATCH_SIZE);
+    }
   }, [appliedSearch, isSolmanStatusResponse, selectedStatus]);
 
   const selectedStatusEntry = useMemo(() => {

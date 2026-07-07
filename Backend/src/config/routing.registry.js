@@ -71,6 +71,14 @@ export const ROUTING_INTENT_REGISTRY = {
         executor: "solman.charm.listChangeRequests",
       },
 
+      list_change_requests_by_created_by: {
+        label: "List change requests by created by",
+        action: "execute_api",
+        requiredInputs: ["fromDate", "toDate"],
+        entityHints: ["fromDate", "toDate", "processType", "triggerAll", "createdBy", "createdByMode"],
+        executor: "solman.charm.listChangeRequestsByCreatedBy",
+      },
+
       cr_status_distribution: {
         label: "CR status distribution",
         action: "execute_api",

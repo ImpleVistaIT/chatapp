@@ -1,11 +1,17 @@
 import { postToSap } from "../../sap/sapWrite.service.js";
 import { fetchFromSap } from "../../sap.service.js";
 import { SapServiceMap } from "../../../models/SapServiceMap.model.js";
+import { SapServiceCatalog } from "../../../models/SapServiceCatalog.model.js";
 import { verifyEntitySetInMetadata } from "../../allowlist.service.js";
 import { inferDateRangeFromQuery as inferSolmanDateRangeFromQuery } from "../../../controllers/stream/solman/solman.shared.js";
 
 function cleanString(v) {
   return String(v || "").trim();
+}
+
+function getDeploymentOwner(baseOwner = "local") {
+  const scope = String(process.env.MONGODB_DB_NAME || process.env.APP_NAMESPACE || "").trim();
+  return scope ? `${baseOwner}:${scope}` : baseOwner;
 }
 
 function escapeODataString(value) {
@@ -190,6 +196,55 @@ function isTransientSapNetworkError(err) {
 
 async function resolveSolmanDataServiceName({ owner, systemId }) {
   const sid = cleanString(systemId).toUpperCase();
+  const deploymentOwner = getDeploymentOwner("local");
+  const activeCatalogEntries = await SapServiceCatalog.find({
+    owner: { $in: [owner, "local", deploymentOwner] },
+    systemId: sid,
+    isActive: true,
+  })
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  const activeCatalogEntry = activeCatalogEntries.find((entry) => {
+    const searchText = [
+      entry?.serviceName,
+      entry?.entitySet,
+      entry?.entityTypeName,
+      entry?.labelsText,
+      Array.isArray(entry?.domainHints) ? entry.domainHints.join(" ") : "",
+      Array.isArray(entry?.keys) ? entry.keys.join(" ") : "",
+      Array.isArray(entry?.fields)
+        ? entry.fields.map((field) => `${field?.name || ""} ${field?.label || ""}`).join(" ")
+        : "",
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .join(" ");
+
+    return /\b(zcr|zchange|charm|change request|change request.*status|cr)\b/i.test(searchText);
+  }) || null;
+
+  const catalogServiceName = cleanString(activeCatalogEntry?.serviceName);
+  if (catalogServiceName) {
+    console.log("[SOLMAN] using active catalog CR service name:", {
+      owner,
+      systemId: sid,
+      serviceName: catalogServiceName,
+      entitySet: cleanString(activeCatalogEntry?.entitySet),
+      entityTypeName: cleanString(activeCatalogEntry?.entityTypeName),
+    });
+    return catalogServiceName;
+  }
+
+  const systemConfigured = cleanString(process.env[`DEFAULT_SOLMAN_CR_SERVICE_NAME_${sid}`] || "");
+  if (systemConfigured) {
+    console.log("[SOLMAN] using system-specific configured CR service name:", {
+      owner,
+      systemId: sid,
+      serviceName: systemConfigured,
+    });
+    return systemConfigured;
+  }
+
   const configured = cleanString(process.env.DEFAULT_SOLMAN_CR_SERVICE_NAME || "ZCR_DETAILS_SRV");
 
   if (configured) {
@@ -206,7 +261,7 @@ async function resolveSolmanDataServiceName({ owner, systemId }) {
     .lean();
 
   const fallbackCandidate =
-    serviceMaps.find((service) => /zcr|charm|cr/i.test(cleanString(service?.serviceName))) || serviceMaps[0] || null;
+    serviceMaps.find((service) => /\b(zcr|zchange|charm|cr)\b/i.test(cleanString(service?.serviceName))) || null;
 
   const mappedServiceName = cleanString(fallbackCandidate?.serviceName);
   if (mappedServiceName) {
@@ -410,6 +465,10 @@ function buildCrListRelativePath({
   if (resolved?.from && resolved?.to) {
     parts.push(`FROM_DATE eq '${escapeODataString(resolved.from)}'`);
     parts.push(`TO_DATE eq '${escapeODataString(resolved.to)}'`);
+  }
+
+  if (cleanCreatedBy) {
+    parts.push(`CREATED_BY eq '${escapeODataString(cleanCreatedBy)}'`);
   }
 
   const params = [`$filter=${encodeURIComponent(parts.join(" and "))}`];

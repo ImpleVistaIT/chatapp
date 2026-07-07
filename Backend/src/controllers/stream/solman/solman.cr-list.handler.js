@@ -404,7 +404,7 @@ export async function handleCrList(context) {
   }
 
   const rawRows = toCrDetailsArray(result);
-  const rows = dedupeByCrNumber(rawRows);
+  const rows = Array.isArray(rawRows) ? rawRows : [];
   const responseTop = result?.result?.top ?? listInput.top ?? null;
   const responseSkip = result?.result?.skip ?? listInput.skip ?? 0;
   const rawRowCount = Array.isArray(rawRows) ? rawRows.length : 0;
