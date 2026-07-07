@@ -2,6 +2,7 @@ import { FiMic, FiMicOff, FiSend, FiSquare } from "react-icons/fi";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { toast } from "react-hot-toast";
 import { authFetch } from "../api/authFetch";
+import { API_BASE } from "../api/client";
 
 import ChatHeader from "./chat/ChatHeader.jsx";
 import ChatScreen from "./chat/ChatScreen.jsx";
@@ -124,9 +125,7 @@ export default function ChatWindow({
   const [connectingSystemId, setConnectingSystemId] = useState(null);
   const [localConnectedSession, setLocalConnectedSession] = useState(null);
 
-  const apiBase =
-    import.meta.env.VITE_API_BASE_URL ||
-    `${window.location.protocol}//${window.location.hostname}:3000`;
+  const apiBase = API_BASE;
 
   const normalizeSystemId = useCallback((sid) => String(sid || "").trim().toUpperCase(), []);
 

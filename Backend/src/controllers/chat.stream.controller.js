@@ -637,7 +637,7 @@ export async function handleChatStream(req, res) {
                 intent: pendingIntent,
               },
             },
-            requestedSystemId: systemId,
+            requestedSystemId: cleanString(effectivePendingAction?.systemId) || systemId,
             availableSystems: effectiveAvailableSystems,
           })
       );

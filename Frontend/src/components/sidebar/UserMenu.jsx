@@ -1,5 +1,6 @@
 import userImg from "../../assets/user.png";
 import SystemDetailsPanel from "./SystemDetailsPanel.jsx";
+import { FiPlus, FiSettings, FiShield, FiTrash2, FiUser } from "react-icons/fi";
 
 function classNames(...x) {
   return x.filter(Boolean).join(" ");
@@ -101,38 +102,37 @@ export default function UserMenu({
         system={activeTile}
       />
 
-      <div ref={menuRef} className="relative">
+      <div ref={menuRef} className="relative rounded-[18px] border border-slate-200 bg-white/90 p-3 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl">
         <button
           onClick={() => {
             if (!hasSelection && !isConnected) return;
             setUserMenuOpen((v) => !v);
           }}
           className={classNames(
-            "flex items-center gap-3 w-full text-left p-2 rounded-xl transition-all duration-150",
-            hasSelection || isConnected ? "hover:bg-gray-100" : "opacity-70 cursor-default"
+            "flex items-center gap-3 w-full text-left rounded-2xl p-0 transition-all duration-150",
+            hasSelection || isConnected ? "hover:bg-slate-50" : "opacity-70 cursor-default"
           )}
           type="button"
           disabled={!hasSelection && !isConnected}
           aria-disabled={!hasSelection && !isConnected}
         >
-          <img
-            src={userImg}
-            alt="user"
-            className="w-9 h-9 rounded-full object-cover flex-shrink-0"
-          />
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-sm">
+            <FiUser className="h-5 w-5" />
+          </div>
 
-          <div className="flex flex-col min-w-0 flex-1">
-            <span className="text-xs font-semibold text-zinc-800 truncate">
+          <div className="flex flex-col min-w-0 flex-1 text-left">
+            <span className="text-xs font-semibold text-slate-900 truncate">
               {primaryName}
             </span>
 
             <div className="flex items-center gap-1 mt-0.5">
-              <span className="text-[11px] text-zinc-500 truncate flex-1">
+              <span className="text-[11px] text-slate-500 truncate flex-1">
                 {secondaryLine}
               </span>
 
               {isActiveForSelected && isConnected && (
-                <span className="text-[9px] font-bold text-white bg-green-600 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                  <FiShield className="h-3 w-3" />
                   Active
                 </span>
               )}
@@ -142,7 +142,7 @@ export default function UserMenu({
           {(hasSelection || isConnected) && (
             <svg
               className={classNames(
-                "w-3.5 h-3.5 text-zinc-400 flex-shrink-0 transition-transform duration-200",
+                "w-3.5 h-3.5 text-slate-400 flex-shrink-0 transition-transform duration-200",
                 userMenuOpen ? "rotate-180" : ""
               )}
               viewBox="0 0 24 24"
@@ -158,15 +158,15 @@ export default function UserMenu({
         </button>
 
         {(hasSelection || isConnected) && userMenuOpen && (
-          <div className="absolute bottom-full left-0 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-50 mb-2">
-            <div className="px-4 py-3 border-b border-gray-100">
-              <div className="text-xs font-semibold text-zinc-800">{primaryName}</div>
-              <div className="text-[11px] text-gray-500">{secondaryLine}</div>
+          <div className="absolute bottom-full left-0 w-72 rounded-[20px] border border-slate-200 bg-white shadow-[0_20px_50px_rgba(15,23,42,0.14)] z-50 mb-2 overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-200 bg-slate-50">
+              <div className="text-xs font-semibold text-slate-900">{primaryName}</div>
+              <div className="text-[11px] text-slate-500">{secondaryLine}</div>
             </div>
 
             <div className="py-2 text-xs">
               <button
-                className="w-full text-left px-4 py-2 hover:bg-gray-50 text-zinc-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                className="w-full text-left px-4 py-2.5 hover:bg-slate-50 text-slate-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
                 onClick={() => {
                   setUserMenuOpen(false);
                   setShowSystemDetails(true);
@@ -175,22 +175,24 @@ export default function UserMenu({
                 disabled={!isConnected}
                 title={!isConnected ? "Connect to view system details" : "System Details"}
               >
+                <FiSettings className="h-3.5 w-3.5" />
                 System Details
               </button>
 
               <button
-                className="w-full text-left px-4 py-2 hover:bg-gray-50 text-zinc-700"
+                className="w-full text-left px-4 py-2.5 hover:bg-slate-50 text-slate-700 flex items-center gap-2"
                 onClick={() => {
                   onAddNewSystem?.();
                   setUserMenuOpen(false);
                 }}
                 type="button"
               >
+                <FiPlus className="h-3.5 w-3.5" />
                 Add System
               </button>
 
               <button
-                className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 disabled:opacity-60 disabled:cursor-not-allowed"
+                className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-red-600 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
                 onClick={() => {
                   setUserMenuOpen(false);
                   removeActiveSystem?.(activeSystemData);
@@ -199,6 +201,7 @@ export default function UserMenu({
                 disabled={!hasSelection}
                 title={!hasSelection ? "No system selected" : "Remove system"}
               >
+                <FiTrash2 className="h-3.5 w-3.5" />
                 Remove System
               </button>
             </div>

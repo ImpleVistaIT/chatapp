@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "../api/authFetch";
+import { API_BASE } from "../api/client";
 
 function clean(v) {
   return String(v || "").trim();
@@ -27,8 +28,7 @@ export default function SolmanCreateCrForm({
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
 
-  const apiBase =
-    import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+  const apiBase = API_BASE;
 
   useEffect(() => {
     const values =

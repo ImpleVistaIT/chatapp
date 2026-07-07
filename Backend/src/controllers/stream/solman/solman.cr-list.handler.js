@@ -289,6 +289,10 @@ export async function handleCrList(context) {
       pendingAction: {
         system: "solman",
         intent: "list_change_requests",
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
         query,
         filters: {
           businessScope: listInput.businessScope,
@@ -762,6 +766,8 @@ export async function handleCrList(context) {
   const persistedPendingAction = {
     system: "solman",
     intent: "list_change_requests",
+    systemId: effectiveSystemId,
+    sapUser: effectiveSapUser,
     query: listInput.dateText || query,
     filters: {
       businessScope: listInput.businessScope,

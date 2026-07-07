@@ -9,11 +9,45 @@
   #root {
     height: 100%;
     overflow: hidden !important;
+    background: #f8fafc;
   }
 
   body,
   * {
     font-family: "Inter", sans-serif !important;
+  }
+
+  body {
+    color: #0f172a;
+    background:
+      radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 34%),
+      radial-gradient(circle at top right, rgba(79, 70, 229, 0.08), transparent 28%),
+      #f8fafc;
+  }
+}
+
+@layer utilities {
+  .ai-shell {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.66), rgba(248, 250, 252, 0.94)),
+      #f8fafc;
+  }
+
+  .ai-surface {
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(226, 232, 240, 0.9);
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    backdrop-filter: blur(18px);
+  }
+
+  .ai-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  }
+
+  .ai-smooth {
+    transition: all 200ms ease;
   }
 }
 

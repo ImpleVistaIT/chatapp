@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import logoFull from "../assets/ImplevistaLogo.png";
 import { authFetch } from "../api/authFetch";
+import { API_BASE } from "../api/client";
 
 function normalizeSystemId(sid) {
   return String(sid || "").trim().toUpperCase();
@@ -32,9 +33,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
     setFadeIn(true);
   }, []);
 
-  const apiBase =
-    (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE_URL) ||
-    "http://localhost:3000";
+  const apiBase = API_BASE;
 
   // ----------------------------
   // System fields (generic)

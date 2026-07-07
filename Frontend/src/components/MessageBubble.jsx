@@ -683,7 +683,7 @@ export default function MessageBubble({
   if (isUser) {
     return (
       <div className="flex items-start justify-end w-full">
-        <div className="max-w-[85%] sm:max-w-[78%] break-words whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-blue-50 px-4 py-3 text-sm leading-relaxed text-blue-800 shadow-sm border border-blue-100">
+        <div className="max-w-[85%] sm:max-w-[78%] break-words whitespace-pre-wrap rounded-[18px] rounded-tr-sm bg-gradient-to-br from-blue-600 to-indigo-600 px-4 py-3 text-sm leading-relaxed text-white shadow-[0_8px_24px_rgba(15,23,42,0.08)] border border-blue-500/30">
           {text}
         </div>
       </div>
@@ -713,8 +713,8 @@ export default function MessageBubble({
             </div>
           )}
 
-          <div className="overflow-hidden rounded-2xl rounded-tl-sm border border-cyan-200 bg-white shadow-sm">
-            <div className="border-b border-cyan-100 bg-gradient-to-r from-cyan-50 to-white px-4 py-3">
+          <div className="overflow-hidden rounded-[18px] rounded-tl-sm border border-slate-200 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
+            <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white px-4 py-3">
               <div className="text-sm font-semibold text-slate-900">
                 CR Status Distribution
               </div>
@@ -780,8 +780,8 @@ export default function MessageBubble({
             </div>
           </div>
 
-          <div className="overflow-hidden rounded-2xl rounded-tl-sm border border-green-200 bg-green-50 shadow-sm">
-            <div className="flex flex-col gap-3 border-b border-green-100 bg-gradient-to-r from-green-100 to-green-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="overflow-hidden rounded-[18px] rounded-tl-sm border border-slate-200 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
+            <div className="flex flex-col gap-3 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-green-700">
                   Showing
@@ -798,7 +798,7 @@ export default function MessageBubble({
                 <button
                   type="button"
                   onClick={handleToggleSearchPanel}
-                  className="inline-flex items-center justify-center rounded-xl border border-green-300 bg-white p-2 text-green-800 transition hover:bg-green-50"
+                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-700 transition hover:bg-slate-50"
                   title={isSearchOpen ? "Hide search" : "Show search"}
                   aria-label={isSearchOpen ? "Hide search" : "Show search"}
                 >
@@ -809,7 +809,7 @@ export default function MessageBubble({
                   <button
                     type="button"
                     onClick={handleClearStatusFilter}
-                    className="inline-flex items-center justify-center rounded-xl border border-green-300 bg-white px-3 py-2 text-xs font-semibold text-green-800 transition hover:bg-green-50"
+                    className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
                   >
                     Clear Filter
                   </button>
@@ -818,7 +818,7 @@ export default function MessageBubble({
             </div>
 
             {isSearchOpen ? (
-              <div className="border-b border-green-100 bg-white px-4 py-4">
+              <div className="border-b border-slate-200 bg-white px-4 py-4">
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                   <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">
                     CR Number
@@ -833,7 +833,7 @@ export default function MessageBubble({
                         }))
                       }
                       placeholder="Enter CR number"
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-green-400 focus:bg-white focus:ring-2 focus:ring-green-400/20"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-500/10"
                     />
                   </label>
 
@@ -846,7 +846,7 @@ export default function MessageBubble({
                         setSearchDraft((current) => ({ ...current, shortDescription: e.target.value }))
                       }
                       placeholder="Enter description"
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-green-400 focus:bg-white focus:ring-2 focus:ring-green-400/20"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-500/10"
                     />
                   </label>
 
@@ -858,7 +858,7 @@ export default function MessageBubble({
                       onChange={(e) =>
                         setSearchDraft((current) => ({ ...current, createdOn: e.target.value }))
                       }
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-green-400 focus:bg-white focus:ring-2 focus:ring-green-400/20"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-500/10"
                     />
                   </label>
                 </div>
@@ -867,7 +867,7 @@ export default function MessageBubble({
                   <button
                     type="button"
                     onClick={handleApplySearch}
-                    className="inline-flex items-center justify-center rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-800"
+                    className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
                   >
                     Search
                   </button>
@@ -895,7 +895,7 @@ export default function MessageBubble({
                   forceGrid={true}
                 />
 
-                <div className="flex flex-col gap-2 border-t border-green-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-col gap-2 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="text-xs text-slate-600">
                     {hasMoreRecords
                       ? `${visibleCRRecords.length} of ${searchFilteredRecords.length} loaded`
@@ -906,7 +906,7 @@ export default function MessageBubble({
                     <button
                       type="button"
                       onClick={handleLoadMoreRecords}
-                      className="inline-flex items-center justify-center rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                       disabled={!hasMoreRecords}
                     >
                       Show More
@@ -1116,7 +1116,7 @@ export default function MessageBubble({
         <Avatar role={role} showAvatar={showAvatar} />
 
         <div className="max-w-[95%] sm:max-w-full min-w-0 overflow-hidden space-y-2">
-          <div className="rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-orange-50 shadow-sm">
+          <div className="rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-orange-50 shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
             <div className="flex items-start gap-3 px-4 py-4 sm:px-5">
               <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
                 <FiAlertTriangle className="text-lg" />
@@ -1172,14 +1172,14 @@ export default function MessageBubble({
         <div
           className={
             hasTable
-              ? "overflow-hidden rounded-2xl rounded-tl-sm bg-green-100 text-green-900 shadow-sm border border-green-200"
-              : "overflow-hidden rounded-2xl rounded-tl-sm bg-green-100 px-4 py-3 text-sm text-green-900 shadow-sm border border-green-200"
+              ? "overflow-hidden rounded-[18px] rounded-tl-sm bg-white text-slate-900 shadow-[0_8px_24px_rgba(15,23,42,0.08)] border border-slate-200"
+              : "overflow-hidden rounded-[18px] rounded-tl-sm bg-white px-4 py-3 text-sm text-slate-900 shadow-[0_8px_24px_rgba(15,23,42,0.08)] border border-slate-200"
           }
         >
           {hasTable ? (
             <>
               {isCapped && (
-                <div className="px-4 pt-3 text-xs text-zinc-700">
+                <div className="px-4 pt-3 text-xs text-slate-600">
                   Showing {cappedTo} of {totalRows} rows.
                   Refine your query (or use top 10).
                 </div>
@@ -1199,8 +1199,8 @@ export default function MessageBubble({
         </div>
 
         {genericChartView?.normalized ? (
-          <div className="mt-3 overflow-hidden rounded-2xl rounded-tl-sm border border-cyan-200 bg-white shadow-sm">
-            <div className="border-b border-cyan-100 px-4 py-3">
+          <div className="mt-3 overflow-hidden rounded-[18px] rounded-tl-sm border border-slate-200 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
+            <div className="border-b border-slate-200 px-4 py-3">
               <div className="text-sm font-semibold text-slate-900">
                 {genericChartView.normalized.title}
               </div>
@@ -1243,7 +1243,7 @@ export default function MessageBubble({
             </div>
           </div>
         ) : chartView?.error ? (
-          <div className="mt-3 rounded-2xl rounded-tl-sm border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
+          <div className="mt-3 rounded-[18px] rounded-tl-sm border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
             Chart unavailable for this result.
           </div>
         ) : null}
@@ -1259,7 +1259,7 @@ export default function MessageBubble({
                   key={idx}
                   type="button"
                   onClick={() => onSuggestionClick?.(suggestion)}
-                  className="px-4 py-1.5 text-xs bg-white text-black border border-dashed border-green-700 rounded-full transition hover:bg-green-50"
+                  className="px-4 py-1.5 text-xs bg-white text-slate-800 border border-dashed border-slate-300 rounded-full transition hover:bg-slate-50"
                 >
                   {label}
                 </button>

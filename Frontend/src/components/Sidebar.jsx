@@ -6,6 +6,8 @@ import sidebarclose from "../assets/sidebar-close.png";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { toast } from "react-hot-toast";
 import { authFetch } from "../api/authFetch";
+import { API_BASE } from "../api/client";
+import { FiChevronLeft, FiMenu, FiPlus } from "react-icons/fi";
 
 import CollapsedSidebar from "./sidebar/CollapsedSidebar.jsx";
 import SystemsGrid from "./sidebar/SystemsGrid.jsx";
@@ -50,7 +52,7 @@ function Sidebar({
   const chatMenuRef = useRef(null);
   const logoRef = useRef(null);
 
-  const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+  const apiBase = API_BASE;
 
   const [tiles, setTiles] = useState([]);
   const [sessions, setSessions] = useState([]);
@@ -632,15 +634,15 @@ function Sidebar({
 
       <aside
         className={classNames(
-          "z-50 flex flex-col border-r border-gray-200 bg-[#f3f4f6]",
+          "ai-surface z-50 flex flex-col border-r border-slate-200/80 bg-white/90",
           "fixed inset-y-0 left-0 md:static",
           "transform transition-all duration-300 ease-in-out",
           sidebarOpen ? "translate-x-0" : "-translate-x-full",
           "md:translate-x-0",
-          collapsed ? "w-16" : "w-72"
+          collapsed ? "w-18" : "w-80"
         )}
       >
-        <div className={classNames("flex items-center justify-between flex-shrink-0", collapsed ? "px-2 py-3" : "px-3 py-2")}>
+        <div className={classNames("flex items-center justify-between flex-shrink-0 border-b border-slate-200/80", collapsed ? "px-2 py-3" : "px-4 py-3")}>
           {collapsed ? (
             <div
               ref={logoRef}
@@ -648,43 +650,49 @@ function Sidebar({
               onMouseEnter={() => setShowCollapseBtn(true)}
               onMouseLeave={() => setShowCollapseBtn(false)}
             >
-              <img src={logoSmall} alt="logo" className="h-9 w-9 object-contain transition-all duration-300" />
+              <img src={logoSmall} alt="logo" className="h-10 w-10 rounded-2xl object-contain shadow-sm transition-all duration-300" />
               {showCollapseBtn && (
                 <button
                   onClick={() => setCollapsed(false)}
                   title="Expand sidebar"
-                  className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/20 hover:bg-gray-300 transition-all duration-150"
+                  className="absolute inset-0 flex items-center justify-center rounded-2xl bg-slate-900/10 text-slate-700 transition-all duration-150 hover:bg-slate-900/20"
                   type="button"
                 >
-                  <img src={sidebaropen} className="w-5 h-5 drop-shadow" alt="expand sidebar" />
+                  <FiMenu className="h-5 w-5" />
                 </button>
               )}
             </div>
           ) : (
             <>
-              <img src={logoFull} alt="logo" className="h-12 w-auto object-contain transition-all duration-300" />
+              <div className="flex items-center gap-3">
+                <img src={logoFull} alt="logo" className="h-12 w-auto object-contain transition-all duration-300" />
+                {/* <div className="hidden xl:block">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Workspace</div>
+                  <div className="text-sm font-semibold text-slate-900">Enterprise AI</div>
+                </div> */}
+              </div>
 
               <button
                 onClick={() => setCollapsed(true)}
                 title="Collapse sidebar"
-                className="hidden lg:flex p-2 rounded-lg hover:bg-gray-200 transition-colors duration-150"
+                className="hidden lg:flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-500 shadow-sm ai-smooth hover:bg-slate-50 hover:text-slate-800"
                 type="button"
               >
-                <img src={sidebarclose} className="w-5 h-5" alt="collapse sidebar" />
+                <FiChevronLeft className="h-4 w-4" />
               </button>
             </>
           )}
 
           <button
             onClick={() => setSidebarOpen(false)}
-            className="md:hidden rounded-xl px-3 py-3 border border-gray-300 hover:bg-gray-200"
+            className="md:hidden rounded-xl px-3 py-3 border border-slate-200 bg-white text-slate-600 shadow-sm ai-smooth hover:bg-slate-50"
             type="button"
           >
-            <img src={close} className="w-4 h-4" alt="close" />
+            <FiChevronLeft className="h-4 w-4" />
           </button>
         </div>
 
-        <div className={classNames("h-px bg-gray-200 flex-shrink-0", collapsed ? "mx-1" : "mx-3")} />
+        <div className={classNames("h-px bg-slate-200/80 flex-shrink-0", collapsed ? "mx-1" : "mx-4")} />
 
         <div className="flex-1 min-h-0 flex flex-col">
           {collapsed && (
@@ -728,9 +736,9 @@ function Sidebar({
               </div>
 
               <div className="flex-shrink-0 relative z-10">
-                <div className="mx-3 h-px bg-gray-200 flex-shrink-0" />
+                <div className="mx-4 h-px bg-slate-200/80 flex-shrink-0" />
 
-                <div className="px-4 pt-3 pb-2 text-[9px] font-semibold tracking-widest text-zinc-400 uppercase flex-shrink-0">
+                <div className="px-4 pt-4 pb-2 text-[10px] font-semibold tracking-[0.22em] text-slate-400 uppercase flex-shrink-0">
                   Systems
                 </div>
 
@@ -744,7 +752,7 @@ function Sidebar({
               </div>
 
               <div className="mt-auto relative z-10">
-                <div className="mx-3 h-px bg-gray-200 flex-shrink-0" />
+                <div className="mx-4 h-px bg-slate-200/80 flex-shrink-0" />
 
                 <UserMenu
                   menuRef={menuRef}

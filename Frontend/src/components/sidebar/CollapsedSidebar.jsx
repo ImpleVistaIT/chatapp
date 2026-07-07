@@ -2,6 +2,7 @@ import userImg from "../../assets/user.png";
 import newChatIcon from "../../assets/new-chat.png";
 import searchIcon from "../../assets/search.png";
 import plusIcon from "../../assets/plus.png";
+import { FiMessageSquare, FiPlus, FiSearch, FiUser } from "react-icons/fi";
 
 function CollapsedIconBtn({ onClick, tooltip, children }) {
   return (
@@ -64,19 +65,19 @@ export default function CollapsedSidebar({
       {/* TOP ICONS */}
       <div className="flex flex-col items-center gap-0.5 pt-2 pb-3 px-1">
         <CollapsedIconBtn onClick={onNewChatWithToast} tooltip="New chat">
-          <img src={newChatIcon} className="w-4 h-4" alt="new chat" />
+          <FiMessageSquare className="h-4 w-4" />
         </CollapsedIconBtn>
 
         <CollapsedIconBtn tooltip="Search chats">
-          <img src={searchIcon} className="w-4 h-4" alt="search" />
+          <FiSearch className="h-4 w-4" />
         </CollapsedIconBtn>
 
         <CollapsedIconBtn onClick={() => onAddNewSystem?.()} tooltip="Add new system">
-          <img src={plusIcon} className="w-4 h-4" alt="add new system" />
+          <FiPlus className="h-4 w-4" />
         </CollapsedIconBtn>
       </div>
 
-      <div className="h-px bg-gray-200 flex-shrink-0 mx-1" />
+      <div className="h-px bg-slate-200/80 flex-shrink-0 mx-1" />
 
       {/* BOTTOM USER */}
       <div className="mt-auto flex-shrink-0 p-2 flex justify-center">
@@ -84,7 +85,7 @@ export default function CollapsedSidebar({
           <img
             src={userImg}
             alt="user"
-            className="w-8 h-8 rounded-full object-cover cursor-pointer ring-2 ring-transparent hover:ring-gray-300 transition-all duration-150"
+            className="w-8 h-8 rounded-full object-cover cursor-pointer ring-2 ring-transparent hover:ring-slate-300 transition-all duration-150"
           />
 
           <div

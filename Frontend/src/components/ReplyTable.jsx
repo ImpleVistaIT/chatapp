@@ -105,7 +105,7 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
   return (
     <div className="w-full p-1">
       {forceGrid && hasHorizontalOverflow && (
-        <div className="mb-2 px-1 text-[11px] sm:text-xs text-green-800">
+        <div className="mb-2 px-1 text-[11px] sm:text-xs text-slate-500">
           Scroll horizontally to view all columns →
         </div>
       )}
@@ -114,12 +114,12 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
         <div ref={scrollAreaRef} className="w-full max-w-full overflow-x-auto scrollbar-none">
           <table className="w-max min-w-full text-left text-[11px] sm:text-xs border-collapse">
             {!isFallback && (
-              <thead className="bg-green-300 text-black font-semibold">
+              <thead className="bg-slate-900 text-white font-semibold">
                 <tr>
                   {visibleColumns.map((c) => (
                     <th
                       key={c}
-                      className="px-3 py-3 border border-green-200 whitespace-nowrap"
+                      className="px-3 py-3 border border-slate-800/80 whitespace-nowrap"
                     >
                       {labelMap[c] || c}
                     </th>
@@ -130,21 +130,18 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
 
             <tbody>
               {safeRows.map((row, idx) => (
-                <tr
-                  key={idx}
-                  className="bg-green-100 text-green-800 border-t border-green-200"
-                >
+                <tr key={idx} className="bg-white text-slate-700 border-t border-slate-200">
                   {!isFallback ? (
                     visibleColumns.map((c, colIdx) => (
                       <td
                         key={`${c}-${colIdx}`}
-                        className="px-3 py-3 whitespace-nowrap border border-green-200"
+                        className="px-3 py-3 whitespace-nowrap border border-slate-200"
                       >
                         {String(getColumnValue(row, c, colIdx) ?? "")}
                       </td>
                     ))
                   ) : (
-                    <td className="px-3 py-2 border border-green-200">
+                    <td className="px-3 py-2 border border-slate-200">
                       {row.Output || row.text || ""}
                     </td>
                   )}
@@ -156,7 +153,7 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
 
         {forceGrid && hasHorizontalOverflow && (
           <>
-            <div className="pointer-events-none absolute right-0 top-0 h-full w-12 bg-gradient-to-l from-green-100 to-transparent" />
+            <div className="pointer-events-none absolute right-0 top-0 h-full w-12 bg-gradient-to-l from-white to-transparent" />
             {/* <div className="pointer-events-none absolute right-3 top-3 text-green-700 text-sm font-semibold">
               →
             </div> */}

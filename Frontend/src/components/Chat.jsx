@@ -3,6 +3,7 @@ import { useSpeechToText } from "../hooks/useSpeechToText";
 import { sendChatMessageForExport } from "../api/chatApi";
 import { sendChatMessageStream } from "../api/chatApiStream";
 import { getSolmanChangeRequestDetails, listSolmanChangeRequestsForExport } from "../api/solmanApi";
+import { API_BASE } from "../api/client";
 import {
   buildExportSummary,
   buildExportFilename,
@@ -277,13 +278,7 @@ function getCurrentConnectedSystem({ activeSession, selectedSystem, availableSys
     ? availableSystems.filter((item) => item?.connected === true)
     : [];
 
-  const preferredSolman = connectedSystems.find((item) => {
-    const sid = normalizeSystemId(item?.systemId || item?.id || item?.code);
-    const name = String(item?.name || item?.label || "").toLowerCase();
-    return sid.startsWith("H") || name.includes("solman");
-  });
-
-  const fallbackMatch = preferredSolman || connectedSystems[0] || null;
+  const fallbackMatch = connectedSystems.length === 1 ? connectedSystems[0] : null;
 
   if (fallbackMatch) {
     return {
@@ -322,6 +317,51 @@ function getSystemConnectionState(systemId, availableSystems) {
   };
 }
 
+function pickBestConnectedSystem(availableSystems = []) {
+  const systems = Array.isArray(availableSystems) ? availableSystems : [];
+
+  const scoreSystem = (item) => {
+    const name = String(item?.name || item?.label || item?.description || "").toLowerCase();
+    const host = String(item?.host || "").toLowerCase();
+    const sid = normalizeSystemId(item?.systemId || item?.id || item?.code);
+
+    const isSapLike =
+      sid.startsWith("H") ||
+      name.includes("sap") ||
+      name.includes("solman") ||
+      name.includes("solam") ||
+      name.includes("solution manager") ||
+      name.includes("ecc") ||
+      name.includes("s4") ||
+      name.includes("hana") ||
+      name.includes("erp") ||
+      host.includes("sap") ||
+      host.includes("solman") ||
+      host.includes("solam");
+
+    const scoreFromDate = (value) => {
+      const time = value ? new Date(value).getTime() : 0;
+      return Number.isFinite(time) ? time : 0;
+    };
+
+    return {
+      item,
+      priority: isSapLike ? 2 : 1,
+      score:
+        scoreFromDate(item?.connectedAt) * 4 +
+        scoreFromDate(item?.lastUsedAt) * 3 +
+        scoreFromDate(item?.credentialsUpdatedAt) * 2 +
+        scoreFromDate(item?.updatedAt),
+    };
+  };
+
+  const ranked = systems
+    .filter((item) => item?.connected === true || item?.isConnected === true || String(item?.status || "").trim().toLowerCase() === "connected")
+    .map(scoreSystem)
+    .sort((a, b) => b.priority - a.priority || b.score - a.score);
+
+  return ranked[0]?.item || null;
+}
 
 function findSystemMentionInText(text, availableSystems) {
   const normalizedText = String(text || "").trim().toUpperCase();
@@ -375,7 +415,7 @@ function findSystemMentionInText(text, availableSystems) {
 //---------------------------------------------//
 
 export default function Chat({ onToast = null } = {}) {
-  const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+  const apiBase = API_BASE;
 
   const userName = (() => {
     try {
@@ -431,6 +471,35 @@ export default function Chat({ onToast = null } = {}) {
     selectedSystem,
     availableSystems: tiles,
   });
+
+  useEffect(() => {
+    if (activeSession?.systemId || selectedSystem?.systemId) return;
+
+    const bestConnected = pickBestConnectedSystem(tiles);
+    if (!bestConnected?.systemId) return;
+
+    const systemId = normalizeSystemId(bestConnected.systemId);
+    const sapUser = String(bestConnected.sapUser || "").trim();
+
+    setSelectedSystem(
+      normalizeSelectedSystem({
+        ...bestConnected,
+        systemId,
+        sapUser,
+        connected: true,
+        isConnected: true,
+        status: "connected",
+        active: true,
+      })
+    );
+
+    setActiveSession(
+      normalizeActiveSession({
+        systemId,
+        sapUser,
+      })
+    );
+  }, [activeSession?.systemId, selectedSystem?.systemId, tiles]);
 
   const loadSystems = useCallback(async () => {
     try {
