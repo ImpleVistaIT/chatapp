@@ -135,7 +135,8 @@ function detectCreateChangeRequestIntent(query = "") {
   const q = normalizeRoutingQuery(query);
   if (!q) return false;
 
-  const hasCreateVerb = /\b(create|raise|submit|initiate|start|generate|make|add|request)\b/i.test(q);
+  const hasCreateVerb = /\b(create|raise|submit|initiate|start|generate|make|add)\b/i.test(q);
+  const hasRequestCreatePhrase = /\brequest\b[\s\S]{0,30}\b(?:new\s+)?(?:change request|change requests?|crs?|cr's|transport change request|transport change|transport request)\b/i.test(q);
   const hasNeedOrWant = /\b(need|want)\b/i.test(q);
   const hasCrNoun = /\b(?:change request|change requests?|transport change request|transport change|crs?|cr's)\b/i.test(q);
   const hasExplicitNew = /\bnew\s+(?:change request|change requests?|transport change request|transport change|crs?|cr's)\b/i.test(q);
@@ -143,6 +144,7 @@ function detectCreateChangeRequestIntent(query = "") {
 
   return (
     (hasCreateVerb && hasCrNoun) ||
+    hasRequestCreatePhrase ||
     (hasNeedOrWant && hasEmergencyCreate) ||
     hasExplicitNew ||
     /\bstart\b[\s\S]{0,40}\btransport\s+change\b/i.test(q)
@@ -473,6 +475,18 @@ function keywordFallback(query) {
     q.includes("cr status distribution") ||
     q.includes("status percentage distribution");
 
+  const wantsCrDetailView =
+    q.includes("details") ||
+    q.includes("detail") ||
+    q.includes("show details") ||
+    q.includes("all change request details") ||
+    q.includes("change request details") ||
+    q.includes("cr details") ||
+    q.includes("status of change request") ||
+    q.includes("status of cr") ||
+    q.includes("change request status") ||
+    q.includes("cr status");
+
   const wantsCrList =
     q.includes("list change requests") ||
     q.includes("show change requests") ||
@@ -521,7 +535,7 @@ function keywordFallback(query) {
     });
   }
 
-  if (objectId && mentionsCr && wantsCrDetails) {
+  if (mentionsCr && wantsCrDetailView) {
     return normalizeRoutingResult({
       system: "solman",
       module: "charm",

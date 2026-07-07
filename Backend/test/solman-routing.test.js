@@ -19,6 +19,7 @@ import {
   extractCreateChangeRequestEntitiesFromText,
   getCreateChangeRequestQualifiers,
   isCreateChangeRequestQuery,
+  classifyPrompt,
 } from "../src/services/routing/promptClassifier.service.js";
 import { detectTransportQueryIntent } from "../src/services/routing/detectors/genericRuleDetector.js";
 import { normalizeSolmanStatusChart } from "../../frontend/src/utils/solmanChart.js";
@@ -117,6 +118,22 @@ test("retrieval-style CR queries do not trigger create intent", () => {
   for (const phrase of phrases) {
     assert.equal(isCreateChangeRequestQuery(phrase), false, phrase);
   }
+});
+
+test("CR details prompts route to get_change_request_details instead of create", async () => {
+  const result = await classifyPrompt({ query: "Provide all change request details" });
+
+  assert.equal(result.system, "solman");
+  assert.equal(result.module, "charm");
+  assert.equal(result.intent, "get_change_request_details");
+});
+
+test("open CR prompts route to list_change_requests instead of create", async () => {
+  const result = await classifyPrompt({ query: "Show open CRs" });
+
+  assert.equal(result.system, "solman");
+  assert.equal(result.module, "charm");
+  assert.equal(result.intent, "list_change_requests");
 });
 
 test("create CR qualifiers are extracted from plain language", () => {

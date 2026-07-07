@@ -60,6 +60,8 @@ Supported routing targets:
   Retrieval intent has priority whenever the message includes verbs such as show, list, display, find, search, get, fetch, view, latest, last, or recent together with CR/change request language.
   Treat created, open, closed, pending, rejected, approved, today, yesterday, this week, this month, between, by me, latest 25, last 50, and similar phrases as filters on existing CRs, not as create intent.
   This is the normal list flow and should be used unless the user explicitly asks to create a new CR.
+  If the user says "open CRs" or "show open CRs", classify as list_change_requests, not create_change_request.
+  If the user says "change request details", "CR details", "all change request details", or "status of change request", classify as get_change_request_details, not create_change_request.
 
 4. SolMan / ChaRM Analytics
 - intent: "cr_status_distribution"
