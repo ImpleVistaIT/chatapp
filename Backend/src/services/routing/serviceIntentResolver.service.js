@@ -337,6 +337,7 @@ function buildSingleServiceFallback(service, query) {
     serviceName: String(service?.serviceName || "").trim(),
     entitySet: String(service?.entitySet || "").trim(),
     entityTypeName: String(service?.entityTypeName || "").trim(),
+    keys: Array.isArray(service?.keys) ? service.keys.map((key) => String(key || "").trim()).filter(Boolean) : [],
     operation: inferOperation(query),
     docNumber,
     docItem: null,
@@ -408,6 +409,7 @@ export async function resolveServiceIntent({
       serviceName: null,
       entitySet: null,
       entityTypeName: null,
+      keys: [],
       operation: null,
       docNumber: null,
       docItem: null,
@@ -476,6 +478,9 @@ export async function resolveServiceIntent({
     serviceName: data?.serviceName ? String(data.serviceName).trim() : null,
     entitySet: data?.entitySet ? String(data.entitySet).trim() : null,
     entityTypeName: data?.entityTypeName ? String(data.entityTypeName).trim() : null,
+    keys: Array.isArray(catalog[0]?.keys)
+      ? catalog[0].keys.map((key) => String(key || "").trim()).filter(Boolean)
+      : [],
     operation: data?.operation ? String(data.operation).trim().toLowerCase() : "list",
     docNumber: data?.docNumber ?? null,
     docItem: data?.docItem ?? null,

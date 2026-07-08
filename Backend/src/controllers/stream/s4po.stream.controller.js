@@ -32,6 +32,25 @@ function getDeploymentOwner(baseOwner = "local") {
   return scope ? `${baseOwner}:${scope}` : baseOwner;
 }
 
+function buildFallbackPoService(serviceIntent) {
+  const keys = Array.isArray(serviceIntent?.keys)
+    ? serviceIntent.keys.map((key) => String(key || "").trim()).filter(Boolean)
+    : [];
+
+  return {
+    owner: getDeploymentOwner("local"),
+    systemId: String(serviceIntent?.systemId || "").trim().toUpperCase(),
+    serviceType: "PO",
+    serviceName: String(serviceIntent?.serviceName || "").trim(),
+    entitySet: String(serviceIntent?.entitySet || "").trim(),
+    entityTypeName: String(serviceIntent?.entityTypeName || "").trim(),
+    idField: String(serviceIntent?.idField || keys[0] || "").trim(),
+    itemField: String(serviceIntent?.itemField || keys[1] || "").trim(),
+    idPad: Number.isFinite(Number(serviceIntent?.idPad)) ? Number(serviceIntent.idPad) : 10,
+    itemPad: Number.isFinite(Number(serviceIntent?.itemPad)) ? Number(serviceIntent.itemPad) : 5,
+  };
+}
+
 export function applyPoNextContinuationState({ query, extracted, previousMemory }) {
   const nextIntent = isNextIntent(query);
   const requestedNextCount = parseNextCount(query);
@@ -623,7 +642,7 @@ export async function handleS4poChatStream({
   const actualSystemId = normalizeSystemId(system.systemId);
 
   const service = await step("load SapServiceMap", async () => {
-    return (
+    const mappedService =
       (await SapServiceMap.findOne({
         owner: getDeploymentOwner("local"),
         systemId: actualSystemId,
@@ -635,11 +654,16 @@ export async function handleS4poChatStream({
         systemId: routingSystemId,
         serviceName: serviceIntent.serviceName,
         entitySet: serviceIntent.entitySet,
-      }).lean())
-    );
+      }).lean());
+
+    if (mappedService) {
+      return mappedService;
+    }
+
+    return buildFallbackPoService(serviceIntent);
   });
 
-  if (!service) {
+  if (!service?.serviceName || !service?.entitySet) {
     sse.send("error", {
       message: `Service mapping not found for executionSystemId=${actualSystemId}, routingSystemId=${routingSystemId}, serviceName=${serviceIntent.serviceName}, entitySet=${serviceIntent.entitySet}.`,
       status: "service_mapping_not_found",
