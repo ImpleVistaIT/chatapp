@@ -350,6 +350,19 @@ function buildSingleServiceFallback(service, query) {
   };
 }
 
+function pickBestCandidateFromDiagnostics(candidateDiagnostics) {
+  const candidates = Array.isArray(candidateDiagnostics) ? candidateDiagnostics.filter(Boolean) : [];
+  if (!candidates.length) {
+    return null;
+  }
+
+  return candidates.reduce((best, candidate) => {
+    if (!best) return candidate;
+    if ((candidate.score || 0) > (best.score || 0)) return candidate;
+    return best;
+  }, null);
+}
+
 export async function resolveServiceIntent({
   owner = "local",
   query,
@@ -448,6 +461,7 @@ export async function resolveServiceIntent({
 
   const data = llm?.ok ? llm.data : null;
   const heuristicFallback = buildHeuristicFallback(catalog, query);
+  const bestCandidate = pickBestCandidateFromDiagnostics(candidateDiagnostics);
 
   if (Array.isArray(candidateDiagnostics) && candidateDiagnostics.length > 0) {
     const selectedName = String(data?.serviceName || "").trim();
@@ -468,6 +482,33 @@ export async function resolveServiceIntent({
     if (heuristicFallback) {
       console.log("[SERVICE_INTENT] using heuristic fallback:", heuristicFallback);
       return heuristicFallback;
+    }
+
+    if (bestCandidate) {
+      console.log("[SERVICE_INTENT] using best-candidate fallback:", bestCandidate);
+      return {
+        matchFound: true,
+        confidence: Math.max(0.7, Math.min(0.95, (bestCandidate.score || 0) / 100)),
+        systemId: bestCandidate.systemId || null,
+        serviceName: bestCandidate.serviceName || null,
+        entitySet: bestCandidate.entitySet || null,
+        entityTypeName: bestCandidate.entityTypeName || null,
+        keys: Array.isArray(catalog.find((service) => service.serviceName === bestCandidate.serviceName)?.keys)
+          ? catalog
+              .find((service) => service.serviceName === bestCandidate.serviceName)
+              .keys.map((key) => String(key || "").trim())
+              .filter(Boolean)
+          : [],
+        operation: inferOperation(query),
+        docNumber: quickExtractDocNumber(query),
+        docItem: null,
+        fields: [],
+        filters: [],
+        orderBy: [],
+        limit: 10,
+        reason: "Best catalog candidate selected after LLM did not return a usable service",
+        candidatesConsidered: services.length,
+      };
     }
   }
 
