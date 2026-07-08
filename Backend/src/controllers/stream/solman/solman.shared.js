@@ -109,17 +109,19 @@ export function resolveBusinessScope(query = "", raw = {}) {
 
 export function pickCrDetailsEntities(raw = {}, query = "") {
   const scope = resolveBusinessScope(query, raw);
+  const queryCrNumber = String(query || "").match(/\b(?:cr|change request)\s*(?:number\s*)?(\d{6,20})\b/i)?.[1] || "";
+  const rawCrNumber = String(
+    raw.objectId ||
+      raw.OBJECT_ID ||
+      raw.OBJ_ID ||
+      raw.changeRequestId ||
+      raw.crId ||
+      raw.crNumber ||
+      ""
+  ).trim();
 
   return {
-    objectId: String(
-      raw.objectId ||
-        raw.OBJECT_ID ||
-        raw.OBJ_ID ||
-        raw.changeRequestId ||
-        raw.crId ||
-        raw.crNumber ||
-        ""
-    ).trim(),
+    objectId: queryCrNumber || rawCrNumber,
     processType: String(
       raw.processType || raw.PROCESS_TYPE || scope?.processType || ""
     ).trim(),

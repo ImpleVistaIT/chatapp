@@ -119,7 +119,6 @@ function parseUserDate(input) {
       return new Date(Number(m[3]), monthIndex, Number(m[1]));
     }
   }
-
   m = /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/i.exec(s);
   if (m) {
     const monthIndex = monthNameToIndex(m[1]);
@@ -180,6 +179,28 @@ function resolveSolmanCrEntitySet() {
   return String(process.env.DEFAULT_SOLMAN_CR_ENTITYSET || "ZEX_OutputSet").trim() || "ZEX_OutputSet";
 }
 
+function buildCrDetailLookupFilters({ objectId, processType }) {
+  const cleanObjectId = cleanString(objectId);
+  const cleanProcessType = cleanString(processType);
+  const filters = [];
+  const push = (filter) => {
+    if (filter) filters.push(filter);
+  };
+
+  push(`OBJECT_ID eq '${escapeODataString(cleanObjectId)}'`);
+  push(`OBJ_ID eq '${escapeODataString(cleanObjectId)}'`);
+  push(`ChangeRequestId eq '${escapeODataString(cleanObjectId)}'`);
+  push(`ZchangeRequest eq '${escapeODataString(cleanObjectId)}'`);
+
+  if (cleanProcessType) {
+    push(`OBJECT_ID eq '${escapeODataString(cleanObjectId)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`);
+    push(`OBJ_ID eq '${escapeODataString(cleanObjectId)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`);
+    push(`ChangeRequestId eq '${escapeODataString(cleanObjectId)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`);
+    push(`ZchangeRequest eq '${escapeODataString(cleanObjectId)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`);
+  }
+
+  return [...new Set(filters)];
+}
 function isTransientSapNetworkError(err) {
   const code = String(err?.code || err?.cause?.code || "").toUpperCase();
   return [
@@ -524,7 +545,7 @@ export async function getSolmanChangeRequestDetailsById({
   processType = "",
 }) {
   const cleanObjectId = cleanString(objectId);
-  const cleanProcessType = cleanString(processType) || "YMHF";
+  const requestedProcessType = cleanString(processType);
 
   if (!cleanObjectId) {
     const err = new Error("objectId is required.");
@@ -533,12 +554,7 @@ export async function getSolmanChangeRequestDetailsById({
     throw err;
   }
 
-  const filter = `$filter=OBJECT_ID eq '${escapeODataString(
-    cleanObjectId
-  )}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`;
-
-  const relativePath = `${resolveSolmanCrEntitySet()}?${filter}`;
-  const serviceName = await resolveSolmanDataServiceName({ owner: sapAuth?.owner || "local", systemId: system?.systemId });
+  const serviceName = "ZCR_DETAILS_SRV";
 
   await preflightSolmanCrMetadata({
     system,
@@ -548,16 +564,55 @@ export async function getSolmanChangeRequestDetailsById({
     entitySetName: resolveSolmanCrEntitySet(),
   });
 
-  const raw = await fetchFromSap(
-    {
-      system,
-      service: { serviceName },
-      relativePath,
-    },
-    sapAuth
-  );
+  const processTypeCandidates = requestedProcessType
+    ? [requestedProcessType]
+    : ["YMHF", "YMH1"];
 
-  const results = normalizeCrDetailsResponse(raw);
+  let raw = null;
+  let results = [];
+  let usedProcessType = requestedProcessType || "";
+
+  for (const candidateProcessType of processTypeCandidates) {
+    const relativePath = `/sap/opu/odata/sap/ZCR_DETAILS_SRV/ZEX_OutputSet?$filter=${encodeURIComponent(
+      `OBJECT_ID eq '${escapeODataString(cleanObjectId)}' and PROCESS_TYPE eq '${escapeODataString(candidateProcessType)}'`
+    )}`;
+
+    raw = await fetchFromSap(
+      {
+        system,
+        service: { serviceName },
+        relativePath,
+      },
+      sapAuth
+    );
+
+    results = normalizeCrDetailsResponse(raw);
+    usedProcessType = candidateProcessType;
+
+    if (results.length > 0) {
+      break;
+    }
+  }
+
+  if (results.length === 0) {
+    const relativePath = `/sap/opu/odata/sap/ZCR_DETAILS_SRV/ZEX_OutputSet?$filter=${encodeURIComponent(
+      `OBJECT_ID eq '${escapeODataString(cleanObjectId)}'`
+    )}`;
+
+    raw = await fetchFromSap(
+      {
+        system,
+        service: { serviceName },
+        relativePath,
+      },
+      sapAuth
+    );
+
+    results = normalizeCrDetailsResponse(raw);
+    if (results[0]?.PROCESS_TYPE) {
+      usedProcessType = cleanString(results[0].PROCESS_TYPE);
+    }
+  }
 
   return {
     ok: true,
@@ -567,7 +622,7 @@ export async function getSolmanChangeRequestDetailsById({
         : `No details found for CR ${cleanObjectId}.`,
     result: {
       objectId: cleanObjectId,
-      processType: cleanProcessType,
+      processType: usedProcessType,
       count: results.length,
       results,
       raw,
@@ -583,8 +638,8 @@ export async function listSolmanChangeRequestsByDateRange({
   toDate,
   triggerAll = "X",
   status = "",
-  excludeStatuses = [],
   statusMode = "",
+  excludeStatuses = [],
   createdBy = "",
   dateText = "",
   top = null,
@@ -603,14 +658,12 @@ export async function listSolmanChangeRequestsByDateRange({
     throw err;
   }
 
-  const shouldApplyExactStatusInSap = Boolean(cleanStatus && cleanStatusMode !== "pending");
-
   const built = buildCrListRelativePath({
     processType: cleanProcessType,
     triggerAll,
     fromDate,
     toDate,
-    status: shouldApplyExactStatusInSap ? cleanStatus : "",
+    status: cleanStatusMode === "pending" ? "" : cleanStatus,
     createdBy: cleanCreatedBy,
     dateText,
     top,
