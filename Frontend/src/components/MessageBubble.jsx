@@ -265,6 +265,23 @@ function buildRowsFromChartOrTable(data) {
   return [];
 }
 
+function buildCreateCrSuccessFields(data = {}) {
+  const fields = [
+    { label: "CR Number", value: data?.changeRequestId },
+    { label: "Status", value: data?.status },
+    { label: "Short Description", value: data?.shortDesc },
+    { label: "Delivery Responsible", value: data?.deliveryResponsible },
+    { label: "Developer", value: data?.developer },
+    { label: "Tester", value: data?.tester },
+    { label: "Landscape", value: data?.landscape },
+    { label: "Work Item Reference", value: data?.workItemReference },
+    { label: "URL", value: data?.url },
+    { label: "URL Name", value: data?.urlName },
+  ];
+
+  return fields.filter((field) => String(field?.value || "").trim());
+}
+
 function buildStatusChart(chart) {
   try {
     const normalized = normalizeSolmanStatusChart(chart);
@@ -453,6 +470,7 @@ export default function MessageBubble({
       Array.isArray(data?.rows)
   );
   const isSolmanCollectionResponse = isSolmanStatusResponse || isSolmanListResponse;
+  const isSolmanCreateCrSuccess = data?.viewType === "solman_create_cr_success";
   const safeSummary = String(summary || "").trim();
   const safeSuggestions = Array.isArray(suggestions) ? suggestions : [];
   const [isSmallScreen, setIsSmallScreen] = useState(false);
@@ -1086,6 +1104,71 @@ export default function MessageBubble({
               <div className="px-4 py-6 text-sm text-slate-700">No records found for the given criteria.</div>
             )}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isSolmanCreateCrSuccess) {
+    const fields = buildCreateCrSuccessFields(data);
+    const createdCrNumber = String(data?.changeRequestId || "-").trim() || "-";
+
+    return (
+      <div className="flex items-start justify-start gap-3 w-full">
+        <Avatar role={role} showAvatar={showAvatar} />
+
+        <div className="max-w-[95%] sm:max-w-full min-w-0 overflow-hidden space-y-2">
+          <div className="rounded-[18px] rounded-tl-sm border border-emerald-200 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
+            <div className="border-b border-emerald-100 bg-gradient-to-r from-emerald-50 to-white px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                Change Request Created
+              </div>
+              <div className="mt-1 text-sm font-semibold text-slate-900">
+                CR Number: {createdCrNumber}
+              </div>
+            </div>
+
+            <div className="px-4 py-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {fields.map((field) => (
+                  <div key={field.label} className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      {field.label}
+                    </div>
+                    <div className="mt-1 text-sm font-medium text-slate-900 break-words whitespace-pre-wrap">
+                      {String(field.value).trim()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {safeSummary && (
+            <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-900">
+              {safeSummary}
+            </div>
+          )}
+
+          {safeSuggestions.length > 0 && (
+            <div className="mt-3 ml-2 sm:ml-4 flex flex-wrap gap-2">
+              {safeSuggestions.map((suggestion, idx) => {
+                const label = getSuggestionLabel(suggestion);
+                if (!label) return null;
+
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => onSuggestionClick?.(suggestion)}
+                    className="px-3 sm:px-4 py-1.5 text-xs bg-white text-black border border-dashed border-emerald-700 rounded-full transition hover:bg-emerald-50"
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     );

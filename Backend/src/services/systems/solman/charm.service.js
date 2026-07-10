@@ -44,6 +44,24 @@ function findFirstNonEmptyValue(source, keys) {
   return "";
 }
 
+function extractCrNumberFromText(value) {
+  const text = cleanString(value);
+  if (!text) return "";
+
+  const patterns = [
+    /\bCR\s*[:#-]?\s*(\d{6,})\b/i,
+    /\bChange\s*Request\s*[:#-]?\s*(\d{6,})\b/i,
+    /\bCR(?:\s+Number)?\s*[:#-]?\s*(\d{6,})\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return cleanString(match[1]);
+  }
+
+  return "";
+}
+
 function normalizeUrlNav(items) {
   if (!Array.isArray(items)) return [];
 
@@ -78,8 +96,16 @@ function buildCreatePayload(payload = {}) {
 function normalizeCreateResponse(raw) {
   const rows = Array.isArray(raw?.d?.results) ? raw.d.results : [];
   const first = rows[0] || raw?.d || raw?.result || raw || {};
+  const messageText =
+    cleanString(first?.EMsgDesc || first?.EMSGDESC || first?.MESSAGE || first?.Message || first?.EV_MESSAGE || first?.EvMessage) ||
+    cleanString(first?.message || first?.msg || first?.MSG) ||
+    "Change request created successfully.";
   const changeRequestId =
     findFirstNonEmptyValue(raw, [
+      "ESolmanCr",
+      "ESOLMANCR",
+      "ESOLMAN_CR",
+      "ESOLMAN_CR_NO",
       "CHANGE_REQUEST_ID",
       "ChangeRequestId",
       "CR_NUMBER",
@@ -97,6 +123,10 @@ function normalizeCreateResponse(raw) {
       "cr_no",
     ]) ||
     findFirstNonEmptyValue(first, [
+      "ESolmanCr",
+      "ESOLMANCR",
+      "ESOLMAN_CR",
+      "ESOLMAN_CR_NO",
       "CHANGE_REQUEST_ID",
       "ChangeRequestId",
       "CR_NUMBER",
@@ -110,18 +140,23 @@ function normalizeCreateResponse(raw) {
       "cr_number",
       "crNo",
       "cr_no",
-    ]);
+    ]) ||
+    extractCrNumberFromText(first?.EMsgDesc || first?.EMSGDESC || messageText) ||
+    extractCrNumberFromText(messageText);
+  const msgType = cleanString(first?.MSG_TYPE || first?.MsgType || first?.TYPE || first?.EMsgType || first?.EMSGTYPE);
+  const eMsgType = cleanString(first?.EMsgType || first?.EMSGTYPE || first?.MSG_TYPE || first?.MsgType || first?.TYPE);
+  const eSolmanCr = cleanString(first?.ESolmanCr || first?.ESOLMANCR || first?.ESOLMAN_CR || changeRequestId);
 
   return {
     ok: true,
-    message:
-      cleanString(first?.MESSAGE || first?.Message || first?.EV_MESSAGE || first?.EvMessage) ||
-      cleanString(first?.message || first?.msg || first?.MSG) ||
-      "Change request created successfully.",
+    message: messageText,
     result: {
       changeRequestId,
       status: cleanString(first?.STATUS || first?.Status || first?.STATE),
-      msgType: cleanString(first?.MSG_TYPE || first?.MsgType || first?.TYPE),
+      msgType,
+      EMsgType: eMsgType,
+      EMsgDesc: cleanString(first?.EMsgDesc || first?.EMSGDESC || messageText),
+      ESolmanCr: eSolmanCr,
       raw,
     },
   };

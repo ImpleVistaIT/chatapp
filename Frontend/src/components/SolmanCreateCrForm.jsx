@@ -169,6 +169,12 @@ export default function SolmanCreateCrForm({
 
       const data = await res.json().catch(() => ({}));
 
+      console.log("[SolMan Create CR] action response", {
+        ok: res.ok,
+        statusCode: res.status,
+        data,
+      });
+
       if (
         !res.ok ||
         data?.ok === false ||
@@ -187,9 +193,25 @@ export default function SolmanCreateCrForm({
       }
 
       const result = data?.result || data;
+      const summary = result?.summary || {};
+      const derivedCrNumber =
+        result?.changeRequestId ||
+        data?.changeRequestId ||
+        data?.result?.changeRequestId ||
+        "";
+
+      console.log("[SolMan Create CR] success derived values", {
+        derivedCrNumber,
+        status: result?.status || result?.EMsgType || result?.msgType || data?.status || data?.EMsgType || "",
+        summary,
+        result,
+      });
 
       onSuccess?.({
         ...result,
+        summary,
+        changeRequestId: derivedCrNumber,
+        status: result?.status || data?.status || "",
         executor: data?.executor || null,
         message: data?.message || "Change request created successfully.",
       });

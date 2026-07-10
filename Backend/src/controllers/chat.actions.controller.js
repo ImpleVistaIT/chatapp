@@ -93,6 +93,14 @@ function validateListChangeRequestsInput(body) {
   return null;
 }
 
+function extractCrNumberFromMessage(message) {
+  const text = cleanString(message);
+  if (!text) return "";
+
+  const match = text.match(/\bCR\s*[:#-]?\s*(\d{6,})\b/i);
+  return match?.[1] ? cleanString(match[1]) : "";
+}
+
 export const submitSolmanCreateChangeRequest = createSapActionHandler({
   executor: "solman.charm.createChangeRequest",
 
@@ -111,20 +119,65 @@ export const submitSolmanCreateChangeRequest = createSapActionHandler({
       payload: body.payload,
     });
 
+    console.log("[chat.actions] create-change-request SAP response", {
+      ok: result?.ok,
+      message: result?.message,
+      changeRequestId: result?.changeRequestId || null,
+      status: result?.status || null,
+      msgType: result?.msgType || null,
+      raw: result?.raw || null,
+    });
+
+    const messageCrNumber = extractCrNumberFromMessage(result?.message);
+    const responseCrNumber = cleanString(result?.changeRequestId || result?.ESolmanCr || messageCrNumber);
+
+    console.log("[chat.actions] create-change-request derived CR", {
+      responseCrNumber,
+      messageCrNumber,
+      message: result?.message || null,
+    });
+
+    const responseSummary = {
+      changeRequestId: responseCrNumber || null,
+      status: cleanString(result?.status || result?.EMsgType || result?.msgType || ""),
+      shortDesc: cleanString(body?.payload?.ShortDesc),
+      deliveryResponsible: cleanString(body?.payload?.DeliveryResponsible),
+      developer: cleanString(body?.payload?.Developer),
+      tester: cleanString(body?.payload?.Tester),
+      workItemReference: cleanString(body?.payload?.WorkItemReference),
+      landscape: cleanString(body?.payload?.Landscape),
+      reqUrlNav: Array.isArray(body?.payload?.REQ_URL_NAV)
+        ? body.payload.REQ_URL_NAV
+            .map((item) => ({
+              URL: cleanString(item?.URL),
+              URL_NAME: cleanString(item?.URL_NAME),
+            }))
+            .filter((item) => item.URL || item.URL_NAME)
+        : [],
+    };
+
     const sessionId = String(body?.sessionId || "").trim();
     if (/^[a-f0-9]{24}$/i.test(sessionId)) {
       await persistAssistantAndTouchSession({
         owner,
         sessionId,
-        text: result?.message || "Change request created successfully.",
-        summary: result?.message || "Change request created successfully.",
+        text: responseCrNumber
+          ? `CR ${responseCrNumber} created successfully.`
+          : result?.message || "Change request created successfully.",
+        summary: responseCrNumber
+          ? `CR ${responseCrNumber} created successfully.`
+          : result?.message || "Change request created successfully.",
         extracted: {
           system: "solman",
           intent: "create_change_request",
-          changeRequestId: result?.changeRequestId || null,
-          status: result?.status || null,
+          changeRequestId: responseCrNumber || null,
+          status: cleanString(result?.status || result?.EMsgType || result?.msgType || "") || null,
         },
-        data: result?.raw || null,
+        data: {
+          viewType: "solman_create_cr_success",
+          ...responseSummary,
+          raw: result?.raw || null,
+        },
         responseMeta: {
           ok: true,
           kind: "action",
@@ -144,13 +197,43 @@ export const submitSolmanCreateChangeRequest = createSapActionHandler({
       throw err;
     }
 
-    return result;
+    return {
+      ...result,
+      changeRequestId: responseCrNumber,
+      ESolmanCr: responseCrNumber,
+      status: cleanString(result?.status || result?.EMsgType || result?.msgType || ""),
+      summary: responseSummary,
+      submittedFields: {
+        ShortDesc: cleanString(body?.payload?.ShortDesc),
+        DeliveryResponsible: cleanString(body?.payload?.DeliveryResponsible),
+        Developer: cleanString(body?.payload?.Developer),
+        Tester: cleanString(body?.payload?.Tester),
+        WorkItemReference: cleanString(body?.payload?.WorkItemReference),
+        Landscape: cleanString(body?.payload?.Landscape),
+        REQ_URL_NAV: Array.isArray(body?.payload?.REQ_URL_NAV)
+          ? body.payload.REQ_URL_NAV.map((item) => ({
+              URL: cleanString(item?.URL),
+              URL_NAME: cleanString(item?.URL_NAME),
+            }))
+          : [],
+      },
+    };
   },
 
   mapSuccessResult: (result) => ({
     changeRequestId: result.changeRequestId,
     status: result.status,
-    msgType: result.msgType,
+    summary: {
+      ShortDesc: result.submittedFields?.ShortDesc || "",
+      DeliveryResponsible: result.submittedFields?.DeliveryResponsible || "",
+      Developer: result.submittedFields?.Developer || "",
+      Tester: result.submittedFields?.Tester || "",
+      WorkItemReference: result.submittedFields?.WorkItemReference || "",
+      Landscape: result.submittedFields?.Landscape || "",
+      REQ_URL_NAV: Array.isArray(result.submittedFields?.REQ_URL_NAV)
+        ? result.submittedFields.REQ_URL_NAV
+        : [],
+    },
     raw: result.raw,
   }),
 });

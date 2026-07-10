@@ -2477,6 +2477,69 @@ export default function Chat({ onToast = null } = {}) {
             "";
           const successMessage = data?.message || "Change request created successfully.";
           const statusText = data?.status ? `Status: ${data.status}` : "";
+          const collected = pendingAction?.collected || {};
+          const summary = data?.summary || collected || {};
+          console.log("[Chat] SolMan create success callback", {
+            rawData: data,
+            crId,
+            successMessage,
+            statusText,
+            summary,
+            collected,
+          });
+          const successData = {
+            viewType: "solman_create_cr_success",
+            changeRequestId: crId,
+            status: data?.status || summary?.status || "",
+            shortDesc:
+              summary?.shortDesc ||
+              summary?.ShortDesc ||
+              data?.shortDesc ||
+              collected?.ShortDesc ||
+              "",
+            deliveryResponsible:
+              summary?.deliveryResponsible ||
+              summary?.DeliveryResponsible ||
+              data?.deliveryResponsible ||
+              collected?.DeliveryResponsible ||
+              "",
+            developer:
+              summary?.developer ||
+              summary?.Developer ||
+              data?.developer ||
+              collected?.Developer ||
+              "",
+            tester:
+              summary?.tester ||
+              summary?.Tester ||
+              data?.tester ||
+              collected?.Tester ||
+              "",
+            landscape:
+              summary?.landscape ||
+              summary?.Landscape ||
+              data?.landscape ||
+              collected?.Landscape ||
+              "",
+            workItemReference:
+              summary?.workItemReference ||
+              summary?.WorkItemReference ||
+              data?.workItemReference ||
+              collected?.WorkItemReference ||
+              "",
+            url:
+              summary?.url ||
+              summary?.URL ||
+              data?.url ||
+              collected?.REQ_URL_NAV?.[0]?.URL ||
+              "",
+            urlName:
+              summary?.urlName ||
+              summary?.URL_NAME ||
+              data?.urlName ||
+              collected?.REQ_URL_NAV?.[0]?.URL_NAME ||
+              "",
+          };
 
           setShowSolmanCrForm(false);
           setPendingAction(null);
@@ -2486,6 +2549,8 @@ export default function Chat({ onToast = null } = {}) {
             {
               role: "assistant",
               text: [successMessage, statusText].filter(Boolean).join(" "),
+              summary: successMessage,
+              data: successData,
             },
           ]);
         }}
