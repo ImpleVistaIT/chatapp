@@ -193,7 +193,11 @@ function buildStructuredTable(data) {
   if (!data) return null;
 
   const viewType = String(data.viewType || "").trim();
-  if (viewType !== "transport_list_table" && viewType !== "transport_dependency_table") return null;
+  if (
+    viewType !== "transport_list_table" &&
+    viewType !== "transport_dependency_table" &&
+    viewType !== "dependency_check_table"
+  ) return null;
 
   const columns = Array.isArray(data.columns) ? data.columns : [];
   const rawRows = Array.isArray(data.tableRows) ? data.tableRows : [];
@@ -213,14 +217,17 @@ function buildStructuredTable(data) {
   if (!columns.length || !rawRows.length) return null;
 
   const rows =
-    viewType === "transport_dependency_table"
+    viewType === "transport_dependency_table" || viewType === "dependency_check_table"
       ? rawRows.map((row) => [
           row.originalTransport ?? "-",
           row.dependentTransport ?? "-",
           row.description ?? "-",
+          row.status ?? "-",
           row.owner ?? "-",
-          row.exportedOn ?? "-",
-          row.importedOn ?? "-",
+          row.exportDate ?? "-",
+          row.exportTime ?? "-",
+          row.importDate ?? "-",
+          row.importTime ?? "-",
         ])
       : rawRows.map((row) => [
           row.no ?? "-",

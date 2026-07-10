@@ -50,6 +50,10 @@ function isTransportDependencyIntent(classified, query = "") {
   const intent = cleanString(classified?.intent).toLowerCase();
   const q = normalizeIntentQuery(query);
 
+  if (intent === "dependency_check") {
+    return false;
+  }
+
   if (
     intent === "transport_dependency_check" ||
     intent === "check_dependency_transport" ||
@@ -243,6 +247,10 @@ export async function handleSolmanChatStream({
     return handleCreateCr(context);
   }
 
+  if (classified?.intent === "dependency_check") {
+    return handleDependencyCheck(context);
+  }
+
   if (isTransportDependencyIntent(classified, query)) {
     return handleTransportDependency(context);
   }
@@ -264,7 +272,6 @@ export async function handleSolmanChatStream({
   }
 
   if (
-    classified?.intent === "dependency_check" ||
     classified?.intent === "check_dependency_transport" ||
     classified?.intent === "dependency_transport_check"
   ) {

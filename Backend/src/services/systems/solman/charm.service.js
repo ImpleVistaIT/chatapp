@@ -18,6 +18,32 @@ function escapeODataString(value) {
   return cleanString(value).replace(/'/g, "''");
 }
 
+function findFirstNonEmptyValue(source, keys) {
+  if (!source || typeof source !== "object") return "";
+
+  for (const key of keys) {
+    const value = cleanString(source?.[key]);
+    if (value) return value;
+  }
+
+  for (const value of Object.values(source)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const nested = findFirstNonEmptyValue(item, keys);
+        if (nested) return nested;
+      }
+      continue;
+    }
+
+    if (value && typeof value === "object") {
+      const nested = findFirstNonEmptyValue(value, keys);
+      if (nested) return nested;
+    }
+  }
+
+  return "";
+}
+
 function normalizeUrlNav(items) {
   if (!Array.isArray(items)) return [];
 
@@ -28,6 +54,107 @@ function normalizeUrlNav(items) {
     }))
     .filter((x) => x.URL && x.URL_NAME);
 }
+
+function buildCreatePayload(payload = {}) {
+  const urlNav = normalizeUrlNav(
+    Array.isArray(payload?.REQ_URL_NAV)
+      ? payload.REQ_URL_NAV
+      : Array.isArray(payload?.reqUrlNav)
+        ? payload.reqUrlNav
+        : []
+  );
+
+  return {
+    ShortDesc: cleanString(payload?.ShortDesc || payload?.shortDesc),
+    DeliveryResponsible: cleanString(payload?.DeliveryResponsible || payload?.deliveryResponsible),
+    Developer: cleanString(payload?.Developer || payload?.developer),
+    Tester: cleanString(payload?.Tester || payload?.tester),
+    WorkItemReference: cleanString(payload?.WorkItemReference || payload?.workItemReference),
+    Landscape: cleanString(payload?.Landscape || payload?.landscape),
+    REQ_URL_NAV: urlNav,
+  };
+}
+
+function normalizeCreateResponse(raw) {
+  const rows = Array.isArray(raw?.d?.results) ? raw.d.results : [];
+  const first = rows[0] || raw?.d || raw?.result || raw || {};
+  const changeRequestId =
+    findFirstNonEmptyValue(raw, [
+      "CHANGE_REQUEST_ID",
+      "ChangeRequestId",
+      "CR_NUMBER",
+      "CR_NO",
+      "CR_NUMBER_NEW",
+      "CR_NO_NEW",
+      "CR",
+      "OBJECT_ID",
+      "OBJ_ID",
+      "changeRequestId",
+      "change_request_id",
+      "crNumber",
+      "cr_number",
+      "crNo",
+      "cr_no",
+    ]) ||
+    findFirstNonEmptyValue(first, [
+      "CHANGE_REQUEST_ID",
+      "ChangeRequestId",
+      "CR_NUMBER",
+      "CR_NO",
+      "CR",
+      "OBJECT_ID",
+      "OBJ_ID",
+      "changeRequestId",
+      "change_request_id",
+      "crNumber",
+      "cr_number",
+      "crNo",
+      "cr_no",
+    ]);
+
+  return {
+    ok: true,
+    message:
+      cleanString(first?.MESSAGE || first?.Message || first?.EV_MESSAGE || first?.EvMessage) ||
+      cleanString(first?.message || first?.msg || first?.MSG) ||
+      "Change request created successfully.",
+    result: {
+      changeRequestId,
+      status: cleanString(first?.STATUS || first?.Status || first?.STATE),
+      msgType: cleanString(first?.MSG_TYPE || first?.MsgType || first?.TYPE),
+      raw,
+    },
+  };
+}
+
+function mapSapCreateError(error) {
+  const status = Number(error?.status || error?.response?.status || 0);
+  const message = cleanString(
+    error?.message ||
+      error?.response?.data?.error?.message?.value ||
+      error?.response?.data?.error?.message ||
+      error?.response?.data?.message
+  );
+
+  if (status === 400 && /missing required fields/i.test(message)) {
+    const e = new Error(message || "Missing required fields.");
+    e.status = 400;
+    e.code = "VALIDATION_FAILED";
+    e.userMessage = e.message;
+    throw e;
+  }
+
+  if (status === 401 || status === 403) {
+    const e = new Error(message || "Not authorized to create the change request.");
+    e.status = status;
+    e.code = "SAP_AUTH_FAILED";
+    e.userMessage = e.message;
+    throw e;
+  }
+
+  throw error;
+}
+
 
 function normalizeCrDetailsResponse(raw) {
   const results = Array.isArray(raw?.d?.results) ? raw.d.results : [];
@@ -45,6 +172,16 @@ function validatePayload(payload) {
   ];
 
   const missing = required.filter((key) => !cleanString(payload?.[key]));
+
+  const urlNav = Array.isArray(payload?.REQ_URL_NAV) ? payload.REQ_URL_NAV : [];
+  const hasAnyUrlInput = urlNav.some((item) => cleanString(item?.URL) || cleanString(item?.URL_NAME));
+
+  if (hasAnyUrlInput) {
+    const firstUrl = urlNav[0] || {};
+    if (!cleanString(firstUrl?.URL)) missing.push("REQ_URL_NAV.URL");
+    if (!cleanString(firstUrl?.URL_NAME)) missing.push("REQ_URL_NAV.URL_NAME");
+  }
+
   if (missing.length > 0) {
     const err = new Error(`Missing required fields: ${missing.join(", ")}`);
     err.status = 400;

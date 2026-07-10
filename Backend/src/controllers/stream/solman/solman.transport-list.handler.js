@@ -98,7 +98,7 @@ export async function handleTransportList(context) {
 
   const input = pickTransportListEntities(classified?.entities || {}, query);
   const objectId = cleanString(input.objectId);
-  const processType = cleanString(input.processType) || "YMHF";
+  const processType = cleanString(input.processType);
 
   if (!objectId) {
     const message =
@@ -247,7 +247,7 @@ export async function handleTransportList(context) {
     summary: result?.message || `Fetched transports for CR ${objectId}.`,
     data: responseData,
     suggestions: [
-      `Check dependency transport for CR ${objectId}`,
+      `Check dependency analysis for CR ${objectId}`,
       `Show status of CR ${objectId}`,
     ],
   });

@@ -98,6 +98,14 @@ export const ROUTING_INTENT_REGISTRY = {
         ],
         executor: "solman.charm.crStatusDistribution",
       },
+
+      dependency_check: {
+        label: "Dependency check",
+        action: "execute_api",
+        requiredInputs: ["objectId"],
+        entityHints: ["objectId", "processType", "dependencyType"],
+        executor: "solman.dependency.check",
+      },
     },
 
     transport: {

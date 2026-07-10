@@ -14,6 +14,28 @@ function asArray(raw) {
   return [];
 }
 
+function collectNavRows(item) {
+  const navCandidates = [
+    item?.message_nav,
+    item?.transport_nav,
+    item?.transportNav,
+    item?.Trkorr_nav,
+    item?.TRKORR_nav,
+  ];
+
+  const rows = [];
+
+  for (const nav of navCandidates) {
+    if (Array.isArray(nav?.results)) {
+      rows.push(...nav.results);
+    } else if (Array.isArray(nav)) {
+      rows.push(...nav);
+    }
+  }
+
+  return rows;
+}
+
 function unique(values = []) {
   return [...new Set(values.map((x) => cleanString(x)).filter(Boolean))];
 }
@@ -26,17 +48,44 @@ function pickString(item, keys = []) {
   return "";
 }
 
-function normalizeTransportsFromCr(raw) {
-  const rows = asArray(raw);
+function rowMatchesCr(item, changeRequestId) {
+  const cleanCr = cleanString(changeRequestId);
+  if (!cleanCr) return false;
+
+  const candidates = [
+    item?.ChangeRequestId,
+    item?.CHANGE_REQUEST_ID,
+    item?.ZchangeRequest,
+    item?.ZCHANGE_REQUEST,
+    item?.OBJECT_ID,
+    item?.OBJ_ID,
+  ]
+    .map((value) => cleanString(value))
+    .filter(Boolean);
+
+  return candidates.some((value) => value === cleanCr || value.includes(cleanCr) || cleanCr.includes(value));
+}
+
+function normalizeTransportsFromCr(raw, { changeRequestId = "" } = {}) {
+  const rootRows = asArray(raw);
+  const rows = [
+    ...rootRows,
+    ...rootRows.flatMap((item) => collectNavRows(item)),
+  ];
+
+  const crRows = cleanString(changeRequestId)
+    ? rows.filter((item) => rowMatchesCr(item, changeRequestId))
+    : rows;
+  const effectiveRows = crRows.length > 0 ? crRows : rows;
 
   const transports = unique(
-    rows.flatMap((item) => [
+    effectiveRows.flatMap((item) => [
       pickString(item, ["Trkorr", "TRKORR", "Transport", "TRANSPORT", "TransportNo", "TRANSPORT_NO"]),
     ])
   );
 
-  const changeRequestId =
-    pickString(rows[0], [
+  const normalizedChangeRequestId =
+    pickString(effectiveRows[0], [
       "ZchangeRequest",
       "ZCHANGE_REQUEST",
       "ChangeRequestId",
@@ -47,7 +96,7 @@ function normalizeTransportsFromCr(raw) {
       "OBJ_ID",
     ]);
 
-  const normalizedRows = rows.map((item) => ({
+  const normalizedRows = effectiveRows.map((item) => ({
     ChangeRequestId: pickString(item, ["ChangeRequestId", "CHANGE_REQUEST_ID", "ZchangeRequest", "ZCHANGE_REQUEST", "ChangeRequest", "CHANGE_REQUEST"]),
     Trkorr: pickString(item, ["Trkorr", "TRKORR", "Transport", "TRANSPORT", "TransportNo", "TRANSPORT_NO"]),
     Trfunction: pickString(item, ["Trfunction", "TRFUNCTION", "TransportType", "TRANSPORT_TYPE", "TRFUNCTION_CODE"]),
@@ -77,7 +126,7 @@ function normalizeTransportsFromCr(raw) {
   }));
 
   return {
-    changeRequestId,
+    changeRequestId: normalizedChangeRequestId,
     transports,
     rows: normalizedRows,
   };
@@ -203,6 +252,31 @@ function mapSapServiceError(error, { serviceName }) {
   throw error;
 }
 
+async function resolveCrProcessType({ system, sapAuth, changeRequestId }) {
+  const cleanCr = cleanString(changeRequestId);
+  if (!cleanCr) return "";
+
+  try {
+    const relativePath = `/sap/opu/odata/sap/ZCR_DETAILS_SRV/ZEX_OutputSet?$filter=${encodeURIComponent(
+      `OBJECT_ID eq '${escapeODataString(cleanCr)}'`
+    )}`;
+
+    const raw = await fetchFromSap(
+      {
+        system,
+        service: { serviceName: "ZCR_DETAILS_SRV" },
+        relativePath,
+      },
+      sapAuth
+    );
+
+    const rows = Array.isArray(raw?.d?.results) ? raw.d.results : [];
+    return cleanString(rows[0]?.PROCESS_TYPE);
+  } catch {
+    return "";
+  }
+}
+
 function buildCrTransportLookupVariants({ changeRequestId, processType }) {
   const cleanCr = cleanString(changeRequestId);
   const cleanProcessType = cleanString(processType);
@@ -227,14 +301,11 @@ function buildCrTransportLookupVariants({ changeRequestId, processType }) {
     );
   }
 
-  push(`OBJECT_ID eq '${escapeODataString(cleanCr)}'`);
-  if (cleanProcessType) {
-    push(
-      `OBJECT_ID eq '${escapeODataString(cleanCr)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`
-    );
-  }
-
   return [...new Set(variants)];
+}
+
+function buildCrTransportAllRowsVariants() {
+  return ["", "$top=500"];
 }
 
 function buildCrTransportLookupFallbackVariants({ changeRequestId, processType }) {
@@ -250,7 +321,6 @@ function buildCrTransportLookupFallbackVariants({ changeRequestId, processType }
 
   push(`substringof('${escapeODataString(cleanCr)}', ChangeRequestId)`);
   push(`substringof('${escapeODataString(cleanCr)}', ZchangeRequest)`);
-  push(`substringof('${escapeODataString(cleanCr)}', OBJECT_ID)`);
 
   if (cleanProcessType) {
     push(
@@ -258,9 +328,6 @@ function buildCrTransportLookupFallbackVariants({ changeRequestId, processType }
     );
     push(
       `substringof('${escapeODataString(cleanCr)}', ZchangeRequest) and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`
-    );
-    push(
-      `substringof('${escapeODataString(cleanCr)}', OBJECT_ID) and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`
     );
   }
 
@@ -274,7 +341,7 @@ export async function getTransportNumbersFromCr({
   processType = "",
 }) {
   const cleanCr = cleanString(changeRequestId);
-  const cleanProcessType = cleanString(processType);
+  const explicitProcessType = cleanString(processType);
 
   if (!cleanCr) {
     const err = new Error("changeRequestId is required.");
@@ -283,13 +350,20 @@ export async function getTransportNumbersFromCr({
     throw err;
   }
 
+  const resolvedProcessType = explicitProcessType || (await resolveCrProcessType({
+    system,
+    sapAuth,
+    changeRequestId: cleanCr,
+  }));
+
   const variants = buildCrTransportLookupVariants({
     changeRequestId: cleanCr,
-    processType: cleanProcessType,
+    processType: resolvedProcessType,
   });
 
   let raw = null;
   let lastError = null;
+  let normalized = null;
 
   for (const filter of variants) {
     const relativePath = `CR_DetailsSet?$filter=${encodeURIComponent(filter)}`;
@@ -304,7 +378,8 @@ export async function getTransportNumbersFromCr({
         sapAuth
       );
 
-      if (raw) break;
+      normalized = normalizeTransportsFromCr(raw, { changeRequestId: cleanCr });
+      if (normalized.transports.length > 0 || normalized.rows.length > 0) break;
     } catch (error) {
       lastError = error;
       const msg = cleanString(error?.message).toLowerCase();
@@ -320,10 +395,10 @@ export async function getTransportNumbersFromCr({
     }
   }
 
-  if (!raw) {
+  if (!normalized || (normalized.transports.length === 0 && normalized.rows.length === 0)) {
     const fallbackVariants = buildCrTransportLookupFallbackVariants({
       changeRequestId: cleanCr,
-      processType: cleanProcessType,
+      processType: resolvedProcessType,
     });
 
     for (const filter of fallbackVariants) {
@@ -339,7 +414,8 @@ export async function getTransportNumbersFromCr({
           sapAuth
         );
 
-        if (raw) break;
+        normalized = normalizeTransportsFromCr(raw, { changeRequestId: cleanCr });
+        if (normalized.transports.length > 0 || normalized.rows.length > 0) break;
       } catch (error) {
         lastError = error;
         const msg = cleanString(error?.message).toLowerCase();
@@ -356,13 +432,34 @@ export async function getTransportNumbersFromCr({
     }
   }
 
-  if (!raw) {
+  if (!normalized || (normalized.transports.length === 0 && normalized.rows.length === 0)) {
+    for (const suffix of buildCrTransportAllRowsVariants()) {
+      try {
+        const relativePath = suffix ? `CR_DetailsSet?${suffix}` : `CR_DetailsSet`;
+        raw = await fetchFromSap(
+          {
+            system,
+            service: { serviceName: "ZNEW_TRS_FROM_CR_SRV" },
+            relativePath,
+          },
+          sapAuth
+        );
+
+        normalized = normalizeTransportsFromCr(raw, { changeRequestId: cleanCr });
+        if (normalized.transports.length > 0 || normalized.rows.length > 0) break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+  }
+
+  if (!normalized || (normalized.transports.length === 0 && normalized.rows.length === 0)) {
     return {
       ok: false,
       message: `Unable to read transport details for CR ${cleanCr} from SAP.`,
       result: {
         changeRequestId: cleanCr,
-        processType: cleanProcessType || null,
+        processType: resolvedProcessType || null,
         raw: null,
         error: {
           code: "SAP_TRANSPORT_LOOKUP_FAILED",
@@ -371,8 +468,6 @@ export async function getTransportNumbersFromCr({
       },
     };
   }
-
-  const normalized = normalizeTransportsFromCr(raw);
 
   return {
     ok: true,
@@ -384,6 +479,7 @@ export async function getTransportNumbersFromCr({
       changeRequestId: normalized.changeRequestId || cleanCr,
       transports: normalized.transports,
       rows: normalized.rows,
+      processType: resolvedProcessType || null,
       raw,
     },
   };
@@ -511,10 +607,11 @@ export async function getDependentTransportsFromCr({
 
   if (!trResult?.ok) {
     return {
-      ok: false,
-      message: trResult?.message || `Unable to read transport details for CR ${changeRequestId}.`,
+      ok: true,
+      message: `No transports were found for CR ${changeRequestId}.`,
       result: {
         changeRequestId: cleanString(changeRequestId),
+        processType: cleanString(processType) || null,
         sourceTransports: [],
         dependencyMessage: "",
         dependencies: [],
@@ -535,6 +632,7 @@ export async function getDependentTransportsFromCr({
       message: `No transports were found for CR ${changeRequestId}.`,
       result: {
         changeRequestId: cleanString(changeRequestId),
+        processType: trResult?.result?.processType || null,
         sourceTransports: [],
         dependencyMessage: "",
         dependencies: [],
@@ -562,6 +660,7 @@ export async function getDependentTransportsFromCr({
     result: {
       changeRequestId:
         cleanString(trResult?.result?.changeRequestId) || cleanString(changeRequestId),
+      processType: trResult?.result?.processType || null,
       sourceTransports,
       dependencyMessage: depResult?.result?.dependencyMessage || "",
       dependencies: depResult?.result?.dependencies || [],

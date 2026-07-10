@@ -232,8 +232,8 @@ export function isSolmanCrQuery(query) {
     /\bapproved cr\b/.test(q) ||
     /\brejected cr\b/.test(q) ||
     /\bpending cr\b/.test(q) ||
-    /\bdependency transport\b/.test(q) ||
-    /\bdependency transports\b/.test(q) ||
+    /\bdependency check\b/.test(q) ||
+    /\bdependency analysis\b/.test(q) ||
     /\btransport created cr\b/.test(q) ||
     /\btransports created cr\b/.test(q) ||
     /\bcreated by me\b/.test(q) ||
@@ -265,8 +265,8 @@ export function isSolmanCrQuery(query) {
     /\bapproved cr\b/,
     /\brejected cr\b/,
     /\bpending cr\b/,
-    /\bdependency transport\b/,
-    /\bdependency transports\b/,
+    /\bdependency check\b/,
+    /\bdependency analysis\b/,
     /\btransport created cr\b/,
     /\btransports created cr\b/,
     /\blast\s+\d+\s+cr\b/,

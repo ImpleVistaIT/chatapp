@@ -4,6 +4,7 @@ import { ROUTING_CONFIG } from "../../config/routing.config.js";
 import { normalizeRoutingResult } from "../../config/routing.schema.js";
 import { isSupportedIntent } from "../../config/routing.registry.js";
 import { detectTransportQueryIntent } from "./detectors/genericRuleDetector.js";
+import { extractBusinessEntities } from "./utils/normalizeInput.js";
 import { inferCrCreatedByIntent } from "../../controllers/stream/solman/solman.shared.js";
 
 function normalizeSystem(value) {
@@ -37,6 +38,8 @@ function normalizeIntent(value) {
     get_change_request_details: "get_change_request_details",
     list_change_requests: "list_change_requests",
     cr_status_distribution: "cr_status_distribution",
+    dependency_check: "dependency_check",
+    dependency_analysis: "dependency_check",
     create_transport: "create_transport",
     transport_list: "transport_list",
     unknown: "unknown",
@@ -161,6 +164,16 @@ function detectCreateChangeRequestIntent(query = "") {
     hasExplicitNew ||
     /\bstart\b[\s\S]{0,40}\btransport\s+change\b/i.test(q)
   );
+}
+
+function detectDependencyCheckIntent(query = "") {
+  const q = normalizeRoutingQuery(query);
+  if (!q) return false;
+
+  const mentionsCr = /\b(?:change request|cr|change requests?)\b/i.test(q);
+  const mentionsDependencyCheck = /\bdependency\s+(?:check|analysis)\b/i.test(q);
+
+  return mentionsCr && mentionsDependencyCheck;
 }
 
 export function isCreateChangeRequestQuery(query = "") {
@@ -444,6 +457,21 @@ function keywordFallback(query) {
   const { fromDate, toDate } = extractDateRange(query);
   const processType = inferProcessType(query);
 
+  if (detectDependencyCheckIntent(query)) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "dependency_check",
+      confidence: 0.93,
+      reason: "Matched SolMan dependency check/analysis keywords",
+      source: "keyword",
+      entities: {
+        objectId,
+        processType,
+      },
+    });
+  }
+
   const transportMatch = detectTransportQueryIntent(query);
 
   if (transportMatch.matched) {
@@ -672,6 +700,26 @@ function keywordFallback(query) {
 }
 
 export async function classifyPrompt({ query, sessionContext = null }) {
+  if (detectDependencyCheckIntent(query)) {
+    const objectId = extractCrNumber(query);
+    const processType = inferProcessType(query);
+    const transportId = extractBusinessEntities(query)?.transport_id || null;
+
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "charm",
+      intent: "dependency_check",
+      confidence: 0.96,
+      reason: "Matched SolMan dependency check/analysis intent from natural language",
+      source: "rule",
+      entities: {
+        objectId,
+        processType,
+        transportId,
+      },
+    });
+  }
+
   const transportMatch = detectTransportQueryIntent(query);
   if (transportMatch.matched && transportMatch.confidence >= ROUTING_CONFIG.confidence.high) {
     return normalizeRoutingResult({

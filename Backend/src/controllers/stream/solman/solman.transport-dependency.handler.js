@@ -72,7 +72,7 @@ function formatTransportDependencyReply(result = {}) {
 
   if (dependencies.length === 0) {
     lines.push("");
-    lines.push(`No dependent transports were found for Change Request ${crLabel}.`);
+    lines.push(`No dependent check were found for Change Request ${crLabel}.`);
     return lines.join("\n");
   }
 
@@ -137,7 +137,7 @@ export async function handleTransportDependency(context) {
 
   const input = pickTransportDependencyEntities(classified?.entities || {}, query);
   const objectId = cleanString(input.objectId);
-  const processType = cleanString(input.processType) || "YMHF";
+  const processType = cleanString(input.processType);
 
   if (!objectId) {
     const message =
@@ -288,7 +288,7 @@ export async function handleTransportDependency(context) {
     },
     suggestions: [
       `Show status of CR ${objectId}`,
-      `Check dependency transport for CR ${objectId}`,
+      `Check dependency analysis for CR ${objectId}`,
     ],
   });
 

@@ -20,6 +20,7 @@ export const ROUTING_INTENTS = [
   "list_change_requests",
   "list_change_requests_by_created_by",
   "cr_status_distribution",
+  "dependency_check",
   "create_transport",
   "transport_list",
   "unknown",

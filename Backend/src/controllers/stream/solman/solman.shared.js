@@ -877,8 +877,8 @@ export function inferCrListIntent(classified, query = "") {
     /\blast year\b/.test(q) ||
     /\blast\s+\d+\s+days?\b/.test(q) ||
     /\byear of\s+20\d{2}\b/.test(q) ||
-    /\bdependency transport\b/.test(q) ||
-    /\bdependency transports\b/.test(q) ||
+    /\bdependency check\b/.test(q) ||
+    /\bdependency analysis\b/.test(q) ||
     /\brow\b/.test(q) ||
     /\bindia\b/.test(q)
   ) {

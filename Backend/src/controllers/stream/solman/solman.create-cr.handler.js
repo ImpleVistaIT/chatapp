@@ -135,10 +135,29 @@ export async function handleCreateCr(context) {
     return sse.end();
   }
 
-  const reply =
-    `Change request ${result.result?.changeRequestId} created successfully.\n` +
-    `Status: ${result.result?.status || "-"}\n` +
-    `Message: ${result.message || "-"}`;
+  const changeRequestId = String(result.result?.changeRequestId || "-").trim() || "-";
+  const status = String(result.result?.status || "-").trim() || "-";
+  const shortDesc = String(collected?.ShortDesc || "-").trim() || "-";
+  const deliveryResponsible = String(collected?.DeliveryResponsible || "-").trim() || "-";
+  const developer = String(collected?.Developer || "-").trim() || "-";
+  const tester = String(collected?.Tester || "-").trim() || "-";
+  const landscape = String(collected?.Landscape || "-").trim() || "-";
+  const workItemReference = String(collected?.WorkItemReference || "-").trim() || "-";
+
+  const reply = [
+    `Change request created successfully.`,
+    `CR Number: ${changeRequestId}`,
+    `Status: ${status}`,
+    `Short Description: ${shortDesc}`,
+    `Delivery Responsible: ${deliveryResponsible}`,
+    `Developer: ${developer}`,
+    `Tester: ${tester}`,
+    `Landscape: ${landscape}`,
+    `Work Item Reference: ${workItemReference}`,
+    result.message ? `Message: ${result.message}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   await persistAssistantAndTouchSession({
     owner,
@@ -151,6 +170,16 @@ export async function handleCreateCr(context) {
       payload: collected,
     },
     data: {
+      summary: {
+        changeRequestId,
+        status,
+        shortDesc,
+        deliveryResponsible,
+        developer,
+        tester,
+        landscape,
+        workItemReference,
+      },
       changeRequestId: result.result?.changeRequestId,
       status: result.result?.status,
       msgType: result.result?.msgType,
@@ -173,6 +202,16 @@ export async function handleCreateCr(context) {
     reply,
     summary: result.message || "Change request created successfully.",
     data: {
+      summary: {
+        changeRequestId,
+        status,
+        shortDesc,
+        deliveryResponsible,
+        developer,
+        tester,
+        landscape,
+        workItemReference,
+      },
       changeRequestId: result.result?.changeRequestId,
       status: result.result?.status,
       msgType: result.result?.msgType,
