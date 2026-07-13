@@ -109,6 +109,24 @@ export const ROUTING_INTENT_REGISTRY = {
     },
 
     transport: {
+      create_transport_task: {
+        label: "Create transport task",
+        action: "open_form",
+        requiredInputs: ["transportNo", "changeRequest", "developers"],
+        entityHints: ["transportNo", "changeRequest", "developers"],
+        formId: "solman_create_transport_task",
+        executor: "solman.transport.createTransportTask",
+      },
+
+      release_transport_task: {
+        label: "Release transport task",
+        action: "open_form",
+        requiredInputs: ["taskId"],
+        entityHints: ["taskId"],
+        formId: "solman_release_transport_task",
+        executor: "solman.transport.releaseTransportTask",
+      },
+
       create_transport: {
         label: "Create transport",
         action: "execute_api",

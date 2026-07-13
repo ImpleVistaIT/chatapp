@@ -18,7 +18,7 @@ function looksLikeSapQuery(query) {
   const q = cleanString(query).toLowerCase();
   if (!q) return false;
 
-  return /\b(po|purchase\s*order|purchase\s*orders|invoice|vendor|supplier|material|delivery|sales\s*order|change\s*request|change\s*requests|cr|charm|transport|solman|s4|s4hana|report|analytics|transaction|workflow|approval|approvals)\b/i.test(q);
+  return /\b(po|purchase\s*order|purchase\s*orders|invoice|vendor|supplier|material|delivery|sales\s*order|change\s*request|change\s*requests|cr|charm|transport|solman|s4|s4hana|report|analytics|transaction|workflow|approval|approvals|task|tasks)\b/i.test(q);
 }
 
 function buildReplyForIntent(intent) {

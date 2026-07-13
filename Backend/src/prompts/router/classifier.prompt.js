@@ -26,7 +26,7 @@ You must return ONLY valid JSON in this exact shape:
 {
   "system": "s4hana" | "solman" | "ambiguous",
   "module": "mm" | "sd" | "finance" | "approval" | "charm" | "incident" | "transport" | "unknown",
-  "intent": "list_purchase_orders" | "get_purchase_order_details" | "check_approvals" | "create_change_request" | "get_change_request_details" | "list_change_requests" | "cr_status_distribution" | "create_transport" | "unknown",
+  "intent": "list_purchase_orders" | "get_purchase_order_details" | "check_approvals" | "create_change_request" | "get_change_request_details" | "list_change_requests" | "cr_status_distribution" | "create_transport_task" | "release_transport_task" | "create_transport" | "unknown",
   "confidence": 0.0,
   "reason": "short reason",
   "entities": {}
@@ -69,6 +69,10 @@ Supported routing targets:
   This is a reporting/analytics request, not a single CR detail request.
 
 5. SolMan / Transport
+- intent: "create_transport_task"
+  Use when the user wants to create one or more transport tasks under an existing transport request and change request.
+- intent: "release_transport_task"
+  Use when the user wants to release an existing transport task.
 - intent: "create_transport"
   Use when user wants to create a transport
 - intent: "transport_list"
@@ -174,6 +178,15 @@ then classify as:
 - system = "solman"
 - module = "transport"
 - intent = "transport_list"
+
+If the user asks to release a transport task, including phrases like:
+- "release task"
+- "release transport task"
+- "release task HDVK914688"
+then classify as:
+- system = "solman"
+- module = "transport"
+- intent = "release_transport_task"
 
 If the user asks to create / raise / submit / open / initiate / start / generate / make / request a CR or change request, including phrases like:
 - "create a new CR"

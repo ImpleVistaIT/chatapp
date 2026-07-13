@@ -3,6 +3,8 @@ import express from "express";
 import { handleChatEntry } from "../controllers/chat.entry.controller.js";
 import {
   submitSolmanCreateChangeRequest,
+  submitSolmanCreateTransportTask,
+  submitSolmanReleaseTransportTask,
   getSolmanChangeRequestDetails,
   listSolmanChangeRequests,
 } from "../controllers/chat.actions.controller.js";
@@ -24,6 +26,16 @@ chatRoutes.post("/", handleChatEntry);
 chatRoutes.post(
   "/actions/solman/create-change-request",
   submitSolmanCreateChangeRequest
+);
+
+chatRoutes.post(
+  "/actions/solman/create-transport-task",
+  submitSolmanCreateTransportTask
+);
+
+chatRoutes.post(
+  "/actions/solman/release-transport-task",
+  submitSolmanReleaseTransportTask
 );
 
 chatRoutes.post(

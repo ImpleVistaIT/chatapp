@@ -147,7 +147,7 @@ export async function handleCreateCr(context) {
   const reply = [
     `Change request created successfully.`,
     `CR Number: ${changeRequestId}`,
-    `Status: ${status}`,
+    `CR Creation: ${status}`,
     `Short Description: ${shortDesc}`,
     `Delivery Responsible: ${deliveryResponsible}`,
     `Developer: ${developer}`,

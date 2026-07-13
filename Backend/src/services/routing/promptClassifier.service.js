@@ -40,6 +40,8 @@ function normalizeIntent(value) {
     cr_status_distribution: "cr_status_distribution",
     dependency_check: "dependency_check",
     dependency_analysis: "dependency_check",
+    create_transport_task: "create_transport_task",
+    release_transport_task: "release_transport_task",
     create_transport: "create_transport",
     transport_list: "transport_list",
     unknown: "unknown",
@@ -146,6 +148,26 @@ function detectListChangeRequestIntent(query = "") {
   return hasRetrievalVerb(q) || hasListFilterCue(q) || /\bshow\s+my\s+crs?\b/i.test(q) || /\bcreated\s+by\s+me\b/i.test(q) || /\bopen\s+crs?\b/i.test(q) || /\bclosed\s+crs?\b/i.test(q) || /\bpending\s+crs?\b/i.test(q) || /\brejected\s+crs?\b/i.test(q) || /\bapproved\s+crs?\b/i.test(q);
 }
 
+function detectCreateTransportTaskIntent(query = "") {
+  const q = normalizeRoutingQuery(query);
+  if (!q) return false;
+
+  const createTaskPattern = /\b(?:create|add)\b[\s\S]{0,40}\b(?:task|tasks)\b/i;
+  const explicitCrCreation = /\b(?:create|raise|submit|open|initiate|start|generate|make|request)\b[\s\S]{0,40}\b(?:change request|change requests?|crs?|cr's)\b/i;
+
+  return createTaskPattern.test(q) && !explicitCrCreation.test(q);
+}
+
+function detectReleaseTransportTaskIntent(query = "") {
+  const q = normalizeRoutingQuery(query);
+  if (!q) return false;
+
+  const releaseTaskPattern = /\brelease\b[\s\S]{0,40}\b(?:task|transport task)\b/i;
+  const releaseTransportPattern = /\brelease\b[\s\S]{0,40}\b(?:transport|request)\b/i;
+
+  return releaseTaskPattern.test(q) && !releaseTransportPattern.test(q) && !detectCreateTransportTaskIntent(q) && !detectCreateChangeRequestIntent(q);
+}
+
 function detectCreateChangeRequestIntent(query = "") {
   const q = normalizeRoutingQuery(query);
   if (!q) return false;
@@ -156,6 +178,8 @@ function detectCreateChangeRequestIntent(query = "") {
   const hasCrNoun = /\b(?:change request|change requests?|transport change request|transport change|crs?|cr's)\b/i.test(q);
   const hasExplicitNew = /\bnew\s+(?:change request|change requests?|transport change request|transport change|crs?|cr's)\b/i.test(q);
   const hasEmergencyCreate = /\bemergency\b/i.test(q) && /\b(?:change request|change requests?|transport change request|transport change|change)\b/i.test(q);
+
+  if (detectCreateTransportTaskIntent(q)) return false;
 
   return (
     (hasCreateVerb && hasCrNoun) ||
@@ -743,6 +767,8 @@ export async function classifyPrompt({ query, sessionContext = null }) {
   }
 
   const createdByLikeIntent = inferCrCreatedByIntent(query);
+  const createTransportTaskLikeIntent = detectCreateTransportTaskIntent(query);
+  const releaseTransportTaskLikeIntent = detectReleaseTransportTaskIntent(query);
   const listLikeIntent = detectListChangeRequestIntent(query);
   const createLikeIntent = detectCreateChangeRequestIntent(query);
 
@@ -757,6 +783,38 @@ export async function classifyPrompt({ query, sessionContext = null }) {
       entities: normalizeEntitiesByIntent(
         "list_change_requests_by_created_by",
         createdByLikeIntent,
+        query
+      ),
+    });
+  }
+
+  if (createTransportTaskLikeIntent) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "transport",
+      intent: "create_transport_task",
+      confidence: 0.97,
+      reason: "Matched SolMan transport task creation intent from natural language",
+      source: "rule",
+      entities: normalizeEntitiesByIntent(
+        "create_transport_task",
+        extractBusinessEntities(query),
+        query
+      ),
+    });
+  }
+
+  if (releaseTransportTaskLikeIntent) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "transport",
+      intent: "release_transport_task",
+      confidence: 0.97,
+      reason: "Matched SolMan transport task release intent from natural language",
+      source: "rule",
+      entities: normalizeEntitiesByIntent(
+        "release_transport_task",
+        extractBusinessEntities(query),
         query
       ),
     });

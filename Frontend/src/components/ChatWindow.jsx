@@ -120,6 +120,8 @@ export default function ChatWindow({
   showSolmanCrForm = false,
   setShowSolmanCrForm = () => {},
   solmanCreateCrForm = null,
+  solmanCreateTransportTaskForm = null,
+  solmanReleaseTransportTaskForm = null,
 }) {
   const [showSystemDropdown, setShowSystemDropdown] = useState(false);
   const [connectingSystemId, setConnectingSystemId] = useState(null);
@@ -881,7 +883,7 @@ const isConnected = useMemo(() => {
         loading={loading}
         bottomRef={bottomRef}
         showScrollDown={showScrollDown}
-        inlineForm={isConnected ? solmanCreateCrForm : null}
+        inlineForm={isConnected ? (solmanCreateCrForm || solmanCreateTransportTaskForm || solmanReleaseTransportTaskForm) : null}
       />
 
       {isConnected && (

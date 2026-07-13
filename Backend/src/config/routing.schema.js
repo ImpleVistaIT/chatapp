@@ -21,6 +21,8 @@ export const ROUTING_INTENTS = [
   "list_change_requests_by_created_by",
   "cr_status_distribution",
   "dependency_check",
+  "create_transport_task",
+  "release_transport_task",
   "create_transport",
   "transport_list",
   "unknown",

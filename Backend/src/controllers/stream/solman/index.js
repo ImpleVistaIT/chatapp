@@ -21,6 +21,8 @@ import { handleCrStatusDistribution } from "./solman.cr-status.handler.js";
 import { handleDependencyCheck } from "./solman.dependency-check.handler.js";
 import { handleTransportDependency } from "./solman.transport-dependency.handler.js";
 import { handleTransportList } from "./solman.transport-list.handler.js";
+import { handleCreateTransportTask, isCreateTransportTaskRequest } from "./createTask.js";
+import { handleReleaseTransportTask, isReleaseTransportTaskRequest, isReleaseTransportRequest } from "./releaseTask.js";
 
 function normalizeIntentQuery(query = "") {
   return cleanString(query)
@@ -69,6 +71,10 @@ function isTransportDependencyIntent(classified, query = "") {
 function isTransportListIntent(classified, query = "") {
   const intent = cleanString(classified?.intent).toLowerCase();
   const q = normalizeIntentQuery(query);
+
+  if (isCreateTransportTaskRequest(query)) {
+    return false;
+  }
 
   if (
     intent === "transport_list" ||
@@ -245,6 +251,26 @@ export async function handleSolmanChatStream({
 
   if (classified?.intent === "create_change_request") {
     return handleCreateCr(context);
+  }
+
+  if (classified?.intent === "create_transport_task") {
+    return handleCreateTransportTask(context);
+  }
+
+  if (classified?.intent === "release_transport_task") {
+    return handleReleaseTransportTask(context);
+  }
+
+  if (isCreateTransportTaskRequest(query)) {
+    return handleCreateTransportTask(context);
+  }
+
+  if (isReleaseTransportTaskRequest(query)) {
+    return handleReleaseTransportTask(context);
+  }
+
+  if (isReleaseTransportRequest(query)) {
+    return handleTransportList(context);
   }
 
   if (classified?.intent === "dependency_check") {

@@ -68,11 +68,11 @@ function isSolmanRelatedQuery(query, classified = null) {
     return true;
   }
 
-  return /\b(change request|change requests|crs?|charm|transport|solman|latest\s+\d+\s+crs?|last\s+\d+\s+crs?|most\s+recent\s+\d+\s+crs?|top\s+\d+\s+crs?)\b/i.test(q);
+  return /\b(change request|change requests|crs?|charm|transport|solman|release\s+task|release\s+transport\s+task|task\s+[a-z]{2,6}\d{4,20}|latest\s+\d+\s+crs?|last\s+\d+\s+crs?|most\s+recent\s+\d+\s+crs?|top\s+\d+\s+crs?)\b/i.test(q);
 }
 
 const ROUTING_KEYWORD_REGEX =
-  /\b(po|purchase\s*order|purchase\s*orders|invoice|vendor|supplier|material|delivery|sales\s*order|change\s*request|change\s*requests|cr|charm|transport|solman|s4|s4hana|created|date|month|year|count|top|skip|offset|order\s*by|latest|recent|newest|status)\b/i;
+  /\b(po|purchase\s*order|purchase\s*orders|invoice|vendor|supplier|material|delivery|sales\s*order|change\s*request|change\s*requests|cr|charm|transport|solman|release\s*task|task|s4|s4hana|created|date|month|year|count|top|skip|offset|order\s*by|latest|recent|newest|status)\b/i;
 
 const COMMON_PROMPT_WORDS = new Set([
   "show",

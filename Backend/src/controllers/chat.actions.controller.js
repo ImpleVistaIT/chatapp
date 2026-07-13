@@ -5,6 +5,7 @@ import {
   getSolmanChangeRequestDetailsById,
   listSolmanChangeRequestsByDateRange,
 } from "../services/systems/solman/charm.service.js";
+import { postToSap } from "../services/sap/sapWrite.service.js";
 import { persistAssistantAndTouchSession } from "./stream/solman/solman.shared.js";
 
 function cleanString(v) {
@@ -88,6 +89,30 @@ function validateListChangeRequestsInput(body) {
 
   if (!cleanString(body?.toDate)) {
     return "toDate is required.";
+  }
+
+  return null;
+}
+
+function validateCreateTransportTaskInput(body) {
+  if (!cleanString(body?.systemId)) {
+    return "systemId is required.";
+  }
+
+  if (!cleanString(body?.sapUser)) {
+    return "sapUser is required.";
+  }
+
+  if (!body?.payload || typeof body.payload !== "object") {
+    return "payload is required.";
+  }
+
+  if (!cleanString(body?.payload?.IM_TRANSPORT_NO)) {
+    return "transportNo is required.";
+  }
+
+  if (!cleanString(body?.payload?.IM_SOLMAN_CHANGE_REQ)) {
+    return "changeRequest is required.";
   }
 
   return null;
@@ -323,5 +348,186 @@ export const listSolmanChangeRequests = createSapActionHandler({
     skip: result?.result?.skip ?? result?.skip ?? 0,
     orderBy: result?.result?.orderBy || result?.orderBy || "CREATED_ON desc",
     nextSkip: result?.result?.nextSkip ?? result?.nextSkip ?? 0,
+  }),
+});
+
+export const submitSolmanCreateTransportTask = createSapActionHandler({
+  executor: "solman.transport.createTransportTask",
+
+  validate: validateCreateTransportTaskInput,
+
+  execute: async ({ owner, body }) => {
+    const connection = await resolveSapConnection({
+      owner,
+      systemId: body.systemId,
+      sapUser: body.sapUser,
+    });
+
+    const raw = await postToSap(
+      {
+        system: connection.system,
+        relativePath: "/sap/opu/odata/sap/ZCREATE_TRANSPORT_TASKS_SRV/TransportTaskSet",
+        body: body.payload,
+      },
+      connection.sapAuth
+    );
+
+    const d = raw?.d || raw || {};
+    const status = String(d?.EV_TR_OUTPUT_MSG || d?.EV_OUTPUT_MSG || d?.STATUS || d?.STATUS_TEXT || "S").trim();
+    const taskMessage = String(d?.TASK_MESSAGE || "[]").trim();
+    const tasks = String(d?.TASKS || "[]").trim();
+
+    const responseSummary = {
+      transportNo: cleanString(body?.payload?.IM_TRANSPORT_NO),
+      changeRequest: cleanString(body?.payload?.IM_SOLMAN_CHANGE_REQ),
+      developers: (() => {
+        try {
+          return JSON.parse(String(body?.payload?.DEVELOPERS || "[]"))
+            .map((item) => cleanString(item?.developer))
+            .filter(Boolean);
+        } catch {
+          return [];
+        }
+      })(),
+      status,
+      taskMessage,
+      tasks,
+    };
+
+    const sessionId = String(body?.sessionId || "").trim();
+    if (/^[a-f0-9]{24}$/i.test(sessionId)) {
+      await persistAssistantAndTouchSession({
+        owner,
+        sessionId,
+        text: `Transport task creation completed for CR ${responseSummary.changeRequest}.`,
+        summary: `Transport task creation completed for CR ${responseSummary.changeRequest}.`,
+        extracted: {
+          system: "solman",
+          intent: "create_transport_task",
+          transportNo: responseSummary.transportNo,
+          changeRequest: responseSummary.changeRequest,
+          developers: responseSummary.developers,
+          status,
+        },
+        data: {
+          viewType: "solman_create_transport_task_success",
+          ...responseSummary,
+          raw,
+        },
+        responseMeta: {
+          ok: true,
+          kind: "action",
+          executor: "solman.transport.createTransportTask",
+          systemId: connection.system?.systemId || body?.systemId || "",
+          sapUser: connection.sapAuth?.username || connection.sapAuth?.sapUser || body?.sapUser || "",
+        },
+      });
+    }
+
+    return {
+      ok: true,
+      message: `Transport task creation completed for CR ${responseSummary.changeRequest}.`,
+      summary: responseSummary,
+      raw,
+    };
+  },
+
+  mapSuccessResult: (result) => ({
+    ...result,
+    summary: result.summary,
+    raw: result.raw,
+  }),
+});
+
+export const submitSolmanReleaseTransportTask = createSapActionHandler({
+  executor: "solman.transport.releaseTransportTask",
+
+  validate: (body) => {
+    if (!cleanString(body?.systemId)) return "systemId is required.";
+    if (!cleanString(body?.sapUser)) return "sapUser is required.";
+    if (!body?.payload || typeof body.payload !== "object") return "payload is required.";
+    if (!cleanString(body?.payload?.IvTaskId)) return "Task number is required.";
+    return null;
+  },
+
+  execute: async ({ owner, body }) => {
+    const connection = await resolveSapConnection({
+      owner,
+      systemId: body.systemId,
+      sapUser: body.sapUser,
+    });
+
+    const serviceName = String(process.env.SOLMAN_RELEASE_TASK_SERVICE_NAME || "ZTASK_RELEASE_SRV").trim();
+    const entitySetName = String(process.env.SOLMAN_RELEASE_TASK_ENTITYSET || "ZTask_releaseSet").trim();
+
+    const taskId = cleanString(body?.payload?.IvTaskId).toUpperCase();
+
+    let raw;
+    try {
+      raw = await postToSap(
+        {
+          system: connection.system,
+          relativePath: `/sap/opu/odata/sap/${serviceName}/${entitySetName}`,
+          body: { IvTaskId: taskId },
+        },
+        connection.sapAuth
+      );
+    } catch (error) {
+      const message = String(error?.message || "");
+      if (/No service found for namespace/i.test(message) || /service not found/i.test(message) || /not active/i.test(message)) {
+        const friendly = `SAP service ${serviceName} is not active on this system, or the service name/entity set is wrong. Activate it in SAP Gateway or update SOLMAN_RELEASE_TASK_SERVICE_NAME / SOLMAN_RELEASE_TASK_ENTITYSET.`;
+        const wrapped = new Error(friendly);
+        wrapped.status = 404;
+        wrapped.code = "SAP_SERVICE_NOT_FOUND";
+        wrapped.userMessage = friendly;
+        throw wrapped;
+      }
+      throw error;
+    }
+
+    const d = raw?.d || raw || {};
+    const responseTaskId = cleanString(d?.IvTaskId || taskId).toUpperCase();
+    const responseMessage = cleanString(d?.EvMessage || d?.EV_MESSAGE || `Task ${responseTaskId} released successfully`);
+
+    const sessionId = String(body?.sessionId || "").trim();
+    if (/^[a-f0-9]{24}$/i.test(sessionId)) {
+      await persistAssistantAndTouchSession({
+        owner,
+        sessionId,
+        text: `✅ Transport task released successfully.\n\nTask Number:\n${responseTaskId}\n\nSAP Message:\n${responseMessage}`,
+        summary: responseMessage,
+        extracted: {
+          system: "solman",
+          intent: "release_transport_task",
+          taskId: responseTaskId,
+        },
+        data: {
+          viewType: "solman_release_transport_task_success",
+          taskId: responseTaskId,
+          message: responseMessage,
+          raw,
+        },
+        responseMeta: {
+          ok: true,
+          kind: "action",
+          executor: "solman.transport.releaseTransportTask",
+          systemId: connection.system?.systemId || body?.systemId || "",
+          sapUser: connection.sapAuth?.username || connection.sapAuth?.sapUser || body?.sapUser || "",
+        },
+      });
+    }
+
+    return {
+      ok: true,
+      message: responseMessage,
+      taskId: responseTaskId,
+      raw,
+    };
+  },
+
+  mapSuccessResult: (result) => ({
+    taskId: result.taskId,
+    message: result.message,
+    raw: result.raw,
   }),
 });

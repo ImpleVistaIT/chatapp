@@ -19,6 +19,8 @@ import ChatWindow from "./ChatWindow";
 import SapLogin from "../pages/saplogin";
 import { authFetch } from "../api/authFetch";
 import SolmanCreateCrForm from "./SolmanCreateCrForm";
+import SolmanCreateTransportTaskForm from "./SolmanCreateTransportTaskForm";
+import SolmanReleaseTransportTaskForm from "./SolmanReleaseTransportTaskForm";
 
 //---------------------------------------------//
 // Utility helpers
@@ -437,6 +439,8 @@ export default function Chat({ onToast = null } = {}) {
   const [selectedSystem, setSelectedSystem] = useState(() => readStoredSelectedSystem());
   const [statusText, setStatusText] = useState("");
   const [showSolmanCrForm, setShowSolmanCrForm] = useState(false);
+  const [showSolmanTransportTaskForm, setShowSolmanTransportTaskForm] = useState(false);
+  const [showSolmanReleaseTaskForm, setShowSolmanReleaseTaskForm] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
 
   const [activeSession, setActiveSession] = useState(() => {
@@ -1254,18 +1258,54 @@ export default function Chat({ onToast = null } = {}) {
         window.dispatchEvent(new Event("chatSessionsChanged"));
       }
 
-      if (
-        payload?.action?.type === "open_form" &&
-        payload?.action?.formId === "solman_create_cr"
-      ) {
+      const actionType = String(payload?.action?.type || payload?.action || "").toLowerCase();
+      const actionFormId = String(payload?.action?.formId || payload?.formId || "").trim();
+
+      if (actionType === "open_form" && actionFormId === "solman_create_cr") {
         setPendingAction(payload?.pendingAction || null);
         setShowSolmanCrForm(true);
+        setShowSolmanTransportTaskForm(false);
+        setShowSolmanReleaseTaskForm(false);
 
         updateConversationById(errorConvId, (m) => [
           ...m,
           {
             role: "assistant",
             text: payload?.message || "Please complete the required change request details.",
+          },
+        ]);
+      } else if (actionType === "open_form" && actionFormId === "solman_create_transport_task") {
+        setPendingAction({
+          collected: payload?.prefilledData || payload?.pendingAction?.collected || {},
+          missingFields: payload?.missingFields || payload?.pendingAction?.missingFields || [],
+        });
+        setShowSolmanTransportTaskForm(true);
+        setShowSolmanCrForm(false);
+        setShowSolmanReleaseTaskForm(false);
+
+        updateConversationById(errorConvId, (m) => [
+          ...m,
+          {
+            role: "assistant",
+            text:
+              payload?.message ||
+              "Please complete the required transport task details.",
+          },
+        ]);
+      } else if (actionType === "open_form" && actionFormId === "solman_release_transport_task") {
+        setPendingAction({
+          collected: payload?.prefilledData || payload?.pendingAction?.collected || {},
+          missingFields: payload?.missingFields || payload?.pendingAction?.missingFields || [],
+        });
+        setShowSolmanReleaseTaskForm(true);
+        setShowSolmanCrForm(false);
+        setShowSolmanTransportTaskForm(false);
+
+        updateConversationById(errorConvId, (m) => [
+          ...m,
+          {
+            role: "assistant",
+            text: payload?.message || "Please complete the required task number.",
           },
         ]);
       } else if (payload?.action?.type === "add_system") {
@@ -2558,6 +2598,67 @@ export default function Chat({ onToast = null } = {}) {
     </div>
   ) : null;
 
+  const solmanCreateTransportTaskForm = showSolmanTransportTaskForm ? (
+    <div className="px-4 pb-4">
+      <SolmanCreateTransportTaskForm
+        systemId={resolvedConnectedSystem?.systemId || ""}
+        sapUser={resolvedConnectedSystem?.sapUser || ""}
+        sessionId={isMongoId(activeId) ? activeId : ""}
+        initialValues={pendingAction?.collected || {}}
+        pendingAction={pendingAction}
+        onSuccess={(data) => {
+          setShowSolmanTransportTaskForm(false);
+          setPendingAction(null);
+
+          updateActiveMessages((m) => [
+            ...m,
+            {
+              role: "assistant",
+              text:
+                data?.message ||
+                `Transport task creation completed for CR ${data?.summary?.changeRequest || ""}.`,
+              summary: data?.message || "Transport task created successfully.",
+              data,
+            },
+          ]);
+        }}
+        onCancel={() => {
+          setShowSolmanTransportTaskForm(false);
+        }}
+      />
+    </div>
+  ) : null;
+
+  const solmanReleaseTransportTaskForm = showSolmanReleaseTaskForm ? (
+    <div className="px-4 pb-4">
+      <SolmanReleaseTransportTaskForm
+        systemId={resolvedConnectedSystem?.systemId || ""}
+        sapUser={resolvedConnectedSystem?.sapUser || ""}
+        sessionId={isMongoId(activeId) ? activeId : ""}
+        initialValues={pendingAction?.collected || {}}
+        pendingAction={pendingAction}
+        onSuccess={(data) => {
+          setShowSolmanReleaseTaskForm(false);
+          setPendingAction(null);
+
+          updateActiveMessages((m) => [
+            ...m,
+            {
+              role: "assistant",
+              text: data?.message || "Task released successfully.",
+              summary: data?.message || "Task released successfully."
+            ,
+              data,
+            },
+          ]);
+        }}
+        onCancel={() => {
+          setShowSolmanReleaseTaskForm(false);
+        }}
+      />
+    </div>
+  ) : null;
+
   return (
     <div className="fixed inset-0 bg-[#f7f7f8] text-zinc-800">
       {sapView === "saplogin" ? (
@@ -2653,6 +2754,8 @@ export default function Chat({ onToast = null } = {}) {
             showSolmanCrForm={showSolmanCrForm}
             setShowSolmanCrForm={setShowSolmanCrForm}
             solmanCreateCrForm={solmanCreateCrForm}
+            solmanCreateTransportTaskForm={solmanCreateTransportTaskForm}
+            solmanReleaseTransportTaskForm={solmanReleaseTransportTaskForm}
           />
         </div>
       )}
