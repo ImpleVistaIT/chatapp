@@ -19,6 +19,7 @@ import ChatWindow from "./ChatWindow";
 import SapLogin from "../pages/saplogin";
 import { authFetch } from "../api/authFetch";
 import SolmanCreateCrForm from "./SolmanCreateCrForm";
+import SolmanCreateTransportRequestForm from "./SolmanCreateTransportRequestForm";
 import SolmanCreateTransportTaskForm from "./SolmanCreateTransportTaskForm";
 import SolmanReleaseTransportTaskForm from "./SolmanReleaseTransportTaskForm";
 
@@ -439,6 +440,7 @@ export default function Chat({ onToast = null } = {}) {
   const [selectedSystem, setSelectedSystem] = useState(() => readStoredSelectedSystem());
   const [statusText, setStatusText] = useState("");
   const [showSolmanCrForm, setShowSolmanCrForm] = useState(false);
+  const [showSolmanTransportRequestForm, setShowSolmanTransportRequestForm] = useState(false);
   const [showSolmanTransportTaskForm, setShowSolmanTransportTaskForm] = useState(false);
   const [showSolmanReleaseTaskForm, setShowSolmanReleaseTaskForm] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
@@ -1264,6 +1266,7 @@ export default function Chat({ onToast = null } = {}) {
       if (actionType === "open_form" && actionFormId === "solman_create_cr") {
         setPendingAction(payload?.pendingAction || null);
         setShowSolmanCrForm(true);
+        setShowSolmanTransportRequestForm(false);
         setShowSolmanTransportTaskForm(false);
         setShowSolmanReleaseTaskForm(false);
 
@@ -1281,6 +1284,7 @@ export default function Chat({ onToast = null } = {}) {
         });
         setShowSolmanTransportTaskForm(true);
         setShowSolmanCrForm(false);
+        setShowSolmanTransportRequestForm(false);
         setShowSolmanReleaseTaskForm(false);
 
         updateConversationById(errorConvId, (m) => [
@@ -1300,12 +1304,30 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanReleaseTaskForm(true);
         setShowSolmanCrForm(false);
         setShowSolmanTransportTaskForm(false);
+        setShowSolmanTransportRequestForm(false);
 
         updateConversationById(errorConvId, (m) => [
           ...m,
           {
             role: "assistant",
             text: payload?.message || "Please complete the required task number.",
+          },
+        ]);
+      } else if (actionType === "open_form" && actionFormId === "solman_create_transport_request") {
+        setPendingAction({
+          collected: payload?.prefilledData || payload?.pendingAction?.collected || {},
+          missingFields: payload?.missingFields || payload?.pendingAction?.missingFields || [],
+        });
+        setShowSolmanTransportRequestForm(true);
+        setShowSolmanCrForm(false);
+        setShowSolmanTransportTaskForm(false);
+        setShowSolmanReleaseTaskForm(false);
+
+        updateConversationById(errorConvId, (m) => [
+          ...m,
+          {
+            role: "assistant",
+            text: payload?.message || "Please complete the required transport request details.",
           },
         ]);
       } else if (payload?.action?.type === "add_system") {
@@ -2598,6 +2620,48 @@ export default function Chat({ onToast = null } = {}) {
     </div>
   ) : null;
 
+  const solmanCreateTransportRequestForm = showSolmanTransportRequestForm ? (
+    <div className="px-4 pb-4">
+      <SolmanCreateTransportRequestForm
+        systemId={resolvedConnectedSystem?.systemId || ""}
+        sapUser={resolvedConnectedSystem?.sapUser || ""}
+        sessionId={isMongoId(activeId) ? activeId : ""}
+        initialValues={pendingAction?.collected || {}}
+        pendingAction={pendingAction}
+        onSuccess={(data) => {
+          const result = data?.result || data || {};
+          const transportRequest = String(result?.transportRequest || result?.TrNumber || result?.TRNumber || "").trim();
+          const workbenchTransport = String(result?.workbenchTransport || result?.WorkbenchTR || "").trim();
+          const customizingTransport = String(result?.customizingTransport || result?.CustomizingTR || "").trim();
+          const sapMessage = String(result?.message || data?.message || "Transport Request created successfully.").trim();
+
+          setShowSolmanTransportRequestForm(false);
+          setPendingAction(null);
+
+          const messageLines = [
+            sapMessage,
+            transportRequest ? `TR Number: ${transportRequest}` : null,
+            workbenchTransport ? `Workbench TR: ${workbenchTransport}` : null,
+            customizingTransport ? `Customizing TR: ${customizingTransport}` : null,
+          ].filter(Boolean);
+
+          updateActiveMessages((m) => [
+            ...m,
+            {
+              role: "assistant",
+              text: messageLines.join("\n"),
+              summary: sapMessage,
+              data: result,
+            },
+          ]);
+        }}
+        onCancel={() => {
+          setShowSolmanTransportRequestForm(false);
+        }}
+      />
+    </div>
+  ) : null;
+
   const solmanCreateTransportTaskForm = showSolmanTransportTaskForm ? (
     <div className="px-4 pb-4">
       <SolmanCreateTransportTaskForm
@@ -2754,6 +2818,7 @@ export default function Chat({ onToast = null } = {}) {
             showSolmanCrForm={showSolmanCrForm}
             setShowSolmanCrForm={setShowSolmanCrForm}
             solmanCreateCrForm={solmanCreateCrForm}
+            solmanCreateTransportRequestForm={solmanCreateTransportRequestForm}
             solmanCreateTransportTaskForm={solmanCreateTransportTaskForm}
             solmanReleaseTransportTaskForm={solmanReleaseTransportTaskForm}
           />

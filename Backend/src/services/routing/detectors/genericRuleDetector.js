@@ -60,6 +60,23 @@ export function detectTransportQueryIntent(query) {
 	const originalTokens = matching.tokens;
 	const entities = extractBusinessEntities(query);
 	const crNumber = cleanString(entities.cr_number);
+	const lowerQuery = normalizeQueryText(query).toLowerCase();
+	const isCreateTransportRequest = /\b(?:create|generate|raise|make|open|request)\b[\s\S]{0,40}\b(?:transport request|\btr\b)\b/i.test(lowerQuery) ||
+		/\b(?:transport request|\btr\b)\b[\s\S]{0,40}\b(?:create|generate|raise|make|open|request)\b/i.test(lowerQuery);
+
+	if (isCreateTransportRequest) {
+		return {
+			matched: false,
+			intent: "UNKNOWN",
+			routeIntent: "unknown",
+			confidence: 0,
+			canonicalQuery: normalizeQueryText(query),
+			normalizedQuery: normalizeQueryText(query),
+			entities,
+			matchedBy: "none",
+			shouldUseLlm: true,
+		};
+	}
 	const normalizedTokens = normalizeTransportTokens(query);
 	const hasTransport = hasTransportCue(normalizedTokens);
 

@@ -190,6 +190,14 @@ test("create CR qualifiers are extracted from plain language", () => {
   assert.equal(approval.Workflow, "Approval");
 });
 
+test("create TR routes to transport request creation instead of change request or transport list", async () => {
+  const result = await classifyPrompt({ query: "create tr" });
+
+  assert.equal(result.system, "solman");
+  assert.equal(result.module, "transport");
+  assert.equal(result.intent, "create_transport_request");
+});
+
 test("SolMan date parser supports between ranges and month-name inputs", () => {
   const range = inferDateRangeFromQuery("show closed CRs between 01-Jan-2026 and 31-Jan-2026");
 

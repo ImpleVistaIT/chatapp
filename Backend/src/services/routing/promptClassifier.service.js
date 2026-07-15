@@ -42,6 +42,7 @@ function normalizeIntent(value) {
     dependency_analysis: "dependency_check",
     create_transport_task: "create_transport_task",
     release_transport_task: "release_transport_task",
+    create_transport_request: "create_transport_request",
     create_transport: "create_transport",
     transport_list: "transport_list",
     unknown: "unknown",
@@ -158,6 +159,20 @@ function detectCreateTransportTaskIntent(query = "") {
   return createTaskPattern.test(q) && !explicitCrCreation.test(q);
 }
 
+function detectCreateTransportRequestIntent(query = "") {
+  const q = normalizeRoutingQuery(query);
+  if (!q) return false;
+
+  if (/\btransport\s+task\b/i.test(q)) return false;
+
+  return (
+    /\b(?:create|generate|raise|make|open|request)\b[\s\S]{0,40}\b(?:transport request|\btr\b)\b/i.test(q) ||
+    /\b(?:transport request|\btr\b)\b[\s\S]{0,40}\b(?:create|generate|raise|make|open|request)\b/i.test(q) ||
+    /\bcreate\s+transport\s+request\b/i.test(q) ||
+    /\bgenerate\s+tr\b/i.test(q)
+  );
+}
+
 function detectReleaseTransportTaskIntent(query = "") {
   const q = normalizeRoutingQuery(query);
   if (!q) return false;
@@ -172,8 +187,15 @@ function detectCreateChangeRequestIntent(query = "") {
   const q = normalizeRoutingQuery(query);
   if (!q) return false;
 
+  const isTransportRequestOnly = /\b(?:create|raise|submit|open|initiate|start|generate|make|add|request)\b[\s\S]{0,40}\b(?:transport request|\btr\b)\b/i.test(q) ||
+    /\b(?:transport request|\btr\b)\b[\s\S]{0,40}\b(?:create|raise|submit|open|initiate|start|generate|make|add|request)\b/i.test(q);
+
+  if (isTransportRequestOnly && !/\bchange request\b/i.test(q)) {
+    return false;
+  }
+
   const hasCreateVerb = /\b(create|raise|submit|initiate|start|generate|make|add)\b/i.test(q);
-  const hasRequestCreatePhrase = /\brequest\b[\s\S]{0,30}\b(?:new\s+)?(?:change request|change requests?|crs?|cr's|transport change request|transport change|transport request)\b/i.test(q);
+  const hasRequestCreatePhrase = /\brequest\b[\s\S]{0,30}\b(?:new\s+)?(?:change request|change requests?|crs?|cr's|transport change request|transport change)\b/i.test(q);
   const hasNeedOrWant = /\b(need|want)\b/i.test(q);
   const hasCrNoun = /\b(?:change request|change requests?|transport change request|transport change|crs?|cr's)\b/i.test(q);
   const hasExplicitNew = /\bnew\s+(?:change request|change requests?|transport change request|transport change|crs?|cr's)\b/i.test(q);
@@ -745,6 +767,19 @@ export async function classifyPrompt({ query, sessionContext = null }) {
   }
 
   const transportMatch = detectTransportQueryIntent(query);
+
+  if (detectCreateTransportRequestIntent(query)) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "transport",
+      intent: "create_transport_request",
+      confidence: 0.98,
+      reason: "Matched SolMan transport request creation intent from natural language",
+      source: "rule",
+      entities: normalizeEntitiesByIntent("create_transport_request", extractBusinessEntities(query), query),
+    });
+  }
+
   if (transportMatch.matched && transportMatch.confidence >= ROUTING_CONFIG.confidence.high) {
     return normalizeRoutingResult({
       system: "solman",

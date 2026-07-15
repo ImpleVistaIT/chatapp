@@ -23,6 +23,7 @@ export const ROUTING_INTENTS = [
   "dependency_check",
   "create_transport_task",
   "release_transport_task",
+  "create_transport_request",
   "create_transport",
   "transport_list",
   "unknown",

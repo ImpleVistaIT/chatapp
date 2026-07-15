@@ -455,16 +455,15 @@ export async function getTransportNumbersFromCr({
 
   if (!normalized || (normalized.transports.length === 0 && normalized.rows.length === 0)) {
     return {
-      ok: false,
-      message: `Unable to read transport details for CR ${cleanCr} from SAP.`,
+      ok: true,
+      message: `No transports found for CR ${cleanCr}.`,
       result: {
         changeRequestId: cleanCr,
         processType: resolvedProcessType || null,
-        raw: null,
-        error: {
-          code: "SAP_TRANSPORT_LOOKUP_FAILED",
-          message: cleanString(lastError?.message) || null,
-        },
+        transports: [],
+        rows: [],
+        raw,
+        emptyState: `No transports found for CR ${cleanCr}.`,
       },
     };
   }
