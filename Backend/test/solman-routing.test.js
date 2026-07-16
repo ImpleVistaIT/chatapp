@@ -315,6 +315,53 @@ test("SolMan date parser supports current week month and year phrasing", () => {
   assert.equal(currentYear?.granularity, "year");
 });
 
+test("SolMan date parser supports week-number phrasing", () => {
+  const today = new Date();
+  const year = today.getFullYear();
+
+  const firstSunday = new Date(year, 0, 1);
+  firstSunday.setDate(firstSunday.getDate() - firstSunday.getDay());
+
+  const expectedWeekRange = (weekNumber) => {
+    const start = new Date(firstSunday);
+    start.setDate(start.getDate() + (weekNumber - 1) * 7);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    return {
+      fromDate: `${start.getFullYear()}${String(start.getMonth() + 1).padStart(2, "0")}${String(start.getDate()).padStart(2, "0")}`,
+      toDate: `${end.getFullYear()}${String(end.getMonth() + 1).padStart(2, "0")}${String(end.getDate()).padStart(2, "0")}`,
+    };
+  };
+
+  const week13 = inferDateRangeFromQuery("Show the 13th week CR");
+  const expected13 = expectedWeekRange(13);
+
+  assert.equal(week13?.fromDate, expected13.fromDate);
+  assert.equal(week13?.toDate, expected13.toDate);
+  assert.equal(week13?.granularity, "week");
+
+  const week13Alt = inferDateRangeFromQuery("Show CR for week 13");
+  assert.equal(week13Alt?.fromDate, expected13.fromDate);
+  assert.equal(week13Alt?.toDate, expected13.toDate);
+
+  const weekWord = inferDateRangeFromQuery("Show CR for the thirteenth week");
+  assert.equal(weekWord?.fromDate, expected13.fromDate);
+  assert.equal(weekWord?.toDate, expected13.toDate);
+});
+
+test("SolMan week parser rejects invalid week numbers", () => {
+  const invalidQueries = [
+    "Show CR for week 0",
+    "Show CR for week 54",
+    "Show CR for week 70",
+  ];
+
+  for (const query of invalidQueries) {
+    const result = inferDateRangeFromQuery(query);
+    assert.equal(result?.error, "Invalid week number. Please enter a week between 1 and 53.", query);
+  }
+});
+
 test("SolMan date parser supports single from date prompts", () => {
   const fromDate = inferDateRangeFromQuery("list CRs from 2026-06-14");
 

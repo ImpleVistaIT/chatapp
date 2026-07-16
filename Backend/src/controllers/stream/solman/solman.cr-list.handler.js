@@ -138,6 +138,40 @@ export async function handleCrList(context) {
   } = context;
 
   const listInput = pickCrListEntities(classified?.entities || {}, query);
+  if (listInput.dateValidationError) {
+    const message = listInput.dateValidationError;
+
+    await persistAssistantAndTouchSession({
+      owner,
+      sessionId: session._id,
+      text: message,
+      summary: "Invalid week number provided for CR list query.",
+      extracted: {
+        system: "solman",
+        intent: "list_change_requests",
+        validationError: message,
+      },
+      data: {
+        validationError: message,
+      },
+      responseMeta: {
+        ok: false,
+        kind: "stream",
+        executor: "solman.list_change_requests",
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
+        status: "validation_failed",
+      },
+    });
+
+    sse.send("error", {
+      ok: false,
+      status: "validation_failed",
+      message,
+    });
+    return sse.end();
+  }
+
   const useInteractiveCrStatusCard =
     shouldUseInteractiveCrStatusCard(query) ||
     shouldUseInteractiveCrStatusCard(listInput.dateText);

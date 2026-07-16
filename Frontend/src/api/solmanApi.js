@@ -180,3 +180,41 @@ export async function listSolmanChangeRequestsForExport({
     payload,
   };
 }
+
+export async function listSolmanTransports({
+  systemId,
+  sapUser,
+  objectId,
+  processType = "",
+  businessScope = "",
+}) {
+  const res = await authFetch(
+    `${API_BASE}/chat/actions/solman/list-transports`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        systemId,
+        sapUser,
+        objectId,
+        processType,
+        businessScope,
+      }),
+    }
+  );
+
+  const data = await parseJsonSafe(res);
+
+  if (
+    !res.ok ||
+    data?.ok === false ||
+    data?.status === "execution_failed" ||
+    data?.status === "validation_failed"
+  ) {
+    throw new Error(extractApiError(data, "Failed to fetch transport details."));
+  }
+
+  return data;
+}

@@ -1,6 +1,8 @@
+import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReplyTable from "./ReplyTable";
 import { replyToTable } from "../utils/replyToTable";
+import { getSolmanChangeRequestDetails, listSolmanTransports } from "../api/solmanApi";
 import {
   Cell,
   Legend,
@@ -37,27 +39,193 @@ function Avatar({ role, showAvatar = true }) {
         muted
         loop
         playsInline
-        preload="auto"
-        className="h-full w-full object-cover scale-110"
+        className="h-full w-full object-cover"
       />
     </div>
   );
 }
 
-// =========================
-// FORMAT TEXT
-// =========================
-function formatText(text = "") {
-  const t = String(text || "").trim();
+function renderPieLegend({ payload = [], activeKey = "", onSelect = null }) {
+  if (!Array.isArray(payload) || payload.length === 0) return null;
 
-  if (!t.includes("\n") && t.includes("Item")) {
-    return t
-      .split(/(?=Item\s+\d+)/g)
-      .map((l) => l.trim())
-      .join("\n");
+  return (
+    <div className="mt-2 flex flex-wrap items-center justify-center gap-2 px-2 pb-2 text-xs sm:gap-3 sm:px-3 sm:text-sm">
+      {payload.map((entry) => {
+        const value = String(entry?.value || entry?.payload?.status || "").trim();
+        const key = String(entry?.payload?.normalizedStatus || value).trim().toLowerCase();
+        const active = activeKey && key === activeKey;
+
+        return (
+          <button
+            key={value}
+            type="button"
+            onClick={() => onSelect?.(entry?.payload)}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 transition ${
+              active
+                ? "border-slate-900 bg-slate-900 text-white"
+                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            <span
+              className="h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: entry?.color || entry?.payload?.color || "#64748b" }}
+            />
+            <span className="whitespace-nowrap">{value}</span>
+            {Number.isFinite(Number(entry?.payload?.percentage)) ? (
+              <span className="text-[11px] opacity-80">{`${entry.payload.percentage}%`}</span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function renderPieSliceLabel({ cx = 0, cy = 0, midAngle = 0, innerRadius = 0, outerRadius = 0, percent = 0 }) {
+  if (!Number.isFinite(Number(percent)) || Number(percent) <= 0) return null;
+
+  const RADIAN = Math.PI / 180;
+  const startRadius = Number(innerRadius) + (Number(outerRadius) - Number(innerRadius)) * 0.55;
+  const labelRadius = Number(outerRadius) + 14;
+  const startX = Number(cx) + startRadius * Math.cos(-midAngle * RADIAN);
+  const startY = Number(cy) + startRadius * Math.sin(-midAngle * RADIAN);
+  const endX = Number(cx) + labelRadius * Math.cos(-midAngle * RADIAN);
+  const endY = Number(cy) + labelRadius * Math.sin(-midAngle * RADIAN);
+  const isRightSide = endX >= Number(cx);
+
+  return (
+    <g>
+      <text
+        x={endX + (isRightSide ? 4 : -4)}
+        y={endY}
+        fill="#0f172a"
+        textAnchor={isRightSide ? "start" : "end"}
+        dominantBaseline="central"
+        style={{ fontSize: 12, fontWeight: 600 }}
+      >
+        {`${Math.round(Number(percent) * 100)}%`}
+      </text>
+      <path
+        d={`M${startX},${startY} L${endX},${endY}`}
+        fill="none"
+        stroke="#cbd5e1"
+        strokeWidth={1.25}
+        strokeLinecap="round"
+      />
+    </g>
+  );
+}
+
+function TransportDrawer({ open, title, status = "", loading, error, transports, onClose }) {
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const drawerContent = (
+    <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40 backdrop-blur-[1px]" onMouseDown={onClose}>
+      <aside
+        className="flex h-full w-full max-w-full flex-col bg-white shadow-[0_0_40px_rgba(15,23,42,0.25)] transition-transform duration-300 ease-out sm:w-[58vw] md:w-[44vw] lg:w-[38vw] xl:w-[35vw]"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Transport Details
+            </div>
+            <div className="mt-1 break-words text-sm font-semibold text-slate-900">
+              {title}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-700 transition hover:bg-slate-50"
+            aria-label="Close transport drawer"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-4">
+          {loading ? (
+            <div className="flex h-full min-h-[240px] items-center justify-center">
+              <div className="flex items-center gap-3 text-sm text-slate-600">
+                <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
+                Loading transport details...
+              </div>
+            </div>
+          ) : error ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+              {error}
+            </div>
+          ) : Array.isArray(transports) && transports.length > 0 ? (
+            <div className="space-y-3">
+              {transports.map((transport, index) => {
+                const showRowNumber = transports.length > 1;
+                const rows = [
+                  ...(showRowNumber ? [{ label: "No", value: index + 1 }] : []),
+                  { label: "Transport", value: transport?.transport || transport?.Trkorr || "-" },
+                  { label: "Description", value: transport?.description || transport?.Desc || "-" },
+                  { label: "Owner", value: transport?.owner || transport?.Owner || transport?.TaskOwner || "-" },
+                  { label: "Transport Type", value: transport?.transportType || transport?.Trfunction || transport?.TrfuncDescription || transport?.taskType || transport?.taskReleased || "-" },
+                  { label: "Task", value: transport?.Tasks || transport?.TaskFuncDescription || transport?.TaskFunc || "-" },
+                  { label: "Task Owner", value: transport?.TaskOwner || transport?.owner || "-" },
+                  { label: "Task Type", value: transport?.TaskFunc || transport?.TaskFuncDescription || "-" },
+                  { label: "Dev Created", value: formatSapDateTime(transport?.DevCreatedDate, transport?.DevCreatedTime) },
+                  { label: "Dev Released", value: formatSapDateTime(transport?.DevReleasedDate, transport?.DevReleasedTime) },
+                  { label: "Task Released", value: formatSapDateTime(transport?.TaskExdate, transport?.TaskExtime) },
+                ];
+
+                return (
+                  <div key={`${transport?.Trkorr || transport?.transport || index}`} className="overflow-hidden rounded-3xl border border-sky-100 bg-gradient-to-br from-white to-sky-50/30 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
+                    <div className="border-b border-sky-100 bg-gradient-to-r from-sky-50 to-cyan-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Transport Record</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{transport?.transport || transport?.Trkorr || `Record ${index + 1}`}</div>
+                    </div>
+
+                    <table className="w-full border-collapse text-sm">
+                      <tbody>
+                        {rows.map((field) => (
+                          <tr key={`${transport?.Trkorr || transport?.transport || index}-${field.label}`} className="border-b border-sky-100/80 last:border-b-0 odd:bg-white even:bg-slate-50/50">
+                            <th className="w-[34%] bg-transparent px-4 py-3 text-left align-top text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                              {field.label}
+                            </th>
+                            <td className="px-4 py-3 align-top text-sm font-medium text-slate-900 break-words whitespace-pre-wrap">
+                              {String(field.value || "-").trim() || "-"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+              No transports found for this Change Request.
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+
+  if (typeof document === "undefined") {
+    return drawerContent;
   }
 
-  return t;
+  return createPortal(drawerContent, document.body);
 }
 
 function formatFilterRangeText(value = "") {
@@ -71,6 +239,54 @@ function formatFilterRangeText(value = "") {
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
     return text.replaceAll("-", "/");
+  }
+
+  return text;
+}
+
+function formatSapDateTime(dateValue = "", timeValue = "") {
+  const dateText = String(dateValue || "").trim();
+  const timeText = String(timeValue || "").trim();
+
+  const compactDate = dateText.replace(/[^0-9]/g, "");
+  let formattedDate = dateText;
+
+  if (/^\d{8}$/.test(compactDate)) {
+    formattedDate = `${compactDate.slice(0, 4)}/${compactDate.slice(4, 6)}/${compactDate.slice(6, 8)}`;
+  } else if (/^\d{4}-\d{2}-\d{2}$/.test(dateText)) {
+    formattedDate = dateText.replaceAll("-", "/");
+  }
+
+  if (!timeText) {
+    return formattedDate || "-";
+  }
+
+  const ptMatch = timeText.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i);
+  if (ptMatch) {
+    const hours = String(Number(ptMatch[1] || 0)).padStart(2, "0");
+    const minutes = String(Number(ptMatch[2] || 0)).padStart(2, "0");
+    const seconds = String(Number(ptMatch[3] || 0)).padStart(2, "0");
+    return `${formattedDate} ${hours}:${minutes}:${seconds}`.trim();
+  }
+
+  const compactTime = timeText.replace(/[^0-9]/g, "");
+  if (/^\d{6}$/.test(compactTime)) {
+    return `${formattedDate} ${compactTime.slice(0, 2)}:${compactTime.slice(2, 4)}:${compactTime.slice(4, 6)}`.trim();
+  }
+
+  return `${formattedDate} ${timeText}`.trim();
+}
+
+function formatTransportValue(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "-";
+
+  const ptMatch = text.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i);
+  if (ptMatch) {
+    const hours = String(Number(ptMatch[1] || 0)).padStart(2, "0");
+    const minutes = String(Number(ptMatch[2] || 0)).padStart(2, "0");
+    const seconds = String(Number(ptMatch[3] || 0)).padStart(2, "0");
+    return `${hours}:${minutes}:${seconds}`;
   }
 
   return text;
@@ -443,6 +659,26 @@ function buildSolmanListTableRows(rows = []) {
 const INITIAL_CR_BATCH_SIZE = 30;
 const LOAD_MORE_CR_BATCH_SIZE = 20;
 
+function formatText(value = "") {
+  return String(value || "").trim();
+}
+
+function readStoredSapContext() {
+  if (typeof window === "undefined") return { systemId: "", sapUser: "" };
+
+  try {
+    const activeSession = JSON.parse(localStorage.getItem("sapActiveSession") || "null") || {};
+    const selectedSystem = JSON.parse(localStorage.getItem("sapSelectedSystem") || "null") || {};
+
+    return {
+      systemId: String(activeSession.systemId || selectedSystem.systemId || "").trim(),
+      sapUser: String(activeSession.sapUser || selectedSystem.sapUser || "").trim(),
+    };
+  } catch {
+    return { systemId: "", sapUser: "" };
+  }
+}
+
 export default function MessageBubble({
   role,
   text,
@@ -453,6 +689,8 @@ export default function MessageBubble({
   action,
   onSuggestionClick,
   showAvatar = true,
+  systemId = "",
+  sapUser = "",
 }) {
   const isUser = role === "user";
   const formattedText = formatText(text);
@@ -508,6 +746,15 @@ export default function MessageBubble({
   const [selectedStatus, setSelectedStatus] = useState("");
   const [statusDistribution, setStatusDistribution] = useState(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [transportDrawer, setTransportDrawer] = useState({
+    open: false,
+    loading: false,
+    error: "",
+    title: "",
+    status: "",
+    changeRequestId: "",
+    transports: [],
+  });
   const [searchDraft, setSearchDraft] = useState({
     crNumber: "",
     shortDescription: "",
@@ -543,11 +790,7 @@ export default function MessageBubble({
     setSelectedStatus("");
     setStatusDistribution(isSolmanStatusResponse ? buildSolmanStatusDistribution(sourceRows) : null);
 
-    if (isSolmanListResponse) {
-      setVisibleRecordCount(sourceRows.length);
-    } else {
-      setVisibleRecordCount(INITIAL_CR_BATCH_SIZE);
-    }
+    setVisibleRecordCount(INITIAL_CR_BATCH_SIZE);
   }, [data, isSolmanCollectionResponse, isSolmanStatusResponse]);
 
   const statusFilteredRecords = useMemo(() => {
@@ -703,6 +946,107 @@ export default function MessageBubble({
     setVisibleRecordCount((current) => current + LOAD_MORE_CR_BATCH_SIZE);
   }, []);
 
+  const handleOpenTransportDrawer = useCallback(
+    async (changeRequestId) => {
+      const cr = String(changeRequestId || "").trim();
+      if (!cr) return;
+
+      const storedContext = readStoredSapContext();
+      const resolvedSystemId = String(
+        systemId || storedContext.systemId || data?.systemId || data?.result?.systemId || ""
+      ).trim();
+      const resolvedSapUser = String(
+        sapUser || storedContext.sapUser || data?.sapUser || data?.result?.sapUser || ""
+      ).trim();
+
+      setTransportDrawer({
+        open: true,
+        loading: true,
+        error: "",
+        title: `CR ${cr}`,
+        status: "",
+        changeRequestId: cr,
+        transports: [],
+      });
+
+      try {
+        if (!resolvedSystemId) {
+          throw new Error("systemId is required.");
+        }
+
+        const transportResult = await listSolmanTransports({
+          systemId: resolvedSystemId,
+          sapUser: resolvedSapUser,
+          objectId: cr,
+        });
+
+        const transportRows = Array.isArray(transportResult?.result?.rows)
+          ? transportResult.result.rows
+          : Array.isArray(transportResult?.result?.transports)
+            ? transportResult.result.transports
+            : Array.isArray(transportResult?.transports)
+              ? transportResult.transports
+              : Array.isArray(transportResult?.rows)
+                ? transportResult.rows
+                : [];
+
+        const resolvedStatus = String(
+          transportResult?.message ||
+            transportResult?.result?.message ||
+            transportRows[0]?.Message ||
+            transportRows[0]?.TrfuncDescription ||
+            transportRows[0]?.Trfunction ||
+            ""
+        ).trim();
+
+        setTransportDrawer({
+          open: true,
+          loading: false,
+          error: "",
+          title: `CR ${cr}`,
+          status: resolvedStatus,
+          changeRequestId: cr,
+          transports: transportRows,
+        });
+      } catch (err) {
+        setTransportDrawer({
+          open: true,
+          loading: false,
+          status: "",
+          error: err?.message || "Failed to fetch transport details.",
+          title: `CR ${cr}`,
+          changeRequestId: cr,
+          transports: [],
+        });
+      }
+    },
+    [data?.result?.sapUser, data?.result?.systemId, data?.sapUser, data?.systemId, sapUser, systemId]
+  );
+
+  const handleCloseTransportDrawer = useCallback(() => {
+    setTransportDrawer((current) => ({ ...current, open: false }));
+  }, []);
+
+  const renderCrNumberCell = useCallback(
+    ({ value, column }) => {
+      if (String(column || "").toLowerCase() !== "cr number") return null;
+
+      const cr = String(value || "").trim();
+      if (!cr || cr === "-") return null;
+
+      return (
+        <button
+          type="button"
+          onClick={() => handleOpenTransportDrawer(cr)}
+          className="text-blue-600 underline decoration-blue-400 decoration-1 underline-offset-2 transition hover:text-blue-800"
+        >
+          {cr}
+        </button>
+      );
+    },
+    [handleOpenTransportDrawer]
+  );
+
   if (isUser) {
     return (
       <div className="flex items-start justify-end w-full">
@@ -748,19 +1092,21 @@ export default function MessageBubble({
 
             <div
               ref={chartContainerRef}
-              className="h-[20rem] sm:h-72 w-full px-2 pb-2 pt-4"
+              className="h-[19rem] sm:h-[21rem] w-full px-1 pb-1 pt-2"
               onClickCapture={handleChartContainerClick}
             >
               {chartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
+                  <PieChart margin={{ top: 0, right: 10, bottom: 0, left: 10 }}>
                     <Pie
                       data={chartData}
                       dataKey="count"
                       nameKey="status"
-                      innerRadius={isSmallScreen ? 44 : 58}
-                      outerRadius={isSmallScreen ? 72 : 92}
+                      innerRadius={isSmallScreen ? 40 : 54}
+                      outerRadius={isSmallScreen ? 66 : 82}
                       paddingAngle={3}
+                      label={renderPieSliceLabel}
+                      labelLine={false}
                       activeIndex={activeStatusIndex >= 0 ? activeStatusIndex : undefined}
                       onClick={(_, index) => handleStatusSliceClick(chartData[index])}
                     >
@@ -788,11 +1134,6 @@ export default function MessageBubble({
                         return [`${value} (${pct}%)`, props?.payload?.status || name];
                       }}
                     />
-                    <Legend
-                      verticalAlign="bottom"
-                      iconSize={10}
-                      wrapperStyle={{ fontSize: "12px", lineHeight: "1.2" }}
-                    />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
@@ -801,6 +1142,20 @@ export default function MessageBubble({
                 </div>
               )}
             </div>
+
+            {chartData.length > 0 ? (
+              <div className="border-t border-slate-200 bg-white px-1 pb-1 pt-1">
+                {renderPieLegend({
+                  payload: chartData.map((entry) => ({
+                    value: entry.status,
+                    color: entry.color,
+                    payload: entry,
+                  })),
+                  activeKey: selectedStatus,
+                  onSelect: handleStatusSliceClick,
+                })}
+              </div>
+            ) : null}
           </div>
 
           <div className="overflow-hidden rounded-[18px] rounded-tl-sm border border-slate-200 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
@@ -916,6 +1271,7 @@ export default function MessageBubble({
                   columns={tableColumns}
                   rows={tableRows}
                   forceGrid={true}
+                  renderCell={renderCrNumberCell}
                 />
 
                 <div className="flex flex-col gap-2 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -959,6 +1315,16 @@ export default function MessageBubble({
               })}
             </div>
           )}
+
+          <TransportDrawer
+            open={transportDrawer.open}
+            title={transportDrawer.title}
+            status={transportDrawer.status}
+            loading={transportDrawer.loading}
+            error={transportDrawer.error}
+            transports={transportDrawer.transports}
+            onClose={handleCloseTransportDrawer}
+          />
         </div>
       </div>
     );
@@ -1079,7 +1445,12 @@ export default function MessageBubble({
 
             {visibleCRRecords.length > 0 ? (
               <>
-                <ReplyTable columns={tableColumns} rows={buildSolmanListTableRows(visibleCRRecords)} forceGrid={true} />
+                <ReplyTable
+                  columns={tableColumns}
+                  rows={buildSolmanListTableRows(visibleCRRecords)}
+                  forceGrid={true}
+                  renderCell={renderCrNumberCell}
+                />
 
                 <div className="flex flex-col gap-2 border-t border-green-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="text-xs text-slate-600">
@@ -1103,6 +1474,16 @@ export default function MessageBubble({
             ) : (
               <div className="px-4 py-6 text-sm text-slate-700">No records found for the given criteria.</div>
             )}
+
+            <TransportDrawer
+              open={transportDrawer.open}
+              title={transportDrawer.title}
+              status={transportDrawer.status}
+              loading={transportDrawer.loading}
+              error={transportDrawer.error}
+              transports={transportDrawer.transports}
+              onClose={handleCloseTransportDrawer}
+            />
           </div>
         </div>
       </div>
@@ -1297,16 +1678,18 @@ export default function MessageBubble({
               </div>
             </div>
 
-            <div className="h-[20rem] sm:h-72 w-full px-2 pb-2 pt-4">
+            <div className="h-[18rem] sm:h-[22rem] w-full px-1 pb-1 pt-2">
               <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
+                <PieChart margin={{ top: 0, right: 10, bottom: 0, left: 10 }}>
                   <Pie
                     data={genericChartView.normalized.data}
                     dataKey="count"
                     nameKey="status"
-                    innerRadius={isSmallScreen ? 44 : 58}
-                    outerRadius={isSmallScreen ? 72 : 92}
+                    innerRadius={isSmallScreen ? 40 : 54}
+                    outerRadius={isSmallScreen ? 66 : 82}
                     paddingAngle={3}
+                    label={renderPieSliceLabel}
+                    labelLine={false}
                   >
                     {genericChartView.normalized.data.map((entry, idx) => (
                       <Cell
@@ -1321,13 +1704,20 @@ export default function MessageBubble({
                       return [`${value} (${pct}%)`, props?.payload?.status || name];
                     }}
                   />
-                  <Legend
-                    verticalAlign="bottom"
-                    iconSize={10}
-                    wrapperStyle={{ fontSize: "12px", lineHeight: "1.2" }}
-                  />
                 </PieChart>
               </ResponsiveContainer>
+            </div>
+
+            <div className="border-t border-slate-200 bg-white px-1 pb-1 pt-1">
+              {renderPieLegend({
+                payload: Array.isArray(genericChartView.normalized.data)
+                  ? genericChartView.normalized.data.map((entry) => ({
+                      value: entry.status,
+                      color: entry.color,
+                      payload: entry,
+                    }))
+                  : [],
+              })}
             </div>
           </div>
         ) : chartView?.error ? (
@@ -1356,6 +1746,16 @@ export default function MessageBubble({
           </div>
         )}
       </div>
+
+      <TransportDrawer
+        open={transportDrawer.open}
+        title={transportDrawer.title}
+        status={transportDrawer.status}
+        loading={transportDrawer.loading}
+        error={transportDrawer.error}
+        transports={transportDrawer.transports}
+        onClose={handleCloseTransportDrawer}
+      />
     </div>
   );
 }

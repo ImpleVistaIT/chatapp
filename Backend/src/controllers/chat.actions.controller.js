@@ -5,6 +5,7 @@ import {
   getSolmanChangeRequestDetailsById,
   listSolmanChangeRequestsByDateRange,
 } from "../services/systems/solman/charm.service.js";
+import { getTransportNumbersFromCr } from "../services/systems/solman/transport.service.js";
 import { createTransportRequest } from "../services/systems/solman/transportRequest.service.js";
 import { postToSap } from "../services/sap/sapWrite.service.js";
 import { persistAssistantAndTouchSession } from "./stream/solman/solman.shared.js";
@@ -95,6 +96,50 @@ function validateListChangeRequestsInput(body) {
   return null;
 }
 
+function validateListTransportsInput(body) {
+  if (!cleanString(body?.systemId)) {
+    return "systemId is required.";
+  }
+
+  if (!cleanString(body?.sapUser)) {
+    return "sapUser is required.";
+  }
+
+  if (!cleanString(body?.objectId)) {
+    return "objectId is required.";
+  }
+
+  return null;
+}
+
+function validateCreateTransportRequestInput(body) {
+  if (!cleanString(body?.systemId)) {
+    return "systemId is required.";
+  }
+
+  if (!cleanString(body?.sapUser)) {
+    return "sapUser is required.";
+  }
+
+  if (!body?.payload || typeof body.payload !== "object") {
+    return "payload is required.";
+  }
+
+  if (!cleanString(body?.payload?.SolmanChangeReq)) {
+    return "SolmanChangeReq is required.";
+  }
+
+  if (!cleanString(body?.payload?.TrOwner)) {
+    return "TrOwner is required.";
+  }
+
+  if (!cleanString(body?.payload?.Client)) {
+    return "Client is required.";
+  }
+
+  return null;
+}
+
 function validateCreateTransportTaskInput(body) {
   if (!cleanString(body?.systemId)) {
     return "systemId is required.";
@@ -116,18 +161,6 @@ function validateCreateTransportTaskInput(body) {
     return "changeRequest is required.";
   }
 
-  return null;
-}
-
-function validateCreateTransportRequestInput(body) {
-  if (!cleanString(body?.systemId)) return "systemId is required.";
-  if (!cleanString(body?.sapUser)) return "sapUser is required.";
-  if (!body?.payload || typeof body.payload !== "object") return "payload is required.";
-  if (!cleanString(body?.payload?.SolmanChangeReq)) return "SolmanChangeReq is required.";
-  if (!cleanString(body?.payload?.TrOwner)) return "TrOwner is required.";
-  if (!cleanString(body?.payload?.Client)) return "Client is required.";
-  if (!Array.isArray(body?.payload?.DeveloperSet) || body.payload.DeveloperSet.length === 0) return "DeveloperSet is required.";
-  if (!body?.payload?.WorkbenchReq && !body?.payload?.CustomizingReq) return "WorkbenchReq or CustomizingReq is required.";
   return null;
 }
 
@@ -364,6 +397,66 @@ export const listSolmanChangeRequests = createSapActionHandler({
   }),
 });
 
+export const submitSolmanCreateTransportRequest = createSapActionHandler({
+  executor: "solman.transport.createTransportRequest",
+
+  validate: validateCreateTransportRequestInput,
+
+  execute: async ({ owner, body }) => {
+    const connection = await resolveSapConnection({
+      owner,
+      systemId: body.systemId,
+      sapUser: body.sapUser,
+    });
+
+    return await createTransportRequest({
+      system: connection.system,
+      sapAuth: connection.sapAuth,
+      payload: body.payload,
+    });
+  },
+
+  mapSuccessResult: (result) => ({
+    transportRequest: result?.result?.transportRequest || "",
+    workbenchTransport: result?.result?.workbenchTransport || "",
+    customizingTransport: result?.result?.customizingTransport || "",
+    message: result?.message || "Transport Request created successfully.",
+    raw: result?.result?.raw || null,
+  }),
+});
+
+export const listSolmanTransports = createSapActionHandler({
+  executor: "solman.transport.listTransports",
+
+  validate: validateListTransportsInput,
+
+  execute: async ({ owner, body }) => {
+    const connection = await resolveSapConnection({
+      owner,
+      systemId: body.systemId,
+      sapUser: body.sapUser,
+    });
+
+    return await getTransportNumbersFromCr({
+      system: connection.system,
+      sapAuth: connection.sapAuth,
+      changeRequestId: body.objectId,
+      processType: body.processType || "",
+    });
+  },
+
+  mapSuccessResult: (result) => ({
+    changeRequestId: result?.result?.changeRequestId || result?.changeRequestId || "",
+    processType: result?.result?.processType || result?.processType || "",
+    transports: Array.isArray(result?.result?.rows)
+      ? result.result.rows
+      : [],
+    count: Array.isArray(result?.result?.rows) ? result.result.rows.length : 0,
+    raw: result?.result?.raw || result?.raw || null,
+    message: result?.message || "",
+  }),
+});
+
 export const submitSolmanCreateTransportTask = createSapActionHandler({
   executor: "solman.transport.createTransportTask",
 
@@ -449,48 +542,6 @@ export const submitSolmanCreateTransportTask = createSapActionHandler({
     ...result,
     summary: result.summary,
     raw: result.raw,
-  }),
-});
-
-export const submitSolmanCreateTransportRequest = createSapActionHandler({
-  executor: "solman.transport.createTransportRequest",
-
-  validate: validateCreateTransportRequestInput,
-
-  execute: async ({ owner, body }) => {
-    const connection = await resolveSapConnection({
-      owner,
-      systemId: body.systemId,
-      sapUser: body.sapUser,
-    });
-
-    const result = await createTransportRequest({
-      system: connection.system,
-      sapAuth: connection.sapAuth,
-      payload: body.payload,
-    });
-
-    if (!result?.ok) {
-      const err = new Error(result?.message || "Failed to create transport request.");
-      err.status = result?.error?.status || 400;
-      err.code = result?.error?.code || "EXECUTION_FAILED";
-      throw err;
-    }
-
-    return {
-      ...result,
-      transportRequest: result?.result?.transportRequest || null,
-      workbenchTransport: result?.result?.workbenchTransport || null,
-      customizingTransport: result?.result?.customizingTransport || null,
-    };
-  },
-
-  mapSuccessResult: (result) => ({
-    transportRequest: result.transportRequest,
-    workbenchTransport: result.workbenchTransport,
-    customizingTransport: result.customizingTransport,
-    message: result.message,
-    raw: result.raw || result.result?.raw || null,
   }),
 });
 

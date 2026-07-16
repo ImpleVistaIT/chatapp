@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FiChevronLeft, FiChevronRight } from "react-icons/fi";
 
-export default function ReplyTable({ columns, rows, forceGrid = false }) {
+export default function ReplyTable({ columns, rows, forceGrid = false, renderCell = null }) {
   const isFallback =
     !columns || columns.length === 0 || columns[0] === "Output";
 
@@ -197,14 +197,24 @@ export default function ReplyTable({ columns, rows, forceGrid = false }) {
               {safeRows.map((row, idx) => (
                 <tr key={idx} className="bg-white text-slate-700 border-t border-slate-200">
                   {!isFallback ? (
-                    visibleColumns.map((c, colIdx) => (
-                      <td
-                        key={`${c}-${colIdx}`}
-                        className="px-3 py-3 whitespace-nowrap border border-slate-200"
-                      >
-                        {String(getColumnValue(row, c, colIdx) ?? "")}
-                      </td>
-                    ))
+                    visibleColumns.map((c, colIdx) => {
+                      const cellValue = getColumnValue(row, c, colIdx);
+                      const rendered = typeof renderCell === "function" ? renderCell({
+                        value: cellValue,
+                        row,
+                        column: c,
+                        columnIndex: colIdx,
+                      }) : null;
+
+                      return (
+                        <td
+                          key={`${c}-${colIdx}`}
+                          className="px-3 py-3 whitespace-nowrap border border-slate-200"
+                        >
+                          {rendered ?? String(cellValue ?? "")}
+                        </td>
+                      );
+                    })
                   ) : (
                     <td className="px-3 py-2 border border-slate-200">
                       {row.Output || row.text || ""}

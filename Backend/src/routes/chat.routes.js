@@ -8,6 +8,7 @@ import {
   submitSolmanReleaseTransportTask,
   getSolmanChangeRequestDetails,
   listSolmanChangeRequests,
+  listSolmanTransports,
 } from "../controllers/chat.actions.controller.js";
 import { sendChatReportEmail } from "../controllers/chat.email.controller.js";
 
@@ -52,6 +53,11 @@ chatRoutes.post(
 chatRoutes.post(
   "/actions/solman/list-change-requests",
   listSolmanChangeRequests
+);
+
+chatRoutes.post(
+  "/actions/solman/list-transports",
+  listSolmanTransports
 );
 
 chatRoutes.post("/email", sendChatReportEmail);

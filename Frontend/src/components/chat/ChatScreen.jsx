@@ -334,6 +334,7 @@ function buildEmailAttachmentName(draft) {
 export default function ChatScreen({
   isConnected,
   userName,
+  activeSession,
 
   normalizeSystemId,
 
@@ -895,7 +896,13 @@ export default function ChatScreen({
                 <div key={idx} className="group">
                   {isUser && !isEditing && (
                     <div className="flex flex-col items-end">
-                      <MessageBubble role={m.role} text={m.text} summary={m.summary} />
+                      <MessageBubble
+                        role={m.role}
+                        text={m.text}
+                        summary={m.summary}
+                        systemId={activeSession?.systemId || activeConv?.systemId}
+                        sapUser={activeSession?.sapUser || activeConv?.sapUser}
+                      />
 
                       <div className="mt-1 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity pr-2">
                         <button
@@ -985,6 +992,8 @@ export default function ChatScreen({
                               suggestions={msg?.suggestions}
                               action={msg?.action}
                               showAvatar={subIdx === 0}
+                              systemId={activeSession?.systemId || activeConv?.systemId}
+                              sapUser={activeSession?.sapUser || activeConv?.sapUser}
                               onSuggestionClick={(value) => {
                                 handleSuggestion(value);
                               }}
@@ -993,7 +1002,7 @@ export default function ChatScreen({
                         ))}
                       </div>
 
-                      <div className="relative z-[9999] mt-2 flex items-center gap-2 ml-12">
+                      <div className="relative mt-2 flex items-center gap-2 ml-12">
                         <button
                           type="button"
                           onClick={() => {
@@ -1032,7 +1041,7 @@ export default function ChatScreen({
                           <FiMail size={15} />
                         </button>
 
-                        <div className="relative z-[9999]">
+                        <div className="relative">
                           <button
                             type="button"
                             onClick={() =>
@@ -1046,7 +1055,7 @@ export default function ChatScreen({
                                 downloadButtonRefs.current.delete(idx);
                               }
                             }}
-                            className="relative z-[9999] flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                            className="relative flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
                             title="Download"
                           >
                             <FiDownload size={15} />

@@ -853,6 +853,7 @@ const isConnected = useMemo(() => {
       <ChatScreen
         isConnected={isConnected}
         userName={userName}
+        activeSession={effectiveSession}
         systemList={systemList}
         tiles={tiles}
         onAddNewSystem={() => onOpenSapLogin?.(null)}
@@ -866,7 +867,6 @@ const isConnected = useMemo(() => {
         messagesElRef={messagesElRef}
         onMessagesScrollInternal={onMessagesScrollInternal}
         activeConv={activeConv}
-        activeSession={effectiveSession}
         msgLoadingMore={msgLoadingMore}
         editingIndex={editingIndex}
         editingText={editingText}

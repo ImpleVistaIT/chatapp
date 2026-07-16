@@ -326,6 +326,94 @@ function endOfYear(date) {
   return new Date(value.getFullYear(), 11, 31);
 }
 
+function getSundayStartWeekRange(year, weekNumber) {
+  const startOfYearDate = new Date(year, 0, 1);
+  const firstSunday = new Date(startOfYearDate);
+  firstSunday.setDate(firstSunday.getDate() - firstSunday.getDay());
+
+  const start = addDays(firstSunday, (weekNumber - 1) * 7);
+  const end = addDays(start, 6);
+
+  return { start, end };
+}
+
+function parseWeekNumber(query = "") {
+  const q = cleanString(query).toLowerCase();
+  if (!q) return null;
+
+  const ordinalMap = {
+    first: 1,
+    second: 2,
+    third: 3,
+    fourth: 4,
+    fifth: 5,
+    sixth: 6,
+    seventh: 7,
+    eighth: 8,
+    ninth: 9,
+    tenth: 10,
+    eleventh: 11,
+    twelfth: 12,
+    thirteenth: 13,
+    fourteenth: 14,
+    fifteenth: 15,
+    sixteenth: 16,
+    seventeenth: 17,
+    eighteenth: 18,
+    nineteenth: 19,
+    twentieth: 20,
+    twentyfirst: 21,
+    twentysecond: 22,
+    twentythird: 23,
+    twentyfourth: 24,
+    twentyfifth: 25,
+    twentysixth: 26,
+    twentyseventh: 27,
+    twentyeighth: 28,
+    twentyninth: 29,
+    thirtieth: 30,
+    thirtyfirst: 31,
+    thirtysecond: 32,
+    thirtythird: 33,
+    thirtyfourth: 34,
+    thirtyfifth: 35,
+    thirtysixth: 36,
+    thirtyseventh: 37,
+    thirtyeighth: 38,
+    thirtyninth: 39,
+    fortieth: 40,
+    fortyfirst: 41,
+    fortysecond: 42,
+    fortythird: 43,
+    fortyfourth: 44,
+    fortyfifth: 45,
+    fortysixth: 46,
+    fortyseventh: 47,
+    fortyeighth: 48,
+    fortyninth: 49,
+    fiftieth: 50,
+    fiftyfirst: 51,
+    fiftysecond: 52,
+    fiftythird: 53,
+  };
+
+  let match = q.match(/\bweek\s+(\d{1,2})(?:st|nd|rd|th)?\b/);
+  if (match) return Number(match[1]);
+
+  match = q.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+week\b/);
+  if (match) return Number(match[1]);
+
+  match = q.match(/\b(?:the\s+)?([a-z]+)\s+week\b/);
+  if (match) {
+    const compact = match[1].replace(/\s+/g, "");
+    if (Object.prototype.hasOwnProperty.call(ordinalMap, compact)) {
+      return ordinalMap[compact];
+    }
+  }
+
+  return null;
+}
+
 function makeDatePeriod(period, startDate, endDate) {
   return {
     period,
@@ -433,6 +521,28 @@ export function inferDateRangeFromQuery(query = "") {
   if (!q) return null;
 
   const today = startOfDay(new Date());
+
+  const weekNumber = parseWeekNumber(q);
+  if (weekNumber != null) {
+    if (!Number.isInteger(weekNumber) || weekNumber < 1 || weekNumber > 53) {
+      return {
+        error: "Invalid week number. Please enter a week between 1 and 53.",
+      };
+    }
+
+    const year = today.getFullYear();
+    const { start, end } = getSundayStartWeekRange(year, weekNumber);
+    const firstSunday = getSundayStartWeekRange(year, 1).start;
+    const maxWeeks = Math.floor((endOfYear(today) - firstSunday) / (7 * 24 * 60 * 60 * 1000)) + 1;
+
+    if (weekNumber > maxWeeks) {
+      return {
+        error: "Invalid week number. Please enter a week between 1 and 53.",
+      };
+    }
+
+    return makeDatePeriod(`week_${weekNumber}`, start, end);
+  }
 
   const exactDateCandidate = findDateCandidate(q);
   const hasRangeKeyword = /\b(?:between|from|after|before|since)\b/.test(q);
@@ -972,6 +1082,7 @@ export function pickCrListEntities(raw = {}, query = "") {
     processType:
       cleanString(raw.processType || raw.PROCESS_TYPE || scope?.processType || "") || "",
     triggerAll: cleanString(raw.triggerAll || raw.TRIGGER_ALL || "X") || "X",
+    dateValidationError: cleanString(inferredDateRange?.error || ""),
     fromDate: cleanString(raw.fromDate || raw.FROM_DATE || inferredDateRange?.fromDate || ""),
     toDate: cleanString(raw.toDate || raw.TO_DATE || inferredDateRange?.toDate || ""),
     status: normalizeSolmanStatusValue(raw.status || raw.STATUS || inferredStatus.status),
@@ -1003,6 +1114,71 @@ export function padCell(value, width) {
 
 export function formatCrListReply(rows = [], params = {}) {
   if (!Array.isArray(rows) || rows.length === 0) {
+    const q = cleanString(params?.dateText || params?.query || "").toLowerCase();
+    const weekMatch = q.match(/\b(?:week\s+(\d{1,2})(?:st|nd|rd|th)?|(\d{1,2})(?:st|nd|rd|th)?\s+week|(?:the\s+)?(thirteenth|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|twentyfirst|twentysecond|twentythird|twentyfourth|twentyfifth|twentysixth|twentyseventh|twentyeighth|twentyninth|thirtieth|thirtyfirst|thirtysecond|thirtythird|thirtyfourth|thirtyfifth|thirtysixth|thirtyseventh|thirtyeighth|thirtyninth|fortieth|fortyfirst|fortysecond|fortythird|fortyfourth|fortyfifth|fortysixth|fortyseventh|fortyeighth|fortyninth|fiftieth|fiftyfirst|fiftysecond|fiftythird)\s+week)\b/);
+    const wordWeekToNumber = {
+      first: 1,
+      second: 2,
+      third: 3,
+      fourth: 4,
+      fifth: 5,
+      sixth: 6,
+      seventh: 7,
+      eighth: 8,
+      ninth: 9,
+      tenth: 10,
+      eleventh: 11,
+      twelfth: 12,
+      thirteenth: 13,
+      fourteenth: 14,
+      fifteenth: 15,
+      sixteenth: 16,
+      seventeenth: 17,
+      eighteenth: 18,
+      nineteenth: 19,
+      twentieth: 20,
+      twentyfirst: 21,
+      twentysecond: 22,
+      twentythird: 23,
+      twentyfourth: 24,
+      twentyfifth: 25,
+      twentysixth: 26,
+      twentyseventh: 27,
+      twentyeighth: 28,
+      twentyninth: 29,
+      thirtieth: 30,
+      thirtyfirst: 31,
+      thirtysecond: 32,
+      thirtythird: 33,
+      thirtyfourth: 34,
+      thirtyfifth: 35,
+      thirtysixth: 36,
+      thirtyseventh: 37,
+      thirtyeighth: 38,
+      thirtyninth: 39,
+      fortieth: 40,
+      fortyfirst: 41,
+      fortysecond: 42,
+      fortythird: 43,
+      fortyfourth: 44,
+      fortyfifth: 45,
+      fortysixth: 46,
+      fortyseventh: 47,
+      fortyeighth: 48,
+      fortyninth: 49,
+      fiftieth: 50,
+      fiftyfirst: 51,
+      fiftysecond: 52,
+      fiftythird: 53,
+    };
+
+    if (weekMatch) {
+      const weekNumber = Number(weekMatch[1] || weekMatch[2] || wordWeekToNumber[cleanString(weekMatch[3]).toLowerCase()] || 0);
+      if (weekNumber >= 1 && weekNumber <= 53) {
+        return `No Change Requests found for Week ${weekNumber}.`;
+      }
+    }
+
     return "No records found for the given criteria.";
   }
 
@@ -1055,45 +1231,14 @@ export function buildPaginationSuggestions(rows = []) {
 
 export function buildCrSuggestions(query = "", scopeLabel = "", rows = []) {
   const q = cleanString(query).toLowerCase();
-  const prefix = scopeLabel ? `${scopeLabel} ` : "";
-  const pagination = buildPaginationSuggestions(rows);
-
-  if (q.includes("closed")) {
-    return [
-      ...pagination,
-      `Show ${prefix}closed CR list this week`.replace(/\s+/g, " ").trim(),
-      `Show ${prefix}closed CR list this month`.replace(/\s+/g, " ").trim(),
-    ];
-  }
-
-  if (q.includes("approved")) {
-    return [
-      ...pagination,
-      `Show ${prefix}approved CR list this week`.replace(/\s+/g, " ").trim(),
-      `Show ${prefix}approved CR list this month`.replace(/\s+/g, " ").trim(),
-    ];
-  }
-
-  if (q.includes("open")) {
-    return [
-      ...pagination,
-      `Show ${prefix}open CR list this week`.replace(/\s+/g, " ").trim(),
-      `Show ${prefix}open CR list this month`.replace(/\s+/g, " ").trim(),
-    ];
-  }
-
-  if (q.includes("pending")) {
-    return [
-      ...pagination,
-      `Show ${prefix}pending CR list this week`.replace(/\s+/g, " ").trim(),
-      `Show ${prefix}pending CR list this month`.replace(/\s+/g, " ").trim(),
-    ];
-  }
+  void q;
+  void scopeLabel;
+  void rows;
 
   return [
-    ...pagination,
-    `Show ${prefix}CR list created in this week`.replace(/\s+/g, " ").trim(),
-    `Show ${prefix}closed CR list this month`.replace(/\s+/g, " ").trim(),
+    "Create Task",
+    "Release Task",
+    "Create Transport Request",
   ];
 }
 
