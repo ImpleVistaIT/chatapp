@@ -143,6 +143,46 @@ function buildValidationWarning(err, fallback = "Validation failed") {
   };
 }
 
+async function probeSystemEndpoint({ protocol = "https", host, port }) {
+  const cleanHost = String(host || "").trim();
+  const cleanPort = String(port || "").trim();
+  const cleanProtocol = String(protocol || "https").trim().toLowerCase() === "http" ? "http" : "https";
+
+  if (!cleanHost || !cleanPort) {
+    const err = new Error("host and port are required");
+    err.status = 400;
+    throw err;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${cleanProtocol}://${cleanHost}:${cleanPort}`, {
+      method: "GET",
+      signal: controller.signal,
+      redirect: "manual",
+    });
+
+    if (!response) {
+      const err = new Error("No response received from SAP host");
+      err.status = 502;
+      throw err;
+    }
+
+    return response;
+  } catch (e) {
+    const message = String(e?.name || "").toLowerCase() === "aborterror"
+      ? `SAP host probe timed out for ${cleanHost}:${cleanPort}`
+      : `SAP host probe failed for ${cleanHost}:${cleanPort}: ${e?.message || String(e)}`;
+    const err = new Error(message);
+    err.status = 502;
+    err.cause = e;
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function pickCredential({ owner, systemId, sapUser }) {
   const sid = normalizeSystemId(systemId);
   const su = normalizeSapUser(sapUser || "");
@@ -377,6 +417,15 @@ sapRoutes.post("/systems", async (req, res, next) => {
 
     if (port <= 0 || port > 65535) {
       return res.status(400).json({ ok: false, error: "port must be 1..65535" });
+    }
+
+    try {
+      await probeSystemEndpoint({ protocol, host, port });
+    } catch (e) {
+      return res.status(e.status || 502).json({
+        ok: false,
+        error: e?.message || "Unable to reach SAP host using the provided host and port",
+      });
     }
 
     const doc = await SapSystem.findOneAndUpdate(
@@ -811,6 +860,19 @@ sapRoutes.post("/connect", async (req, res, next) => {
     let validationInfo = { validated: !validate };
 
     if (validate) {
+      try {
+        await probeSystemEndpoint({
+          protocol: sys.protocol || "https",
+          host: sys.host,
+          port: sys.port,
+        });
+      } catch (e) {
+        return res.status(e.status || 502).json({
+          ok: false,
+          error: e?.message || "Unable to reach the configured SAP host and port",
+        });
+      }
+
       const systemKind = inferSystemKind(sys);
 
       let plainPassword = "";
