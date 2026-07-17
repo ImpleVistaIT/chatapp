@@ -902,7 +902,31 @@ export async function handleS4poChatStream({
   const sortedRows = isLatestQuery(query, extracted)
     ? sortRowsByLatestDate(safeRows, ["CrtDate"])
     : safeRows;
-  const responseRows = isSingleLatestPoRequest(query) && !docNumber && !docItem ? sortedRows.slice(0, 1) : sortedRows;
+  const responseRows = (() => {
+    let rows = sortedRows;
+
+    if (docNumber) {
+      const normalizedDocNumber = normalizeNumericId(docNumber, null);
+      rows = rows.filter((row) => {
+        const rowPoNo = normalizeNumericId(row?.PoNo || row?.PONo || row?.PO_NO || row?.poNo || row?.po_number || row?.poNumber || "", null);
+        return rowPoNo && normalizedDocNumber ? rowPoNo === normalizedDocNumber : String(row?.PoNo || "").trim() === String(docNumber).trim();
+      });
+    }
+
+    if (docItem) {
+      const normalizedDocItem = normalizeNumericId(docItem, null);
+      rows = rows.filter((row) => {
+        const rowPoItem = normalizeNumericId(row?.PoItem || row?.POItem || row?.poItem || row?.item || "", null);
+        return rowPoItem && normalizedDocItem ? rowPoItem === normalizedDocItem : String(row?.PoItem || "").trim() === String(docItem).trim();
+      });
+    }
+
+    if (isSingleLatestPoRequest(query) && !docNumber && !docItem) {
+      return rows.slice(0, 1);
+    }
+
+    return rows;
+  })();
 
   const title =
     Array.isArray(extracted?.filters) && extracted.filters.length > 0

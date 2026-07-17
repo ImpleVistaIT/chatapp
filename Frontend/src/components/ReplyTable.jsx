@@ -29,6 +29,18 @@ export default function ReplyTable({ columns, rows, forceGrid = false, renderCel
     const aliasMap = {
       PoNo: ["PoNo", "PO Number", "PONumber", "PO_NO"],
       PoItem: ["PoItem", "PO Item", "POItem", "PO_ITEM"],
+      SuppAcoutNo: [
+        "SuppAcoutNo",
+        "SuppAccountNo",
+        "SupplierAccountNo",
+        "supplierAccountNo",
+        "SupplierAccountNumber",
+        "SupplierGLAccount",
+        "GLAccount",
+        "G/L account",
+        "G/L Account",
+        "GL Account",
+      ],
     };
 
     const aliases = aliasMap[column] || [column];
