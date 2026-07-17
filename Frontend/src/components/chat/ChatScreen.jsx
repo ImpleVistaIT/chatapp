@@ -365,6 +365,32 @@ export default function ChatScreen({
   statusText,
   inlineForm,
 }) {
+  async function copyTextToClipboard(text) {
+    const value = String(text ?? "");
+    if (!value) return false;
+
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      try {
+        const textarea = document.createElement("textarea");
+        textarea.value = value;
+        textarea.setAttribute("readonly", "true");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        return ok;
+      } catch {
+        return false;
+      }
+    }
+  }
+
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [regeneratingIndex, setRegeneratingIndex] = useState(null);
   const [downloadMenuIndex, setDownloadMenuIndex] = useState(null);
@@ -527,7 +553,8 @@ export default function ChatScreen({
     if (!text) return;
 
     try {
-      await navigator.clipboard.writeText(text);
+      const ok = await copyTextToClipboard(text);
+      if (!ok) throw new Error("Copy failed");
       toast.success("Copied!");
       setCopiedIndex(idx);
 
@@ -898,7 +925,7 @@ export default function ChatScreen({
                     <div className="flex flex-col items-end">
                       <MessageBubble
                         role={m.role}
-                        text={m.text}
+                          text={m.text || m.summary || ""}
                         summary={m.summary}
                         systemId={activeSession?.systemId || activeConv?.systemId}
                         sapUser={activeSession?.sapUser || activeConv?.sapUser}
