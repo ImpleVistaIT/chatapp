@@ -198,6 +198,47 @@ test("create TR routes to transport request creation instead of change request o
   assert.equal(result.intent, "create_transport_request");
 });
 
+test("production import transport phrases route to the dedicated import intent", async () => {
+  const phrases = [
+    "import transport",
+    "import transport request",
+    "import transport to production",
+    "import tr",
+    "import tr request",
+    "import transport number HDVK876567",
+    "move transport to production",
+    "move tr to production",
+    "production import",
+    "import to production",
+    "deploy transport to production",
+    "send transport to production",
+    "import transport HDVK876567",
+    "import TR HDVK876567",
+  ];
+
+  for (const query of phrases) {
+    const result = await classifyPrompt({ query });
+
+    assert.equal(result.system, "solman", query);
+    assert.equal(result.module, "transport", query);
+    assert.equal(result.intent, "import_transport_to_production", query);
+  }
+});
+
+test("existing transport phrases still route to the original transport intents", async () => {
+  const releaseTransport = await classifyPrompt({ query: "release transport request HDVK876567" });
+  assert.equal(releaseTransport.intent, "release_transport_request");
+
+  const releaseTask = await classifyPrompt({ query: "release task HDVK914688" });
+  assert.equal(releaseTask.intent, "release_transport_task");
+
+  const createTransport = await classifyPrompt({ query: "create transport request" });
+  assert.equal(createTransport.intent, "create_transport_request");
+
+  const createTask = await classifyPrompt({ query: "create transport task" });
+  assert.equal(createTask.intent, "create_transport_task");
+});
+
 test("SolMan date parser supports between ranges and month-name inputs", () => {
   const range = inferDateRangeFromQuery("show closed CRs between 01-Jan-2026 and 31-Jan-2026");
 

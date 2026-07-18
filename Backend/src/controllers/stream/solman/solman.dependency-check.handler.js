@@ -3,6 +3,7 @@ import {
   cleanString,
   persistAssistantAndTouchSession,
 } from "./solman.shared.js";
+import { validateDependencyCheck } from "./dependencyPreValidation.js";
 import { step } from "../stream.shared.js";
 
 function pickDependencyCheckEntities(raw = {}, query = "") {
@@ -141,6 +142,82 @@ export async function handleDependencyCheck(context) {
     message: `Checking transport dependencies for CR ${objectId}...`,
   });
 
+  const preValidation = await step("validateDependencyCheck", () =>
+    validateDependencyCheck({
+      system,
+      sapAuth,
+      systemId: effectiveSystemId,
+      processType,
+      objectId,
+    })
+  );
+
+  console.log("[SOLMAN][DEP-CHECK] pre-validation decision", {
+    objectId,
+    processType,
+    systemId: effectiveSystemId,
+    shouldSkipDependency: Boolean(preValidation?.shouldSkipDependency),
+    crStatus: preValidation?.crStatus || "<unresolved>",
+    systemType: preValidation?.systemType || "<unknown>",
+  });
+
+  if (preValidation?.shouldSkipDependency) {
+    const message = preValidation?.message || "No dependent transports were found for this CR.";
+
+    console.log("[SOLMAN][DEP-CHECK] returning pre-validation message", {
+      objectId,
+      message,
+      crStatus: preValidation?.crStatus || "",
+      systemType: preValidation?.systemType || "",
+    });
+
+    await persistAssistantAndTouchSession({
+      owner,
+      sessionId: session._id,
+      text: message,
+      summary: message,
+      extracted: {
+        system: "solman",
+        intent: "dependency_check",
+        objectId: objectId || null,
+        processType,
+        crStatus: preValidation?.crStatus || "",
+      },
+      data: {
+        crStatus: preValidation?.crStatus || "",
+        systemType: preValidation?.systemType || "",
+      },
+      responseMeta: {
+        ok: true,
+        kind: "stream",
+        executor: "solman.dependency_check",
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
+        status: "blocked_by_pre_validation",
+      },
+    });
+
+    sse.send("reply", {
+      ok: true,
+      sessionId: String(session._id),
+      systemId: effectiveSystemId,
+      sapUser: effectiveSapUser,
+      reply: message,
+      summary: message,
+      data: {
+        crStatus: preValidation?.crStatus || "",
+        systemType: preValidation?.systemType || "",
+      },
+      suggestions: [
+        `Show status of CR ${objectId}`,
+        `Check dependency check for CR ${objectId}`,
+      ],
+    });
+
+    sse.send("done", { ok: true });
+    return sse.end();
+  }
+
   const result = await step("getDependentTransportsFromCr", () =>
     getDependentTransportsFromCr({
       system,
@@ -149,6 +226,12 @@ export async function handleDependencyCheck(context) {
       processType,
     })
   );
+
+  console.log("[SOLMAN][DEP-CHECK] dependency API returned", {
+    objectId,
+    ok: Boolean(result?.ok),
+    dependencyCount: Array.isArray(result?.result?.dependencies) ? result.result.dependencies.length : 0,
+  });
 
   if (!result?.ok) {
     const message = result?.message || `Failed to check dependencies for CR ${objectId}.`;

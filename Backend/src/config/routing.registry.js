@@ -109,6 +109,15 @@ export const ROUTING_INTENT_REGISTRY = {
     },
 
     transport: {
+      import_transport_to_production: {
+        label: "Import transport to production",
+        action: "open_form",
+        requiredInputs: ["transportNumber"],
+        entityHints: ["transportNumber", "transportId", "importTarget", "productionTarget"],
+        formId: "solman_import_transport_to_production",
+        executor: "solman.transport.importTransportToProduction",
+      },
+
       create_transport_request: {
         label: "Create transport request",
         action: "open_form",
@@ -134,6 +143,15 @@ export const ROUTING_INTENT_REGISTRY = {
         entityHints: ["taskId"],
         formId: "solman_release_transport_task",
         executor: "solman.transport.releaseTransportTask",
+      },
+
+      release_transport_request: {
+        label: "Release transport request",
+        action: "open_form",
+        requiredInputs: ["transportNumber", "quality"],
+        entityHints: ["transportNumber", "quality", "IvObjectId", "IvQuality"],
+        formId: "solman_release_transport",
+        executor: "solman.transport.releaseTransport",
       },
 
       create_transport: {

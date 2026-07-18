@@ -5,6 +5,7 @@ import {
   getSolmanChangeRequestDetailsById,
   listSolmanChangeRequestsByDateRange,
 } from "../services/systems/solman/charm.service.js";
+import { getPurchaseOrderDetails } from "../services/systems/s4hana/po.service.js";
 import { getTransportNumbersFromCr } from "../services/systems/solman/transport.service.js";
 import { createTransportRequest } from "../services/systems/solman/transportRequest.service.js";
 import { postToSap } from "../services/sap/sapWrite.service.js";
@@ -135,6 +136,22 @@ function validateCreateTransportRequestInput(body) {
 
   if (!cleanString(body?.payload?.Client)) {
     return "Client is required.";
+  }
+
+  return null;
+}
+
+function validateGetPurchaseOrderDetailsInput(body) {
+  if (!cleanString(body?.systemId)) {
+    return "systemId is required.";
+  }
+
+  if (!cleanString(body?.sapUser)) {
+    return "sapUser is required.";
+  }
+
+  if (!cleanString(body?.purchaseOrderId)) {
+    return "purchaseOrderId is required.";
   }
 
   return null;
@@ -528,6 +545,7 @@ export const submitSolmanCreateTransportTask = createSapActionHandler({
           sapUser: connection.sapAuth?.username || connection.sapAuth?.sapUser || body?.sapUser || "",
         },
       });
+
     }
 
     return {
@@ -621,6 +639,7 @@ export const submitSolmanReleaseTransportTask = createSapActionHandler({
           sapUser: connection.sapAuth?.username || connection.sapAuth?.sapUser || body?.sapUser || "",
         },
       });
+
     }
 
     return {
@@ -635,5 +654,37 @@ export const submitSolmanReleaseTransportTask = createSapActionHandler({
     taskId: result.taskId,
     message: result.message,
     raw: result.raw,
+  }),
+});
+
+export const getPurchaseOrderDetailsAction = createSapActionHandler({
+  executor: "s4hana.mm.getPurchaseOrderDetails",
+
+  validate: validateGetPurchaseOrderDetailsInput,
+
+  execute: async ({ owner, body }) => {
+    const connection = await resolveSapConnection({
+      owner,
+      systemId: body.systemId,
+      sapUser: body.sapUser,
+    });
+
+    return await getPurchaseOrderDetails({
+      req: {
+        sapSystem: connection.system,
+        sapService: {
+          serviceName: body.serviceName || process.env.DEFAULT_PO_SERVICE_NAME || "ZMM_PO_DETAILS_SRV",
+          entitySet: body.entitySet || process.env.DEFAULT_PO_ENTITYSET || "Po_detailsSet",
+        },
+        sapAuth: connection.sapAuth,
+      },
+      purchaseOrderId: body.purchaseOrderId,
+    });
+  },
+
+  mapSuccessResult: (result) => ({
+    rows: result.rows || [],
+    totalCount: result.totalCount || null,
+    data: result.data || null,
   }),
 });

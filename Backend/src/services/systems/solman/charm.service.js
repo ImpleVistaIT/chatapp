@@ -387,7 +387,7 @@ function isTransientSapNetworkError(err) {
   ].includes(code);
 }
 
-async function resolveSolmanDataServiceName({ owner, systemId }) {
+export async function resolveSolmanDataServiceName({ owner, systemId }) {
   const sid = cleanString(systemId).toUpperCase();
   const deploymentOwner = getDeploymentOwner("local");
   const activeCatalogEntries = await SapServiceCatalog.find({

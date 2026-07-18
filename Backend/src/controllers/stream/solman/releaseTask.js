@@ -14,14 +14,29 @@ function normalizeQuery(query = "") {
 
 export function isReleaseTransportRequest(query = "") {
   const q = normalizeQuery(query);
-  return /\brelease\b.*\b(?:transport|request)\b/i.test(q) && !/\btask\b/i.test(q);
+  if (!q) return false;
+
+  return (
+    /\brelease\s+transport\b/i.test(q) ||
+    /\brelease\s+transport\s+request\b/i.test(q) ||
+    /\brelease\s+tr\b/i.test(q) ||
+    /\brelease\s+tr\s+request\b/i.test(q) ||
+    /\brelease\s+transport\s+number\b/i.test(q) ||
+    /\brelease\s+transport\s+id\b/i.test(q) ||
+    /\btransport\s+release\b/i.test(q)
+  ) && !/\btask\b/i.test(q);
 }
 
 export function isReleaseTransportTaskRequest(query = "") {
   const q = normalizeQuery(query);
   if (!q) return false;
   if (isReleaseTransportRequest(q)) return false;
-  return /\brelease\b.*\b(?:task|transport task)\b/i.test(q);
+  return (
+    /\brelease\s+task\b/i.test(q) ||
+    /\brelease\s+transport\s+task\b/i.test(q) ||
+    /\brelease\s+task\s+number\b/i.test(q) ||
+    /\btask\s+release\b/i.test(q)
+  );
 }
 
 function cleanTaskId(value = "") {

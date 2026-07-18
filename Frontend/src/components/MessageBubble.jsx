@@ -1,8 +1,10 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReplyTable from "./ReplyTable";
+import PODetailsDrawer from "./PODetailsDrawer";
 import { replyToTable } from "../utils/replyToTable";
 import { getSolmanChangeRequestDetails, listSolmanTransports } from "../api/solmanApi";
+import { getPurchaseOrderDetails, getS4dPurchaseOrderDetails } from "../api/chatApi";
 import {
   Cell,
   Legend,
@@ -214,6 +216,184 @@ function TransportDrawer({ open, title, status = "", loading, error, transports,
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
               No transports found for this Change Request.
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+
+  if (typeof document === "undefined") {
+    return drawerContent;
+  }
+
+  return createPortal(drawerContent, document.body);
+}
+
+function formatPoDrawerValue(value) {
+  const text = poValueToText(value);
+  return text || "-";
+}
+
+function formatPoDrawerError(value) {
+  const text = poValueToText(value);
+  return text || "Failed to fetch purchase order details.";
+}
+
+function poValueToText(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => poValueToText(item)).filter(Boolean).join(", ");
+  }
+  if (typeof value === "object") {
+    if (value instanceof Date) return value.toISOString();
+
+    const candidates = [
+      value.value,
+      value.text,
+      value.Text,
+      value.description,
+      value.Description,
+      value.label,
+      value.Label,
+      value.name,
+      value.Name,
+      value._,
+      value.__text,
+      value.__value,
+    ];
+
+    for (const candidate of candidates) {
+      const text = poValueToText(candidate);
+      if (text) return text;
+    }
+
+    for (const nestedValue of Object.values(value)) {
+      const text = poValueToText(nestedValue);
+      if (text) return text;
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+
+  return String(value).trim();
+}
+
+function getPoFieldValue(row = {}, keys = []) {
+  for (const key of Array.isArray(keys) ? keys : []) {
+    const value = row?.[key];
+    const text = poValueToText(value);
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
+function PoDrawer({ open, title, loading, error, row, onClose }) {
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const drawerContent = (
+    <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40 backdrop-blur-[1px]" onMouseDown={onClose}>
+      <aside
+        className="flex h-full w-full max-w-full flex-col bg-white shadow-[0_0_40px_rgba(15,23,42,0.25)] transition-transform duration-300 ease-out sm:w-[58vw] md:w-[44vw] lg:w-[38vw] xl:w-[35vw]"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              PO Details
+            </div>
+            <div className="mt-1 break-words text-sm font-semibold text-slate-900">
+              {title}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-700 transition hover:bg-slate-50"
+            aria-label="Close PO drawer"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-4">
+          {loading ? (
+            <div className="flex h-full min-h-[220px] items-center justify-center">
+              <div className="flex items-center gap-3 text-sm text-slate-600">
+                <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
+                Loading PO details...
+              </div>
+            </div>
+          ) : error ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+              {formatPoDrawerError(error)}
+            </div>
+          ) : row ? (
+            <div className="overflow-hidden rounded-3xl border border-blue-100 bg-gradient-to-br from-white to-blue-50/30 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
+              <div className="border-b border-blue-100 bg-gradient-to-r from-blue-50 to-cyan-50 px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">
+                  Purchase Order Record
+                </div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {title}
+                </div>
+              </div>
+
+              <table className="w-full border-collapse text-sm">
+                <tbody>
+                  {[
+                    {
+                      label: "Approval Status",
+                      value: getPoFieldValue(row, ["Status", "status", "STATUS"]),
+                    },
+                    {
+                      label: "Delivery Status",
+                      value: getPoFieldValue(row, ["Delivery_Status", "delivery_status", "DELIVERY_STATUS", "DeliveryStatus"]),
+                    },
+                    {
+                      label: "Plant",
+                      value: getPoFieldValue(row, ["plant", "Plant", "PLANT", "WERKS"]),
+                    },
+                    {
+                      label: "Net Value / Price",
+                      value: getPoFieldValue(row, ["net_price", "NetPrice", "NET_PRICE", "NetVal", "RlseTotalValue", "Price", "Amount"]),
+                    },
+                  ].map((field) => (
+                    <tr key={field.label} className="border-b border-blue-100/80 last:border-b-0 odd:bg-white even:bg-slate-50/50">
+                      <th className="w-[36%] bg-transparent px-4 py-3 text-left align-top text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        {field.label}
+                      </th>
+                      <td className="px-4 py-3 align-top text-sm font-medium text-slate-900 break-words whitespace-pre-wrap">
+                        {formatPoDrawerValue(field.value)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+              No PO details available.
             </div>
           )}
         </div>
@@ -755,6 +935,13 @@ export default function MessageBubble({
     changeRequestId: "",
     transports: [],
   });
+  const [poDrawer, setPoDrawer] = useState({
+    open: false,
+    loading: false,
+    error: "",
+    title: "",
+    row: null,
+  });
   const [searchDraft, setSearchDraft] = useState({
     crNumber: "",
     shortDescription: "",
@@ -1027,6 +1214,66 @@ export default function MessageBubble({
     setTransportDrawer((current) => ({ ...current, open: false }));
   }, []);
 
+  const handleOpenPoDrawer = useCallback(async (poRow) => {
+    const poNumber = String(
+      poRow?.PoNo || poRow?.PONo || poRow?.PO_NO || poRow?.poNo || poRow?.po_number || poRow?.poNumber || ""
+    ).trim();
+
+    if (!poNumber) return;
+
+    setPoDrawer({
+      open: true,
+      loading: true,
+      error: "",
+      title: `PO ${poNumber}`,
+      row: null,
+    });
+
+    try {
+      const storedContext = readStoredSapContext();
+      const resolvedSystemId = String(systemId || data?.systemId || data?.result?.systemId || "").trim();
+      const resolvedSapUser = String(sapUser || data?.sapUser || data?.result?.sapUser || "").trim();
+      const finalSystemId = resolvedSystemId || storedContext.systemId;
+      const finalSapUser = resolvedSapUser || storedContext.sapUser;
+
+      if (!finalSystemId) {
+        throw new Error("systemId is required.");
+      }
+
+      if (!finalSapUser) {
+        throw new Error("sapUser is required.");
+      }
+
+      const poResult = await getS4dPurchaseOrderDetails({
+        systemId: finalSystemId,
+        sapUser: finalSapUser,
+        poNumber,
+      });
+
+      const fetchedRow = poResult?.data || null;
+
+      setPoDrawer({
+        open: true,
+        loading: false,
+        error: "",
+        title: `PO ${poNumber}`,
+        row: fetchedRow,
+      });
+    } catch (err) {
+      setPoDrawer({
+        open: true,
+        loading: false,
+          error: err?.message || "Failed to fetch purchase order details.",
+        title: `PO ${poNumber}`,
+        row: null,
+      });
+    }
+  }, [data?.result?.sapUser, data?.result?.systemId, data?.sapUser, data?.systemId, sapUser, systemId]);
+
+  const handleClosePoDrawer = useCallback(() => {
+    setPoDrawer((current) => ({ ...current, open: false }));
+  }, []);
+
   const renderCrNumberCell = useCallback(
     ({ value, column }) => {
       if (String(column || "").toLowerCase() !== "cr number") return null;
@@ -1045,6 +1292,28 @@ export default function MessageBubble({
       );
     },
     [handleOpenTransportDrawer]
+  );
+
+  const renderPoNumberCell = useCallback(
+    ({ value, column, row }) => {
+      if (String(column || "").toLowerCase() !== "pono") return null;
+      const resolvedSystemId = String(systemId || data?.systemId || data?.result?.systemId || "").trim().toUpperCase();
+      if (!resolvedSystemId.startsWith("S4D")) return null;
+
+      const po = String(value || row?.PoNo || row?.PONo || row?.PO_NO || row?.poNo || "").trim();
+      if (!po || po === "-") return null;
+
+      return (
+        <button
+          type="button"
+          onClick={() => handleOpenPoDrawer(row)}
+          className="text-blue-600 underline decoration-blue-400 decoration-1 underline-offset-2 transition hover:text-blue-800"
+        >
+          {po}
+        </button>
+      );
+    },
+    [handleOpenPoDrawer]
   );
 
   if (isUser) {
@@ -1658,6 +1927,7 @@ export default function MessageBubble({
                 columns={table.columns}
                 rows={table.rows}
                 forceGrid={Boolean(table?.forceGrid || data?.viewType === "transport_list_table")}
+                renderCell={renderPoNumberCell}
               />
             </>
           ) : (
@@ -1724,9 +1994,9 @@ export default function MessageBubble({
           <div className="mt-3 rounded-[18px] rounded-tl-sm border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
             Chart unavailable for this result.
           </div>
-        ) : null}
+            ) : null}
 
-        {safeSuggestions.length > 0 && (
+          {safeSuggestions.length > 0 && (
           <div className="mt-3 ml-4 flex flex-wrap gap-2">
             {safeSuggestions.map((suggestion, idx) => {
               const label = getSuggestionLabel(suggestion);
@@ -1755,6 +2025,13 @@ export default function MessageBubble({
         error={transportDrawer.error}
         transports={transportDrawer.transports}
         onClose={handleCloseTransportDrawer}
+      />
+      <PODetailsDrawer
+        open={poDrawer.open}
+        loading={poDrawer.loading}
+        error={poDrawer.error}
+        data={poDrawer.row}
+        onClose={handleClosePoDrawer}
       />
     </div>
   );

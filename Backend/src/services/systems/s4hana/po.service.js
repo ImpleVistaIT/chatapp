@@ -1,5 +1,5 @@
 import { buildPoDetailsQuery } from "../../odataQueryBuilder.js";
-import { fetchFromSap } from "../../sap/sap.service.js";
+import { fetchFromSap } from "../../sap.service.js";
 
 function resolveSapContext(req) {
   const system = req?.sapSystem || req?.system || req?.sap?.system;
@@ -43,6 +43,56 @@ export async function listPurchaseOrders({ req, query } = {}) {
 
   return {
     data: sapData,
+    totalCount: Number(sapData?.d?.__count || 0) || null,
+  };
+}
+
+export async function getPurchaseOrderDetails({ req, purchaseOrderId } = {}) {
+  const { system, service, auth } = resolveSapContext(req);
+  const poNo = String(purchaseOrderId || "").trim();
+
+  if (!poNo) {
+    throw new Error("purchaseOrderId is required");
+  }
+
+  const finalQuery = buildPoDetailsQuery(
+    {
+      $filter: `PoNo eq '${poNo.replace(/'/g, "''")}'`,
+      $top: 10,
+      $skip: 0,
+      $select: [
+        "PoNo",
+        "Plant",
+        "RelSt",
+        "RelInd",
+        "ReleaseState",
+        "ReleaseIndicator",
+        "Status",
+        "DelivStatusItem",
+        "DelivInd",
+        "DelivStatusItem2",
+        "Wemng",
+        "NetPrice",
+        "NetVal",
+        "RlseTotalValue",
+        "CurKey",
+      ].join(","),
+    },
+    { maxTop: 10 }
+  );
+
+  const sapData = await fetchFromSap(
+    {
+      system,
+      service,
+      relativePath: finalQuery,
+    },
+    auth
+  );
+
+  return {
+    data: sapData,
+    rows: Array.isArray(sapData?.d?.results) ? sapData.d.results : [],
     totalCount: Number(sapData?.d?.__count || 0) || null,
   };
 }

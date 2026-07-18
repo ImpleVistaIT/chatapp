@@ -218,3 +218,31 @@ export async function listSolmanTransports({
 
   return data;
 }
+
+export async function releaseSolmanTransport({
+  systemId,
+  sapUser,
+  transportNumber,
+  quality = false,
+}) {
+  const res = await authFetch(`${API_BASE}/api/solman/release-transport`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      systemId,
+      sapUser,
+      transportNumber,
+      quality: Boolean(quality),
+    }),
+  });
+
+  const data = await parseJsonSafe(res);
+
+  if (!res.ok || data?.ok === false || data?.success === false) {
+    throw new Error(extractApiError(data, "Transport release failed."));
+  }
+
+  return data;
+}

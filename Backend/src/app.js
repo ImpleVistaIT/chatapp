@@ -6,6 +6,8 @@ import cookieParser from "cookie-parser";
 import { chatRoutes } from "./routes/chat.routes.js";
 import { sapRoutes } from "./routes/sap.routes.js";
 import { poExtractRoutes } from "./routes/poextract.routes.js";
+import { s4dPoRoutes } from "./routes/s4d.po.routes.js";
+import solmanReleaseTransportRoutes from "./routes/solman.release-transport.routes.js";
 import solmanRoutes from "./routes/solman.routes.js";
 import { procurementQueryController } from "./controllers/procurement.query.controller.js";
 import { handleChatStream } from "./controllers/chat.stream.controller.js";
@@ -115,6 +117,8 @@ if (process.env.NODE_ENV !== "production") {
 // ROUTES
 // --------------------
 app.use("/api/solman", requireAuth, solmanRoutes);
+app.use("/api/solman", solmanReleaseTransportRoutes);
+app.use("/api/s4d", requireAuth, s4dPoRoutes);
 app.use("/sap", requireAuth, sapRoutes);
 
 app.post("/chat/stream", requireAuth, handleChatStream);

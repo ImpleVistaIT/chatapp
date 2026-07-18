@@ -164,3 +164,46 @@ export async function sendChatMessageForExport({
     payload,
   };
 }
+
+export async function getPurchaseOrderDetails({ systemId, sapUser, purchaseOrderId, serviceName = null, entitySet = null }) {
+  const res = await authFetch(`${apiBase}/chat/actions/s4hana/get-purchase-order-details`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      systemId,
+      sapUser,
+      purchaseOrderId,
+      serviceName,
+      entitySet,
+    }),
+  });
+
+  const payload = await readResponseBody(res);
+
+  if (!res.ok || payload?.ok === false || payload?.status === "validation_failed" || payload?.status === "execution_failed") {
+    throw new Error(payload?.error || payload?.message || "Failed to fetch purchase order details.");
+  }
+
+  return payload;
+}
+
+export async function getS4dPurchaseOrderDetails({ systemId, sapUser, poNumber }) {
+  const cleanSystemId = String(systemId || "").trim();
+  const cleanSapUser = String(sapUser || "").trim();
+  const cleanPoNumber = String(poNumber || "").trim();
+
+  const url = new URL(`${apiBase}/api/s4d/po/details/${encodeURIComponent(cleanPoNumber)}`);
+  if (cleanSystemId) url.searchParams.set("systemId", cleanSystemId);
+  if (cleanSapUser) url.searchParams.set("sapUser", cleanSapUser);
+
+  const res = await authFetch(url.toString(), { method: "GET" });
+  const payload = await readResponseBody(res);
+
+  if (!res.ok || payload?.success === false) {
+    throw new Error(payload?.error || payload?.message || "Failed to fetch purchase order details.");
+  }
+
+  return payload;
+}

@@ -12,6 +12,24 @@ function cleanString(value) {
   return String(value || "").trim();
 }
 
+function isReleaseTransportPrompt(query = "") {
+  const q = cleanString(query).toLowerCase();
+  if (!q) return false;
+
+  return (
+    /\brelease\s+transport\b/.test(q) ||
+    /\brelease\s+transport\s+request\b/.test(q) ||
+    /\brelease\s+tr\b/.test(q) ||
+    /\brelease\s+tr\s+request\b/.test(q) ||
+    /\brelease\s+transport\s+number\b/.test(q) ||
+    /\brelease\s+transport\s+id\b/.test(q) ||
+    /\btransport\s+release\b/.test(q) ||
+    /\brelease\s+transport\s+request\s+[a-z0-9_-]+/i.test(q) ||
+    /\brelase\s+tr\b/.test(q) ||
+    /\brelase\s+transport\b/.test(q)
+  );
+}
+
 function hasAlphabeticToken(query) {
   return /[a-z]/i.test(String(query || ""));
 }
@@ -105,6 +123,8 @@ const SAFE_PROMPT_WORDS = new Set([
   "october",
   "november",
   "december",
+  "release",
+  "tr",
 ]);
 
 function normalizeToken(token) {
@@ -138,6 +158,7 @@ function isSuspiciousToken(token) {
 export function shouldRunPromptNormalizer(query) {
   const q = cleanString(query);
   if (!q) return false;
+  if (isReleaseTransportPrompt(q)) return true;
   if (q.length > 240) return false;
   if (!hasAlphabeticToken(q)) return false;
 
@@ -301,7 +322,9 @@ export async function normalizePromptWithLlm({ query }) {
   const isMeaningful = data.isMeaningful !== false;
   const shouldReject = data.shouldReject === true;
 
-  const rejected = shouldReject || (!isMeaningful && confidence >= 0.55);
+  const rejected =
+    !isReleaseTransportPrompt(original) &&
+    (shouldReject || (!isMeaningful && confidence >= 0.55));
 
   return {
     normalizedQuery: normalized,

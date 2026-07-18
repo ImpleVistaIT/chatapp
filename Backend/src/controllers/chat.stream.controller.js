@@ -68,7 +68,7 @@ function isSolmanRelatedQuery(query, classified = null) {
     return true;
   }
 
-  return /\b(change request|change requests|crs?|charm|transport|solman|release\s+task|release\s+transport\s+task|task\s+[a-z]{2,6}\d{4,20}|latest\s+\d+\s+crs?|last\s+\d+\s+crs?|most\s+recent\s+\d+\s+crs?|top\s+\d+\s+crs?)\b/i.test(q);
+  return /\b(change request|change requests|crs?|charm|transport|solman|release\s+task|release\s+transport\s+task|release\s+transport|release\s+tr|transport\s+release|task\s+[a-z]{2,6}\d{4,20}|latest\s+\d+\s+crs?|last\s+\d+\s+crs?|most\s+recent\s+\d+\s+crs?|top\s+\d+\s+crs?)\b/i.test(q);
 }
 
 const ROUTING_KEYWORD_REGEX =
@@ -146,6 +146,10 @@ export function isLikelyGibberishQuery(query) {
   // treat it as gibberish and stop before LLM/routing.
   if (tokens.length === 1 && !hasReadableSignal && tokens[0].length >= 4) {
     return true;
+  }
+
+  if (/\b(?:release\s+transport|release\s+transport\s+request|release\s+tr|release\s+tr\s+request|transport\s+release|relase\s+tr|relase\s+transport)\b/i.test(q)) {
+    return false;
   }
 
   if (tokens.length === 1) {
@@ -507,6 +511,7 @@ export async function handleChatStream(req, res) {
 
     const rawQuery = cleanString(query);
     const queryLooksLikePo = isPurchaseOrderQuery(rawQuery);
+    const queryLooksLikeReleaseTransport = /\b(?:release\s+transport\s+request|release\s+transport|release\s+tr\s+request|release\s+tr|transport\s+release|relase\s+transport|relase\s+tr)\b/i.test(rawQuery);
     const preclassifiedRouting = {
       po: queryLooksLikePo,
       solman: false,
@@ -527,12 +532,69 @@ export async function handleChatStream(req, res) {
       detectConversationIntent({ query: rawQuery })
     );
 
-    if (!isExactSolmanContinuation && !queryLooksLikePo && isLikelyGibberishQuery(rawQuery)) {
+    if (!isExactSolmanContinuation && !queryLooksLikePo && !queryLooksLikeReleaseTransport && isLikelyGibberishQuery(rawQuery)) {
       sse.send("error", {
         message: buildInvalidPromptMessage(),
         status: "invalid_prompt",
       });
       return sse.end();
+    }
+
+    if (queryLooksLikeReleaseTransport) {
+      const classifiedReleaseTransport = {
+        system: "solman",
+        module: "transport",
+        intent: "release_transport_request",
+        entities: {},
+      };
+
+      const releaseTransportSystemResolution = await step("resolveTargetSystem (release transport)", () =>
+        resolveTargetSystem({
+          query: rawQuery,
+          classified: classifiedReleaseTransport,
+          requestedSystemId: systemId,
+          availableSystems: effectiveAvailableSystems,
+        })
+      );
+
+      const releaseTransportSystemId = normalizeSystemId(releaseTransportSystemResolution?.targetSystemId || systemId || "");
+      if (!releaseTransportSystemId) {
+        sse.send("error", {
+          message: "Please connect a Solution Manager system to release a transport request.",
+          status: "needs_input",
+          missingFields: ["systemId"],
+        });
+        return sse.end();
+      }
+
+      const releaseTransportSapUser = await step("resolveSolmanSapUser (release transport)", () =>
+        resolveSolmanSapUser({
+          owner,
+          systemId: releaseTransportSystemId,
+          requestedSapUser: sapUser,
+        })
+      );
+
+      if (!releaseTransportSapUser) {
+        sse.send("error", {
+          message: `No SAP credentials saved for systemId=${releaseTransportSystemId}. Please login to Solution Manager first.`,
+          status: "missing_solman_credentials",
+          missingFields: ["sapUser"],
+        });
+        return sse.end();
+      }
+
+      const releaseTransportContext = {
+        sse,
+        owner,
+        query: rawQuery,
+        sessionId,
+        systemId: releaseTransportSystemId,
+        sapUser: releaseTransportSapUser,
+        classified: classifiedReleaseTransport,
+      };
+
+      return await handleSolmanChatStream(releaseTransportContext);
     }
 
     if (conversationIntent?.handled && !isExactSolmanContinuation && !queryLooksLikePo) {

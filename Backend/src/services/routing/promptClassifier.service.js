@@ -41,7 +41,9 @@ function normalizeIntent(value) {
     dependency_check: "dependency_check",
     dependency_analysis: "dependency_check",
     create_transport_task: "create_transport_task",
+    import_transport_to_production: "import_transport_to_production",
     release_transport_task: "release_transport_task",
+    release_transport_request: "release_transport_request",
     create_transport_request: "create_transport_request",
     create_transport: "create_transport",
     transport_list: "transport_list",
@@ -159,6 +161,17 @@ function detectCreateTransportTaskIntent(query = "") {
   return createTaskPattern.test(q) && !explicitCrCreation.test(q);
 }
 
+function detectImportTransportToProductionIntent(query = "") {
+  const q = normalizeRoutingQuery(query);
+  if (!q) return false;
+
+  return (
+    /\bimport\s+(?:transport\s+request|transport\s+number|transport\s+id|transport|tr)\b/i.test(q) ||
+    /\b(?:transport|tr)\s+import\b/i.test(q) ||
+    /\b(?:production\s+import|import\s+to\s+production|move\s+(?:transport|tr)\s+to\s+production|deploy\s+transport\s+to\s+production|send\s+transport\s+to\s+production)\b/i.test(q)
+  );
+}
+
 function detectCreateTransportRequestIntent(query = "") {
   const q = normalizeRoutingQuery(query);
   if (!q) return false;
@@ -177,10 +190,32 @@ function detectReleaseTransportTaskIntent(query = "") {
   const q = normalizeRoutingQuery(query);
   if (!q) return false;
 
-  const releaseTaskPattern = /\brelease\b[\s\S]{0,40}\b(?:task|transport task)\b/i;
-  const releaseTransportPattern = /\brelease\b[\s\S]{0,40}\b(?:transport|request)\b/i;
+  const releaseTaskPattern = /\brelease\s+task\b/i;
+  const releaseTransportTaskPattern = /\brelease\s+transport\s+task\b/i;
+  const releaseTaskNumberPattern = /\brelease\s+task\s+number\b/i;
+  const taskReleasePattern = /\btask\s+release\b/i;
 
-  return releaseTaskPattern.test(q) && !releaseTransportPattern.test(q) && !detectCreateTransportTaskIntent(q) && !detectCreateChangeRequestIntent(q);
+  return (
+    releaseTaskPattern.test(q) ||
+    releaseTransportTaskPattern.test(q) ||
+    releaseTaskNumberPattern.test(q) ||
+    taskReleasePattern.test(q)
+  ) && !/\brelease\s+transport\b/i.test(q) && !detectCreateTransportTaskIntent(q) && !detectCreateChangeRequestIntent(q);
+}
+
+function detectReleaseTransportIntent(query = "") {
+  const q = normalizeRoutingQuery(query);
+  if (!q) return false;
+
+  return (
+    /\brelease\s+transport\b/i.test(q) ||
+    /\brelease\s+transport\s+request\b/i.test(q) ||
+    /\brelease\s+tr\b/i.test(q) ||
+    /\brelease\s+tr\s+request\b/i.test(q) ||
+    /\brelease\s+transport\s+number\b/i.test(q) ||
+    /\brelease\s+transport\s+id\b/i.test(q) ||
+    /\btransport\s+release\b/i.test(q)
+  );
 }
 
 function detectCreateChangeRequestIntent(query = "") {
@@ -318,6 +353,27 @@ function normalizeTransportListEntities(raw = {}) {
     changeRequestId: objectId,
     cr_number: objectId,
     processType: cleanString(raw.processType || raw.PROCESS_TYPE) || "",
+  };
+}
+
+function normalizeReleaseTransportEntities(raw = {}, queryText = "") {
+  const query = String(queryText || "");
+  const transportNumber = cleanString(
+    raw?.transportNumber ||
+      raw?.transportNo ||
+      raw?.objectId ||
+      raw?.OBJECT_ID ||
+      raw?.IvObjectId ||
+      query.match(/\b([A-Z]{2,6}\d{4,10})\b/i)?.[1] ||
+      ""
+  )?.toUpperCase() || null;
+
+  const qualityValue = String(raw.quality ?? raw.IvQuality ?? raw.releaseToQuality ?? "").trim().toLowerCase();
+  const quality = qualityValue === "true" || qualityValue === "x" || qualityValue === "1" || qualityValue === "yes";
+
+  return {
+    transportNumber,
+    quality,
   };
 }
 
@@ -491,6 +547,9 @@ function normalizeEntitiesByIntent(intent, rawEntities = {}, queryText = "") {
 
     case "transport_list":
       return normalizeTransportListEntities(raw);
+
+    case "release_transport_request":
+      return normalizeReleaseTransportEntities(raw, queryText);
 
     default:
       return raw;
@@ -746,6 +805,18 @@ function keywordFallback(query) {
 }
 
 export async function classifyPrompt({ query, sessionContext = null }) {
+  if (detectImportTransportToProductionIntent(query)) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "transport",
+      intent: "import_transport_to_production",
+      confidence: 0.98,
+      reason: "Matched SolMan production import transport intent from natural language",
+      source: "rule",
+      entities: normalizeEntitiesByIntent("import_transport_to_production", extractBusinessEntities(query), query),
+    });
+  }
+
   if (detectDependencyCheckIntent(query)) {
     const objectId = extractCrNumber(query);
     const processType = inferProcessType(query);
@@ -803,6 +874,7 @@ export async function classifyPrompt({ query, sessionContext = null }) {
 
   const createdByLikeIntent = inferCrCreatedByIntent(query);
   const createTransportTaskLikeIntent = detectCreateTransportTaskIntent(query);
+  const releaseTransportLikeIntent = detectReleaseTransportIntent(query);
   const releaseTransportTaskLikeIntent = detectReleaseTransportTaskIntent(query);
   const listLikeIntent = detectListChangeRequestIntent(query);
   const createLikeIntent = detectCreateChangeRequestIntent(query);
@@ -833,6 +905,22 @@ export async function classifyPrompt({ query, sessionContext = null }) {
       source: "rule",
       entities: normalizeEntitiesByIntent(
         "create_transport_task",
+        extractBusinessEntities(query),
+        query
+      ),
+    });
+  }
+
+  if (releaseTransportLikeIntent) {
+    return normalizeRoutingResult({
+      system: "solman",
+      module: "transport",
+      intent: "release_transport_request",
+      confidence: 0.97,
+      reason: "Matched SolMan transport release intent from natural language",
+      source: "rule",
+      entities: normalizeEntitiesByIntent(
+        "release_transport_request",
         extractBusinessEntities(query),
         query
       ),

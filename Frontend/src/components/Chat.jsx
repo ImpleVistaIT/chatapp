@@ -21,7 +21,9 @@ import { authFetch } from "../api/authFetch";
 import SolmanCreateCrForm from "./SolmanCreateCrForm";
 import SolmanCreateTransportRequestForm from "./SolmanCreateTransportRequestForm";
 import SolmanCreateTransportTaskForm from "./SolmanCreateTransportTaskForm";
+import SolmanImportTransportToProductionForm from "./SolmanImportTransportToProductionForm";
 import SolmanReleaseTransportTaskForm from "./SolmanReleaseTransportTaskForm";
+import ReleaseTransportForm from "./ReleaseTransportForm";
 
 //---------------------------------------------//
 // Utility helpers
@@ -442,7 +444,9 @@ export default function Chat({ onToast = null } = {}) {
   const [showSolmanCrForm, setShowSolmanCrForm] = useState(false);
   const [showSolmanTransportRequestForm, setShowSolmanTransportRequestForm] = useState(false);
   const [showSolmanTransportTaskForm, setShowSolmanTransportTaskForm] = useState(false);
+  const [showSolmanImportTransportToProductionForm, setShowSolmanImportTransportToProductionForm] = useState(false);
   const [showSolmanReleaseTaskForm, setShowSolmanReleaseTaskForm] = useState(false);
+  const [showSolmanReleaseTransportForm, setShowSolmanReleaseTransportForm] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
 
   const [activeSession, setActiveSession] = useState(() => {
@@ -1269,6 +1273,7 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanTransportRequestForm(false);
         setShowSolmanTransportTaskForm(false);
         setShowSolmanReleaseTaskForm(false);
+        setShowSolmanReleaseTransportForm(false);
 
         updateConversationById(errorConvId, (m) => [
           ...m,
@@ -1286,6 +1291,7 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanCrForm(false);
         setShowSolmanTransportRequestForm(false);
         setShowSolmanReleaseTaskForm(false);
+        setShowSolmanReleaseTransportForm(false);
 
         updateConversationById(errorConvId, (m) => [
           ...m,
@@ -1305,6 +1311,7 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanCrForm(false);
         setShowSolmanTransportTaskForm(false);
         setShowSolmanTransportRequestForm(false);
+        setShowSolmanReleaseTransportForm(false);
 
         updateConversationById(errorConvId, (m) => [
           ...m,
@@ -1321,7 +1328,9 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanTransportRequestForm(true);
         setShowSolmanCrForm(false);
         setShowSolmanTransportTaskForm(false);
+        setShowSolmanImportTransportToProductionForm(false);
         setShowSolmanReleaseTaskForm(false);
+        setShowSolmanReleaseTransportForm(false);
 
         updateConversationById(errorConvId, (m) => [
           ...m,
@@ -1329,6 +1338,38 @@ export default function Chat({ onToast = null } = {}) {
             role: "assistant",
             text: payload?.message || "Please complete the required transport request details.",
           },
+        ]);
+      } else if (actionType === "open_form" && actionFormId === "solman_release_transport") {
+        setPendingAction({
+          collected: payload?.prefilledData || payload?.pendingAction?.collected || {},
+          missingFields: payload?.missingFields || payload?.pendingAction?.missingFields || [],
+        });
+        setShowSolmanReleaseTransportForm(true);
+        setShowSolmanCrForm(false);
+        setShowSolmanTransportTaskForm(false);
+        setShowSolmanTransportRequestForm(false);
+        setShowSolmanReleaseTaskForm(false);
+        setShowSolmanImportTransportToProductionForm(false);
+
+        updateConversationById(errorConvId, (m) => [
+          ...m,
+          { role: "assistant", text: payload?.message || "Please complete the required transport release details." },
+        ]);
+      } else if (actionType === "open_form" && actionFormId === "solman_import_transport_to_production") {
+        setPendingAction({
+          collected: payload?.prefilledData || payload?.pendingAction?.collected || {},
+          missingFields: payload?.missingFields || payload?.pendingAction?.missingFields || [],
+        });
+        setShowSolmanImportTransportToProductionForm(true);
+        setShowSolmanCrForm(false);
+        setShowSolmanTransportTaskForm(false);
+        setShowSolmanTransportRequestForm(false);
+        setShowSolmanReleaseTaskForm(false);
+        setShowSolmanReleaseTransportForm(false);
+
+        updateConversationById(errorConvId, (m) => [
+          ...m,
+          { role: "assistant", text: payload?.message || "Please provide the transport number to import to production." },
         ]);
       } else if (payload?.action?.type === "add_system") {
         updateConversationById(errorConvId, (m) => [
@@ -2693,6 +2734,32 @@ export default function Chat({ onToast = null } = {}) {
     </div>
   ) : null;
 
+  const solmanImportTransportToProductionForm = showSolmanImportTransportToProductionForm ? (
+    <div className="px-4 pb-4">
+      <SolmanImportTransportToProductionForm
+        systemId={resolvedConnectedSystem?.systemId || ""}
+        sapUser={resolvedConnectedSystem?.sapUser || ""}
+        sessionId={isMongoId(activeId) ? activeId : ""}
+        initialValues={pendingAction?.collected || {}}
+        pendingAction={pendingAction}
+        onSubmit={async ({ prompt }) => {
+          setShowSolmanImportTransportToProductionForm(false);
+          setPendingAction(null);
+          await onSend({
+            overrideText: prompt,
+            fromEdit: false,
+            forcedSystemId: resolvedConnectedSystem?.systemId || "",
+            sapUser: resolvedConnectedSystem?.sapUser || "",
+            sessionId: isMongoId(activeId) ? activeId : "",
+          });
+        }}
+        onCancel={() => {
+          setShowSolmanImportTransportToProductionForm(false);
+        }}
+      />
+    </div>
+  ) : null;
+
   const solmanReleaseTransportTaskForm = showSolmanReleaseTaskForm ? (
     <div className="px-4 pb-4">
       <SolmanReleaseTransportTaskForm
@@ -2718,6 +2785,35 @@ export default function Chat({ onToast = null } = {}) {
         }}
         onCancel={() => {
           setShowSolmanReleaseTaskForm(false);
+        }}
+      />
+    </div>
+  ) : null;
+
+  const solmanReleaseTransportForm = showSolmanReleaseTransportForm ? (
+    <div className="px-4 pb-4">
+      <ReleaseTransportForm
+        systemId={resolvedConnectedSystem?.systemId || ""}
+        sapUser={resolvedConnectedSystem?.sapUser || ""}
+        sessionId={isMongoId(activeId) ? activeId : ""}
+        initialValues={pendingAction?.collected || {}}
+        pendingAction={pendingAction}
+        onSuccess={(data) => {
+          setShowSolmanReleaseTransportForm(false);
+          setPendingAction(null);
+
+          updateActiveMessages((m) => [
+            ...m,
+            {
+              role: "assistant",
+              text: data?.message || `Transport ${data?.transportNumber || ""} released successfully.`,
+              summary: data?.message || "Transport released successfully.",
+              data,
+            },
+          ]);
+        }}
+        onCancel={() => {
+          setShowSolmanReleaseTransportForm(false);
         }}
       />
     </div>
@@ -2820,7 +2916,9 @@ export default function Chat({ onToast = null } = {}) {
             solmanCreateCrForm={solmanCreateCrForm}
             solmanCreateTransportRequestForm={solmanCreateTransportRequestForm}
             solmanCreateTransportTaskForm={solmanCreateTransportTaskForm}
+            solmanImportTransportToProductionForm={solmanImportTransportToProductionForm}
             solmanReleaseTransportTaskForm={solmanReleaseTransportTaskForm}
+            solmanReleaseTransportForm={solmanReleaseTransportForm}
           />
         </div>
       )}

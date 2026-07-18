@@ -26,7 +26,7 @@ function buildMissingFieldsMessage(missingFields = []) {
     SolmanChangeReq: "Change Request Number",
     TrOwner: "Transport Owner",
     Client: "Client",
-    WorkbenchReq: "Workbench Request (Yes/No)",
+    WorkbenchReq: "(Yes/No)",
     CustomizingReq: "Customizing Request (Yes/No)",
     DeveloperSet: "Developers",
     TransportType: "Workbench or Customizing selection",

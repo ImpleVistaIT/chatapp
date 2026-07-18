@@ -22,8 +22,11 @@ import { handleDependencyCheck } from "./solman.dependency-check.handler.js";
 import { handleTransportDependency } from "./solman.transport-dependency.handler.js";
 import { handleTransportList } from "./solman.transport-list.handler.js";
 import { handleCreateTransportRequest, isCreateTransportRequestIntent } from "./transport-request.handler.js";
+import { handleImportTransportToProduction } from "./importTransportToProduction.handler.js";
+import { isImportTransportToProductionIntent } from "../../../services/systems/solman/importTransportToProduction.service.js";
 import { handleCreateTransportTask, isCreateTransportTaskRequest } from "./createTask.js";
 import { handleReleaseTransportTask, isReleaseTransportTaskRequest, isReleaseTransportRequest } from "./releaseTask.js";
+import { handleReleaseTransport, isReleaseTransportIntent } from "./releaseTransport.js";
 
 function normalizeIntentQuery(query = "") {
   return cleanString(query)
@@ -258,6 +261,14 @@ export async function handleSolmanChatStream({
     return handleCreateTransportRequest(context);
   }
 
+  if (classified?.intent === "import_transport_to_production") {
+    return handleImportTransportToProduction(context);
+  }
+
+  if (isImportTransportToProductionIntent(query)) {
+    return handleImportTransportToProduction(context);
+  }
+
   if (isCreateTransportRequestIntent(query)) {
     return handleCreateTransportRequest(context);
   }
@@ -272,6 +283,10 @@ export async function handleSolmanChatStream({
 
   if (isCreateTransportTaskRequest(query)) {
     return handleCreateTransportTask(context);
+  }
+
+  if (isReleaseTransportIntent(query)) {
+    return handleReleaseTransport(context);
   }
 
   if (isReleaseTransportTaskRequest(query)) {

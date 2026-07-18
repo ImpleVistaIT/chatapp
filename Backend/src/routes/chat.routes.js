@@ -9,6 +9,7 @@ import {
   getSolmanChangeRequestDetails,
   listSolmanChangeRequests,
   listSolmanTransports,
+  getPurchaseOrderDetailsAction,
 } from "../controllers/chat.actions.controller.js";
 import { sendChatReportEmail } from "../controllers/chat.email.controller.js";
 
@@ -58,6 +59,11 @@ chatRoutes.post(
 chatRoutes.post(
   "/actions/solman/list-transports",
   listSolmanTransports
+);
+
+chatRoutes.post(
+  "/actions/s4hana/get-purchase-order-details",
+  getPurchaseOrderDetailsAction
 );
 
 chatRoutes.post("/email", sendChatReportEmail);
