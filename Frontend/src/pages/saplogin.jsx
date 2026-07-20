@@ -247,7 +247,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
   }
 
   return (
-    <div className="min-h-screen w-full bg-[linear-gradient(180deg,#f7faf7_0%,#ffffff_100%)] flex items-center justify-center px-4 py-4 sm:px-6 sm:py-6 overflow-x-hidden">
+    <div className="min-h-screen w-full bg-gradient-to-br from-slate-50 via-white to-slate-100 flex items-center justify-center px-2 py-3 sm:px-3 sm:py-4 overflow-x-hidden">
       <style>{`
         @keyframes fadeInScale {
           from { opacity: 0; transform: scale(0.95); }
@@ -276,34 +276,38 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
         body { overflow-x: hidden; }
       `}</style>
 
-      <div className="w-full max-w-[920px]">
+      <div className="w-full max-w-3xl">
         <div
-          className={`bg-white rounded-[22px] shadow-[0_12px_40px_rgba(15,23,42,0.10)] border border-gray-100 overflow-hidden transition-all duration-500 flex flex-col ${
+          className={`bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden transition-all duration-500 max-h-[95vh] flex flex-col ${
             fadeIn ? "animate-fadeInScale" : ""
           }`}
         >
-          <div className="px-4 sm:px-6 pt-4 pb-4 sm:pt-5 sm:pb-5 bg-[linear-gradient(180deg,#eaf8ef_0%,#f6fbf7_100%)] border-b border-gray-100 flex-shrink-0 text-center">
-            <div className="flex justify-center">
+          <div className="px-3 sm:px-6 pt-2 pb-2 sm:pb-3 bg-gradient-to-r from-green-50 to-emerald-50 border-b border-gray-100 flex-shrink-0">
+            <div className="flex items-center justify-center">
               <img
                 src={logoFull}
                 alt="ImpleVista"
-                className="h-8 sm:h-9 w-auto object-contain"
+                className="h-7 sm:h-9 w-auto object-contain transition-transform duration-300 hover:scale-110"
               />
             </div>
 
-            <h1 className="mt-3 text-[20px] sm:text-[24px] font-semibold text-zinc-900 tracking-tight">
+            <h1 className="mt-1.5 sm:mt-2 text-center text-sm sm:text-lg font-bold text-zinc-900">
               {selectedSystem ? `Configure ${selectedSystem.name}` : "Configure SAP System"}
             </h1>
-            <p className="mt-1 text-sm sm:text-base text-zinc-500 font-medium">
+            <p className="mt-0.5 text-center text-[10px] sm:text-xs text-zinc-500 font-medium">
               Add or connect to any SAP system
             </p>
           </div>
 
-          <div className="px-4 sm:px-6 py-4 sm:py-5 flex-1">
+          <div className="px-3 sm:px-6 py-2 sm:py-3 overflow-y-auto flex-1">
             {error && (
-              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 sm:px-4 py-2.5 text-sm text-red-700 font-medium shadow-sm animate-slideUp flex-shrink-0">
+              <div className="mb-2 sm:mb-3 rounded-lg border border-red-200 bg-red-50 px-2 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs text-red-700 font-medium shadow-sm animate-slideUp flex-shrink-0">
                 <div className="flex items-start gap-2">
-                  <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                  <svg
+                    className="w-3 sm:w-4 h-3 sm:h-4 flex-shrink-0 mt-0.5"
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                  >
                     <path
                       fillRule="evenodd"
                       d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
@@ -314,7 +318,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                 </div>
 
                 {invalidAttempts > 0 && invalidAttempts < 3 && (
-                  <div className="mt-1 text-sm text-red-600">
+                  <div className="mt-1 text-[10px] sm:text-xs text-red-600">
                     Attempts remaining: {3 - invalidAttempts}
                   </div>
                 )}
@@ -322,14 +326,14 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
             )}
 
             <form onSubmit={addOrUpdateSystem}>
-              <div className="space-y-3.5 sm:space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5 sm:space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
                   <div className="animate-slideUp input-delay-1 flex flex-col">
-                      <label className="text-[14px] font-semibold text-zinc-700 mb-1.5">
+                    <label className="text-[10px] sm:text-xs font-semibold text-zinc-700 mb-1">
                       System Name *
                     </label>
                     <input
-                      className="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-zinc-900 outline-none transition-all duration-300 placeholder:text-zinc-400 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
+                      className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
                       placeholder="e.g., HIMALAYA SOLMAN PRD / S4 DEV / ECC QA"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
@@ -337,11 +341,11 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                   </div>
 
                   <div className="animate-slideUp input-delay-2 flex flex-col">
-                    <label className="text-[14px] font-semibold text-zinc-700 mb-1.5">
+                    <label className="text-[10px] sm:text-xs font-semibold text-zinc-700 mb-1">
                       System ID (SID) *
                     </label>
                     <input
-                      className="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-zinc-900 outline-none transition-all duration-300 placeholder:text-zinc-400 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
+                      className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
                       placeholder="e.g., HSM"
                       value={systemId}
                       onChange={(e) => setSystemId(e.target.value.toUpperCase())}
@@ -349,13 +353,13 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
                   <div className="animate-slideUp input-delay-3 flex flex-col">
-                    <label className="text-[14px] font-semibold text-zinc-700 mb-1.5">
+                    <label className="text-[10px] sm:text-xs font-semibold text-zinc-700 mb-1">
                       Protocol *
                     </label>
                     <select
-                      className="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
+                      className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
                       value={protocol}
                       onChange={(e) => setProtocol(e.target.value)}
                     >
@@ -365,11 +369,11 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                   </div>
 
                   <div className="animate-slideUp input-delay-4 flex flex-col">
-                    <label className="text-[14px] font-semibold text-zinc-700 mb-1.5">
+                    <label className="text-[10px] sm:text-xs font-semibold text-zinc-700 mb-1">
                       Host *
                     </label>
                     <input
-                      className="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-zinc-900 outline-none transition-all duration-300 placeholder:text-zinc-400 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
+                      className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
                       placeholder="e.g., 192.168.5.139 or sap.company.com"
                       value={host}
                       onChange={(e) => setHost(e.target.value)}
@@ -377,13 +381,13 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
                   <div className="animate-slideUp input-delay-5 flex flex-col">
-                    <label className="text-[14px] font-semibold text-zinc-700 mb-1.5">
+                    <label className="text-[10px] sm:text-xs font-semibold text-zinc-700 mb-1">
                       Port *
                     </label>
                     <input
-                      className="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-zinc-900 outline-none transition-all duration-300 placeholder:text-zinc-400 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
+                      className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
                       placeholder="e.g., 5243 or 44300"
                       value={port}
                       onChange={(e) => setPort(e.target.value)}
@@ -391,11 +395,11 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                   </div>
 
                   <div className="animate-slideUp input-delay-6 flex flex-col">
-                    <label className="text-[14px] font-semibold text-zinc-700 mb-1.5">
+                    <label className="text-[10px] sm:text-xs font-semibold text-zinc-700 mb-1">
                       SAProuter (optional)
                     </label>
                     <input
-                      className="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-zinc-900 outline-none transition-all duration-300 placeholder:text-zinc-400 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
+                      className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
                       placeholder="e.g., /H/sap.company.com"
                       value={sapRouter}
                       onChange={(e) => setSapRouter(e.target.value)}
@@ -403,14 +407,14 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
                   <div className="animate-slideUp input-delay-3 flex flex-col">
-                    <label className="text-[14px] font-semibold text-zinc-700 mb-1.5">
+                    <label className="text-[10px] sm:text-xs font-semibold text-zinc-700 mb-1">
                       SAP Username *
                     </label>
                     <input
-                      className="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-zinc-900 outline-none transition-all duration-300 placeholder:text-zinc-400 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
-                      placeholder="IMVT0001"
+                      className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
+                      placeholder="SAP User"
                       value={sapUser}
                       onChange={(e) => setSapUser(e.target.value)}
                       autoComplete="username"
@@ -418,14 +422,14 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                   </div>
 
                   <div className="animate-slideUp input-delay-4 flex flex-col">
-                    <label className="text-[14px] font-semibold text-zinc-700 mb-1.5">
+                    <label className="text-[10px] sm:text-xs font-semibold text-zinc-700 mb-1">
                       Password *
                     </label>
 
                     <div className="relative">
                       <input
                         type={showPassword ? "text" : "password"}
-                        className="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 pr-10 text-sm text-zinc-900 outline-none transition-all duration-300 placeholder:text-zinc-400 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
+                        className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 pr-10 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
                         placeholder="••••••••"
                         value={sapPassword}
                         onChange={(e) => setSapPassword(e.target.value)}
@@ -437,7 +441,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                         onClick={() => setShowPassword((v) => !v)}
                         aria-label={showPassword ? "Hide password" : "Show password"}
                         title={showPassword ? "Hide password" : "Show password"}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-zinc-600 hover:text-zinc-900 hover:bg-gray-50"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-zinc-600 hover:text-zinc-900 hover:bg-gray-50"
                       >
                         {showPassword ? (
                           <svg
@@ -472,12 +476,12 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                 </div>
               </div>
 
-              <div className="mt-5 grid grid-cols-2 gap-3 sm:gap-4">
+              <div className="mt-3 sm:mt-4 grid grid-cols-2 gap-2 sm:gap-3">
                 <button
                   type="button"
                   onClick={onBack}
                   disabled={isLoading}
-                  className={`w-full rounded-lg border border-gray-200 bg-white px-3 py-3 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-gray-50 transition-all duration-300 ${
+                  className={`w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-zinc-700 shadow-sm hover:bg-gray-50 transition-all duration-300 ${
                     isLoading ? "opacity-75 cursor-not-allowed" : ""
                   }`}
                 >
@@ -487,7 +491,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className={`w-full rounded-lg bg-green-600 px-3 py-3 text-sm font-semibold text-white shadow-md hover:shadow-lg hover:bg-green-700 transition-all duration-300 transform hover:scale-[1.01] active:scale-[0.99] ${
+                  className={`w-full rounded-lg bg-green-600 px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-white shadow-md hover:shadow-lg hover:bg-green-700 transition-all duration-300 transform hover:scale-[1.02] active:scale-[0.98] ${
                     isLoading ? "opacity-75 cursor-not-allowed" : ""
                   }`}
                 >
@@ -517,7 +521,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
           </div>
         </div>
 
-        <div className="mt-3 text-center text-xs text-zinc-500">
+        <div className="mt-2 sm:mt-3 text-center text-[10px] sm:text-xs text-zinc-500">
           <p>© 2026 ImpleVista. All rights reserved.</p>
         </div>
       </div>
