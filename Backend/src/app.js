@@ -14,6 +14,9 @@ import { handleChatStream } from "./controllers/chat.stream.controller.js";
 
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requireAuth } from "./middleware/requireAuth.js";
+import sessionRoutes from "./auth/sessionRoutes.js";
+import oauthRoutes from "./auth/oauthRoutes.js";
+import { getSession } from "./auth/sessionStore.js";
 
 export const app = express();
 
@@ -84,6 +87,9 @@ if (process.env.NODE_ENV !== "production") {
 
     return res.json({ ok: true, accessToken });
   });
+  // Mount dev session helper routes (create/revoke sessions)
+  app.use(sessionRoutes);
+  app.use(oauthRoutes);
 
   app.post("/auth/refresh", (req, res) => {
     const secret = process.env.JWT_SECRET;
@@ -113,18 +119,51 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
+// sessionOptional middleware: if session cookie exists and valid, attach req.user and skip token check
+async function sessionOptional(req, res, next) {
+  try {
+    const cookieName = process.env.SESSION_COOKIE_NAME || 'session_id';
+    const sessionId = req.cookies?.[cookieName];
+    if (!sessionId) return next();
+
+    const sess = await getSession(sessionId);
+    if (!sess) return next();
+
+    if (sess.expiresAt && Number(sess.expiresAt) > Date.now()) {
+      req.user = { id: String(sess.userId || sess.userId), claims: null, accessToken: sess.accessToken };
+    }
+
+    return next();
+  } catch (err) {
+    console.error('sessionOptional error', err?.message || err);
+    return next();
+  }
+}
+
+// Auth info endpoint: prefer session cookie, otherwise validate bearer token
+app.get('/auth/me', sessionOptional, requireAuth, (req, res) => {
+  return res.json({ ok: true, user: req.user });
+});
+
 // --------------------
 // ROUTES
 // --------------------
+<<<<<<< Updated upstream
 app.use("/api/solman", requireAuth, solmanRoutes);
 app.use("/api/solman", solmanReleaseTransportRoutes);
 app.use("/api/s4d", requireAuth, s4dPoRoutes);
 app.use("/sap", requireAuth, sapRoutes);
+=======
+import { sessionAuth } from './auth/sessionAuth.js';
+>>>>>>> Stashed changes
 
-app.post("/chat/stream", requireAuth, handleChatStream);
-app.post("/api/query", requireAuth, procurementQueryController);
-app.use("/chat", requireAuth, chatRoutes);
-app.use("/po", requireAuth, poExtractRoutes);
+app.use("/api/solman", sessionAuth, requireAuth, solmanRoutes);
+app.use("/sap", sessionAuth, requireAuth, sapRoutes);
+
+app.post("/chat/stream", sessionAuth, requireAuth, handleChatStream);
+app.post("/api/query", sessionAuth, requireAuth, procurementQueryController);
+app.use("/chat", sessionAuth, requireAuth, chatRoutes);
+app.use("/po", sessionAuth, requireAuth, poExtractRoutes);
 
 // --------------------
 // 404 fallback
