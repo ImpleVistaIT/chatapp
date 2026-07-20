@@ -1,0 +1,100 @@
+{
+  "info": {
+    "name": "CustomerAI Entra Test",
+    "_postman_id": "customerai-entratest",
+    "description": "Token request (client credentials) + call to /auth/me",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Get Access Token (client_credentials)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "client_id",
+              "value": "{{client_id}}",
+              "type": "text"
+            },
+            {
+              "key": "client_secret",
+              "value": "{{client_secret}}",
+              "type": "text"
+            },
+            {
+              "key": "scope",
+              "value": "{{scope}}",
+              "type": "text"
+            },
+            {
+              "key": "grant_type",
+              "value": "client_credentials",
+              "type": "text"
+            }
+          ]
+        },
+        "url": {
+          "raw": "https://login.microsoftonline.com/{{tenant_id}}/oauth2/v2.0/token",
+          "host": [
+            "https://login.microsoftonline.com/{{tenant_id}}/oauth2/v2.0/token"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Call /auth/me (protected)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/auth/me",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["auth", "me"]
+        }
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "tenant_id",
+      "value": "89d7b97b-d30c-49d6-a209-11c88a5a2b7b"
+    },
+    {
+      "key": "client_id",
+      "value": "4f6f4d27-e9a1-4360-a803-ce3446c4501c"
+    },
+    {
+      "key": "client_secret",
+      "value": "<AZURE_CLIENT_SECRET>"
+    },
+    {
+      "key": "backend_client_id",
+      "value": "4f6f4d27-e9a1-4360-a803-ce3446c4501c"
+    },
+    {
+      "key": "scope",
+      "value": "api://4f6f4d27-e9a1-4360-a803-ce3446c4501c/.default"
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    }
+  ]
+}
