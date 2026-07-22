@@ -4,6 +4,7 @@ import { getOwner, normalizeSapUser, normalizeSystemId } from "../controllers/_c
 import { SapSystem } from "../models/SapSystem.model.js";
 import { getSapAuthOrThrow } from "../controllers/_chat/sapAuth.js";
 import { releaseTransportRequest } from "../services/systems/solman/transportRelease.service.js";
+import { persistAssistantAndTouchSession } from "../controllers/stream/solman/solman.shared.js";
 
 const router = Router();
 
@@ -55,6 +56,48 @@ router.post("/release-transport", requireAuth, async (req, res) => {
         IvQuality: quality,
       },
     });
+
+    const sessionId = cleanString(req.body?.sessionId);
+    if (/^[a-f0-9]{24}$/i.test(sessionId)) {
+      const reply = result.ok
+        ? [
+            "✅ Transport released successfully.",
+            "",
+            `Transport Number : ${transportNumber}`,
+            result.warning ? "Status : Warning" : null,
+            result.message ? `SAP Message : ${result.message}` : null,
+          ].filter(Boolean).join("\n")
+        : `Transport release failed.\nReason: ${result.message || "Transport release failed."}`;
+
+      await persistAssistantAndTouchSession({
+        owner,
+        sessionId,
+        text: reply,
+        summary: reply,
+        extracted: {
+          system: "solman",
+          intent: "release_transport_request",
+          transportNumber,
+        },
+        data: {
+          viewType: result.ok ? "solman_release_transport_success" : "solman_release_transport_error",
+          transportNumber,
+          quality,
+          status: result.result?.status || "",
+          warning: Boolean(result.warning),
+          message: result.message || "",
+          messages: Array.isArray(result.result?.messages) ? result.result.messages : [],
+          raw: result.result?.raw || null,
+        },
+        responseMeta: {
+          ok: Boolean(result.ok),
+          kind: "action",
+          executor: "solman.transport.releaseTransport",
+          systemId,
+          sapUser,
+        },
+      });
+    }
 
     if (!result.ok) {
       return res.status(400).json({

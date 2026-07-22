@@ -42,14 +42,27 @@ function buildMissingFieldsMessage(missingFields = []) {
 }
 
 function buildSuccessReply(result = {}) {
-  const lines = ["Transport Request created successfully."];
+  const messages = Array.isArray(result.messages) ? result.messages.map((message) => cleanString(message)).filter(Boolean) : [];
+  const status = cleanString(result.status).toUpperCase();
+  const headline = cleanString(result.outputMessage) || cleanString(result.message) || (status === "W" ? "Transport Request created with warning." : "Transport Request created successfully.");
+  const lines = [headline];
 
-  if (cleanString(result.transportRequest)) lines.push(`TR Number: ${cleanString(result.transportRequest)}`);
-  if (cleanString(result.workbenchTransport)) lines.push(`Workbench TR: ${cleanString(result.workbenchTransport)}`);
-  if (cleanString(result.customizingTransport)) lines.push(`Customizing TR: ${cleanString(result.customizingTransport)}`);
-  if (cleanString(result.message)) lines.push(`Message: ${cleanString(result.message)}`);
+  if (cleanString(result.changeRequestId)) lines.push(`Change Request Number : ${cleanString(result.changeRequestId)}`);
+  if (cleanString(result.trOwner)) lines.push(`Transport Owner       : ${cleanString(result.trOwner)}`);
+  if (cleanString(result.client)) lines.push(`Client                : ${cleanString(result.client)}`);
+  if (cleanString(result.workbenchTransport)) lines.push(`Workbench Request     : ${cleanString(result.workbenchTransport)}`);
+  if (cleanString(result.customizingTransport)) lines.push(`Customizing Request   : ${cleanString(result.customizingTransport)}`);
+  if (status === "W") lines.push("Status                : Warning");
+
+  if (messages.length > 0) {
+    lines.push("", "Messages", ...messages.map((message) => `• ${message}`));
+  }
 
   return lines.join("\n");
+}
+
+function isSapErrorStatus(status = "") {
+  return cleanString(status).toUpperCase().startsWith("E");
 }
 
 function buildErrorReply(errorMessage = "") {
@@ -148,6 +161,52 @@ export async function handleCreateTransportRequest(context) {
     })
   );
 
+  if (isSapErrorStatus(result?.result?.status)) {
+    const errorMessage = cleanString(result?.result?.outputMessage || result?.result?.message || result?.message || "Error occurred while creating Transport Request.");
+    const reply = buildErrorReply(errorMessage);
+
+    await persistAssistantAndTouchSession({
+      owner,
+      sessionId: session._id,
+      text: reply,
+      summary: reply,
+      extracted: {
+        system: "solman",
+        intent: INTENT,
+        payload: collected,
+      },
+      data: {
+        ...result.result,
+        trOwner: collected.TrOwner,
+        client: collected.Client,
+        requestBody: result.requestBody,
+        viewType: "solman_create_transport_request_error",
+      },
+      responseMeta: {
+        ok: false,
+        kind: "stream",
+        executor: "solman.transport.createTransportRequest",
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
+        status: "execution_failed",
+      },
+    });
+
+    sse.send("error", {
+      ok: false,
+      status: "execution_failed",
+      message: reply,
+      data: {
+        ...result.result,
+        trOwner: collected.TrOwner,
+        client: collected.Client,
+        requestBody: result.requestBody,
+        viewType: "solman_create_transport_request_error",
+      },
+    });
+    return sse.end();
+  }
+
   if (!result?.ok) {
     const message = buildErrorReply(result?.message || "Failed to create Transport Request.");
 
@@ -187,22 +246,26 @@ export async function handleCreateTransportRequest(context) {
   }
 
   const reply = buildSuccessReply(result.result);
+  const persistedData = {
+    ...result.result,
+    trOwner: collected.TrOwner,
+    client: collected.Client,
+    messages: Array.isArray(result.result.messages) ? result.result.messages : [],
+    requestBody: result.requestBody,
+    viewType: "solman_create_transport_request_success",
+  };
 
   await persistAssistantAndTouchSession({
     owner,
     sessionId: session._id,
     text: reply,
-    summary: result?.message || "Transport Request created successfully.",
+    summary: reply,
     extracted: {
       system: "solman",
       intent: INTENT,
       payload: collected,
     },
-    data: {
-      ...result.result,
-      requestBody: result.requestBody,
-      viewType: "solman_create_transport_request_success",
-    },
+    data: persistedData,
     responseMeta: {
       ok: true,
       kind: "stream",
@@ -218,12 +281,8 @@ export async function handleCreateTransportRequest(context) {
     systemId: effectiveSystemId,
     sapUser: effectiveSapUser,
     reply,
-    summary: result?.message || "Transport Request created successfully.",
-    data: {
-      ...result.result,
-      requestBody: result.requestBody,
-      viewType: "solman_create_transport_request_success",
-    },
+    summary: reply,
+    data: persistedData,
   });
 
   sse.send("done", { ok: true });

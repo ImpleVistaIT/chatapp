@@ -219,11 +219,40 @@ export async function listSolmanTransports({
   return data;
 }
 
+export async function importTransportToProduction({
+  systemId,
+  sapUser,
+  transportNumber,
+  sessionId = "",
+}) {
+  const res = await authFetch(`${API_BASE}/api/solman/import-transport-to-production`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      systemId,
+      sapUser,
+      transportNumber,
+      sessionId,
+    }),
+  });
+
+  const data = await parseJsonSafe(res);
+
+  if (!res.ok || data?.ok === false || data?.success === false) {
+    throw new Error(extractApiError(data, "Failed to import transport to production."));
+  }
+
+  return data;
+}
+
 export async function releaseSolmanTransport({
   systemId,
   sapUser,
   transportNumber,
   quality = false,
+  sessionId = "",
 }) {
   const res = await authFetch(`${API_BASE}/api/solman/release-transport`, {
     method: "POST",
@@ -235,6 +264,7 @@ export async function releaseSolmanTransport({
       sapUser,
       transportNumber,
       quality: Boolean(quality),
+      sessionId,
     }),
   });
 

@@ -434,9 +434,14 @@ export const submitSolmanCreateTransportRequest = createSapActionHandler({
   },
 
   mapSuccessResult: (result) => ({
+    changeRequestId: result?.result?.changeRequestId || "",
     transportRequest: result?.result?.transportRequest || "",
     workbenchTransport: result?.result?.workbenchTransport || "",
     customizingTransport: result?.result?.customizingTransport || "",
+    outputMessage: result?.result?.outputMessage || "",
+    messages: Array.isArray(result?.result?.messages) ? result.result.messages : [],
+    trOwner: result?.result?.trOwner || "",
+    client: result?.result?.client || "",
     message: result?.message || "Transport Request created successfully.",
     raw: result?.result?.raw || null,
   }),

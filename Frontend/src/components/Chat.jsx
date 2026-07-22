@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSpeechToText } from "../hooks/useSpeechToText";
 import { sendChatMessageForExport } from "../api/chatApi";
 import { sendChatMessageStream } from "../api/chatApiStream";
-import { getSolmanChangeRequestDetails, listSolmanChangeRequestsForExport } from "../api/solmanApi";
+import { getSolmanChangeRequestDetails, importTransportToProduction, listSolmanChangeRequestsForExport } from "../api/solmanApi";
 import { API_BASE } from "../api/client";
 import {
   buildExportSummary,
@@ -2671,6 +2671,7 @@ export default function Chat({ onToast = null } = {}) {
         pendingAction={pendingAction}
         onSuccess={(data) => {
           const result = data?.result || data || {};
+          const changeRequestId = String(result?.changeRequestId || result?.CrNumber || result?.CRNumber || result?.changeRequest || "").trim();
           const transportRequest = String(result?.transportRequest || result?.TrNumber || result?.TRNumber || "").trim();
           const workbenchTransport = String(result?.workbenchTransport || result?.WorkbenchTR || "").trim();
           const customizingTransport = String(result?.customizingTransport || result?.CustomizingTR || "").trim();
@@ -2681,6 +2682,7 @@ export default function Chat({ onToast = null } = {}) {
 
           const messageLines = [
             sapMessage,
+            changeRequestId ? `CR Number: ${changeRequestId}` : null,
             transportRequest ? `TR Number: ${transportRequest}` : null,
             workbenchTransport ? `Workbench TR: ${workbenchTransport}` : null,
             customizingTransport ? `Customizing TR: ${customizingTransport}` : null,
@@ -2742,16 +2744,26 @@ export default function Chat({ onToast = null } = {}) {
         sessionId={isMongoId(activeId) ? activeId : ""}
         initialValues={pendingAction?.collected || {}}
         pendingAction={pendingAction}
-        onSubmit={async ({ prompt }) => {
-          setShowSolmanImportTransportToProductionForm(false);
-          setPendingAction(null);
-          await onSend({
-            overrideText: prompt,
-            fromEdit: false,
-            forcedSystemId: resolvedConnectedSystem?.systemId || "",
+        onSubmit={async ({ transportNumber }) => {
+          const result = await importTransportToProduction({
+            systemId: resolvedConnectedSystem?.systemId || "",
             sapUser: resolvedConnectedSystem?.sapUser || "",
+            transportNumber,
             sessionId: isMongoId(activeId) ? activeId : "",
           });
+
+          updateActiveMessages((messages) => [
+            ...messages,
+            {
+              role: "assistant",
+              text: result?.message || `Transport ${transportNumber} imported to production.`,
+              summary: result?.message || "Transport imported to production.",
+              data: result,
+            },
+          ]);
+
+          setShowSolmanImportTransportToProductionForm(false);
+          setPendingAction(null);
         }}
         onCancel={() => {
           setShowSolmanImportTransportToProductionForm(false);
@@ -2802,13 +2814,41 @@ export default function Chat({ onToast = null } = {}) {
           setShowSolmanReleaseTransportForm(false);
           setPendingAction(null);
 
+          const result = data?.data || data || {};
+          const transportNumber = String(result?.transportNumber || data?.transportNumber || "").trim();
+          const status = String(result?.status || data?.status || "").trim();
+          const warning = Boolean(result?.warning || data?.warning);
+          const message = String(result?.message || data?.message || "Transport released successfully.").trim();
+          const messages = Array.isArray(result?.messages) ? result.messages : Array.isArray(data?.messages) ? data.messages : [];
+          const formattedMessages = messages
+            .map((item) => String(item?.MSG_DESC || item?.MsgDesc || item?.message || item?.MESSAGE || item || "").trim())
+            .filter(Boolean);
+
+          const detailLines = [
+            warning ? "⚠ Transport released with warning." : "✅ Transport released successfully.",
+            transportNumber ? `Transport Number : ${transportNumber}` : null,
+            status ? `Status : ${status}` : null,
+            message ? `SAP Message : ${message}` : null,
+            formattedMessages.length > 0 ? "" : null,
+            formattedMessages.length > 0 ? "Messages" : null,
+            ...formattedMessages.map((line) => `• ${line}`),
+          ].filter((line) => line !== null);
+
           updateActiveMessages((m) => [
             ...m,
             {
               role: "assistant",
-              text: data?.message || `Transport ${data?.transportNumber || ""} released successfully.`,
-              summary: data?.message || "Transport released successfully.",
-              data,
+              text: detailLines.join("\n"),
+              summary: message || "Transport released successfully.",
+              data: {
+                viewType: warning ? "solman_release_transport_warning" : "solman_release_transport_success",
+                transportNumber,
+                status,
+                warning,
+                message,
+                messages: formattedMessages,
+                raw: result?.raw || data?.raw || null,
+              },
             },
           ]);
         }}

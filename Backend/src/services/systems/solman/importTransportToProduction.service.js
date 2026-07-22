@@ -4,6 +4,27 @@ function cleanString(value) {
   return String(value ?? "").trim();
 }
 
+function parseMessages(value) {
+  if (!value) return [];
+
+  const input = Array.isArray(value) ? value : typeof value === "string" ? value.trim() : value;
+  let parsed = input;
+
+  if (typeof input === "string") {
+    try {
+      parsed = JSON.parse(input);
+    } catch {
+      parsed = input.split(/\r?\n+/).map((line) => ({ MSG_DESC: cleanString(line) })).filter((item) => item.MSG_DESC);
+    }
+  }
+
+  const rows = Array.isArray(parsed) ? parsed : parsed?.results || parsed?.d?.results || [];
+
+  return rows
+    .map((item) => cleanString(item?.MSG_DESC || item?.MsgDesc || item?.MESSAGE || item?.message || item?.TEXT || item?.Text || item?.DESCRIPTION || item?.Description))
+    .filter(Boolean);
+}
+
 export function isImportTransportToProductionIntent(query = "") {
   const q = cleanString(query).toLowerCase();
   if (!q) return false;
@@ -51,11 +72,32 @@ export async function importTransportToProduction({ system, sapAuth, payload }) 
     data: body,
   });
 
+  const data = result?.d || result?.data?.d || result?.body?.d || result || {};
+  const objectId = cleanString(data?.ObjectId || data?.OBJECT_ID || data?.objectId || body.TransportNumber);
+  const success = cleanString(data?.Success || data?.SUCCESS || "").toUpperCase();
+  const outputMessage = cleanString(data?.TrOutputMsg || data?.TrOutputMSG || data?.Message || data?.MESSAGE || "");
+  const messages = parseMessages(data?.Messages || data?.MESSAGES);
+
+  const detailLines = [];
+  if (outputMessage) detailLines.push(outputMessage);
+  if (objectId) detailLines.push(`Object Id : ${objectId}`);
+  if (success) detailLines.push(`Success   : ${success}`);
+  if (messages.length > 0) {
+    detailLines.push("", "Messages", ...messages.map((message) => `• ${message}`));
+  }
+
   return {
     ok: Boolean(result?.ok),
-    message: result?.message || (result?.ok ? "Transport imported to production." : "Failed to import transport to production."),
-    endpoint: SAP_ENDPOINT,
-    requestBody: body,
-    result,
+    message: detailLines.length > 0 ? detailLines.join("\n") : (result?.message || (result?.ok ? "Transport imported to production." : "Failed to import transport to production.")),
+    status: success,
+    objectId,
+    outputMessage,
+    messages,
+    raw: {
+      ObjectId: objectId,
+      Success: success,
+      TrOutputMsg: outputMessage,
+      Messages: messages,
+    },
   };
 }

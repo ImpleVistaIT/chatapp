@@ -51,6 +51,7 @@ export default function SolmanImportTransportToProductionForm({
         systemId: clean(systemId),
         sapUser: clean(sapUser),
         sessionId: clean(sessionId),
+        pendingContext: { transportNumber: trimmed },
         prompt: `import transport to production ${trimmed}`,
       });
     } catch (err) {

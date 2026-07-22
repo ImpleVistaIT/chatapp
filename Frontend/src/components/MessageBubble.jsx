@@ -1296,7 +1296,9 @@ export default function MessageBubble({
 
   const renderPoNumberCell = useCallback(
     ({ value, column, row }) => {
-      if (String(column || "").toLowerCase() !== "pono") return null;
+      const columnKey = String(column || "").trim().toLowerCase();
+      const isPoColumn = columnKey === "pono" || columnKey === "po number" || columnKey === "po_no";
+      if (!isPoColumn) return null;
       const resolvedSystemId = String(systemId || data?.systemId || data?.result?.systemId || "").trim().toUpperCase();
       if (!resolvedSystemId.startsWith("S4D")) return null;
 

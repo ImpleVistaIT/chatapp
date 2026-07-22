@@ -6,10 +6,15 @@ const INTENT = "import_transport_to_production";
 const FORM_ID = "solman_import_transport_to_production";
 
 function buildReply(result = {}) {
-  const lines = ["Production Import Transport request submitted."];
+  const lines = [cleanString(result.message) || "Production Import Transport request submitted."];
 
-  if (cleanString(result.transportNumber)) lines.push(`Transport: ${cleanString(result.transportNumber)}`);
-  if (cleanString(result.message)) lines.push(`Message: ${cleanString(result.message)}`);
+  if (cleanString(result.objectId)) lines.push(`Object Id : ${cleanString(result.objectId)}`);
+  if (cleanString(result.status)) lines.push(`Success   : ${cleanString(result.status)}`);
+
+  const messages = Array.isArray(result.messages) ? result.messages.map((message) => cleanString(message)).filter(Boolean) : [];
+  if (messages.length > 0) {
+    lines.push("", "Messages", ...messages.map((message) => `• ${message}`));
+  }
 
   return lines.join("\n");
 }
@@ -98,9 +103,7 @@ export async function handleImportTransportToProduction(context) {
         payload: { transportNumber },
       },
       data: {
-        endpoint: result?.endpoint || null,
-        requestBody: result?.requestBody || null,
-        raw: result?.result?.raw || null,
+        raw: result?.raw || null,
       },
       responseMeta: {
         ok: false,
@@ -124,23 +127,25 @@ export async function handleImportTransportToProduction(context) {
   }
 
   const reply = buildReply({ transportNumber, message: result?.message });
+  const persistedData = {
+    ObjectId: result?.objectId || transportNumber,
+    Success: result?.status || "",
+    TrOutputMsg: result?.outputMessage || "",
+    Messages: Array.isArray(result?.messages) ? result.messages : [],
+    viewType: "solman_import_transport_to_production_success",
+  };
 
   await persistAssistantAndTouchSession({
     owner,
     sessionId: session._id,
     text: reply,
-    summary: result?.message || "Production import transport completed.",
+    summary: reply,
     extracted: {
       system: "solman",
       intent: INTENT,
       payload: { transportNumber },
     },
-    data: {
-      endpoint: result?.endpoint || null,
-      requestBody: result?.requestBody || null,
-      result: result?.result || null,
-      viewType: "solman_import_transport_to_production_success",
-    },
+    data: persistedData,
     responseMeta: {
       ok: true,
       kind: "stream",
@@ -156,13 +161,8 @@ export async function handleImportTransportToProduction(context) {
     systemId: effectiveSystemId,
     sapUser: effectiveSapUser,
     reply,
-    summary: result?.message || "Production import transport completed.",
-    data: {
-      endpoint: result?.endpoint || null,
-      requestBody: result?.requestBody || null,
-      result: result?.result || null,
-      viewType: "solman_import_transport_to_production_success",
-    },
+    summary: reply,
+    data: persistedData,
   });
 
   sse.send("done", { ok: true });
