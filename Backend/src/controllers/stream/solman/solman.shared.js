@@ -795,23 +795,37 @@ export function inferCrStatusFilterFromQuery(query = "") {
     };
   }
 
+  const exactQuotedMatch = q.match(/"([^"]{3,})"|'([^']{3,})'/);
+  const quotedStatus = cleanString(exactQuotedMatch?.[1] || exactQuotedMatch?.[2] || "");
+
   const known = [
+    "ready for test",
+    "approved for production",
+    "imported in production",
+    "tested ok",
     "closed",
+    "rejected",
     "approved",
     "withdrawn",
+    "in development",
     "in progress",
     "under implementation",
     "success",
     "completed",
   ];
 
-  for (const value of known) {
-    if (q.includes(value)) {
-      return {
-        status: normalizeSolmanStatusValue(value),
-        excludeStatuses: [],
-        statusMode: "",
-      };
+  const statusCandidates = [quotedStatus, q].filter(Boolean);
+
+  for (const candidate of statusCandidates) {
+    for (const value of known) {
+      const pattern = new RegExp(`\\b${value.replace(/\s+/g, "\\s+")}\\b`, "i");
+      if (pattern.test(candidate)) {
+        return {
+          status: normalizeSolmanStatusValue(value),
+          excludeStatuses: [],
+          statusMode: "",
+        };
+      }
     }
   }
 

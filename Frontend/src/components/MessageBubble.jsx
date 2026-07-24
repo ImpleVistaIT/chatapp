@@ -1299,8 +1299,6 @@ export default function MessageBubble({
       const columnKey = String(column || "").trim().toLowerCase();
       const isPoColumn = columnKey === "pono" || columnKey === "po number" || columnKey === "po_no";
       if (!isPoColumn) return null;
-      const resolvedSystemId = String(systemId || data?.systemId || data?.result?.systemId || "").trim().toUpperCase();
-      if (!resolvedSystemId.startsWith("S4D")) return null;
 
       const po = String(value || row?.PoNo || row?.PONo || row?.PO_NO || row?.poNo || "").trim();
       if (!po || po === "-") return null;
@@ -1309,6 +1307,7 @@ export default function MessageBubble({
         <button
           type="button"
           onClick={() => handleOpenPoDrawer(row)}
+          title={`Open PO ${po}`}
           className="text-blue-600 underline decoration-blue-400 decoration-1 underline-offset-2 transition hover:text-blue-800"
         >
           {po}

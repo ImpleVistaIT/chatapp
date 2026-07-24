@@ -173,6 +173,19 @@ test("plain CR status prompts stay on the list flow", async () => {
   assert.equal(result.intent, "list_change_requests");
 });
 
+test("quoted Ready For Test CR list prompts infer the exact status filter", () => {
+  const filter = inferCrStatusFilterFromQuery('show "Ready For Test" status cr list');
+
+  assert.equal(filter.status, "READY FOR TEST");
+  assert.equal(filter.statusMode, "");
+  assert.deepEqual(filter.excludeStatuses, []);
+
+  const entities = pickCrListEntities({}, 'show "Ready For Test" status cr list');
+  assert.equal(entities.status, "READY FOR TEST");
+  assert.equal(entities.statusMode, "");
+  assert.deepEqual(entities.excludeStatuses, []);
+});
+
 test("create CR qualifiers are extracted from plain language", () => {
   const emergency = getCreateChangeRequestQualifiers("Create an emergency change request");
   assert.equal(emergency.ChangeType, "Emergency");

@@ -14,7 +14,6 @@ export default function App() {
   useEffect(() => {
     function handleAuthExpired() {
       clearAccessToken();
-      setShowSapLogin(true);
       setToast({
         type: "error",
         message: "Your session has expired. Please login again.",
