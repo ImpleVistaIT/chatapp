@@ -25,7 +25,7 @@ router.post("/import-transport-to-production", async (req, res) => {
     const owner = getOwner(req);
     const systemId = normalizeSystemId(req.body?.systemId);
     const sapUser = normalizeSapUser(req.body?.sapUser);
-    const transportNumber = String(req.body?.transportNumber || req.body?.TransportNumber || "").trim().toUpperCase();
+    const transportNumber = String(req.body?.transportNumber || req.body?.TransportNumber || req.body?.ObjectId || req.body?.objectId || "").trim().toUpperCase();
     const sessionId = String(req.body?.sessionId || "").trim();
 
     if (!systemId) return res.status(400).json({ ok: false, error: "systemId is required" });

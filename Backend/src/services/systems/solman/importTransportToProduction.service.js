@@ -1,3 +1,6 @@
+import { postToSap } from "../../sap/sapWrite.service.js";
+
+const SAP_BASE_URL = "https://192.168.1.219:50101";
 const SAP_ENDPOINT = "/sap/opu/odata/sap/ZTR_PROD_IMPORT_SRV/ImportTransportSet";
 
 function cleanString(value) {
@@ -38,16 +41,14 @@ export function isImportTransportToProductionIntent(query = "") {
 
 export function buildImportTransportToProductionPayload({ transportNumber, sapUser, systemId } = {}) {
   return {
-    TransportNumber: cleanString(transportNumber).toUpperCase(),
-    SapUser: cleanString(sapUser),
-    SystemId: cleanString(systemId),
+    ObjectId: cleanString(transportNumber).toUpperCase(),
   };
 }
 
 export async function importTransportToProduction({ system, sapAuth, payload }) {
   const body = buildImportTransportToProductionPayload(payload);
 
-  if (!body.TransportNumber) {
+  if (!body.ObjectId) {
     return {
       ok: false,
       message: "Transport number is required.",
@@ -56,24 +57,17 @@ export async function importTransportToProduction({ system, sapAuth, payload }) 
     };
   }
 
-  if (!system?.callSapApi) {
-    return {
-      ok: false,
-      message: "SAP client is not available for production import transport.",
-      endpoint: SAP_ENDPOINT,
-      requestBody: body,
-    };
-  }
+  const raw = await postToSap({
+    system: {
+      ...system,
+      baseUrl: SAP_BASE_URL,
+    },
+    relativePath: SAP_ENDPOINT,
+    body,
+  }, sapAuth);
 
-  const result = await system.callSapApi({
-    method: "POST",
-    path: SAP_ENDPOINT,
-    sapAuth,
-    data: body,
-  });
-
-  const data = result?.d || result?.data?.d || result?.body?.d || result || {};
-  const objectId = cleanString(data?.ObjectId || data?.OBJECT_ID || data?.objectId || body.TransportNumber);
+  const data = raw?.d || raw?.data?.d || raw?.body?.d || raw || {};
+  const objectId = cleanString(data?.ObjectId || data?.OBJECT_ID || data?.objectId || body.ObjectId);
   const success = cleanString(data?.Success || data?.SUCCESS || "").toUpperCase();
   const outputMessage = cleanString(data?.TrOutputMsg || data?.TrOutputMSG || data?.Message || data?.MESSAGE || "");
   const messages = parseMessages(data?.Messages || data?.MESSAGES);
@@ -87,8 +81,8 @@ export async function importTransportToProduction({ system, sapAuth, payload }) 
   }
 
   return {
-    ok: Boolean(result?.ok),
-    message: detailLines.length > 0 ? detailLines.join("\n") : (result?.message || (result?.ok ? "Transport imported to production." : "Failed to import transport to production.")),
+    ok: true,
+    message: detailLines.length > 0 ? detailLines.join("\n") : "Transport imported to production.",
     status: success,
     objectId,
     outputMessage,

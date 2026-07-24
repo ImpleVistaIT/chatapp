@@ -14,6 +14,8 @@ import { handleChatStream } from "./controllers/chat.stream.controller.js";
 
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requireAuth } from "./middleware/requireAuth.js";
+import { signAccessToken, signRefreshToken } from "./services/auth/jwt.service.js";
+import { validateRefreshCookie } from "./services/auth/auth.service.js";
 
 export const app = express();
 
@@ -34,6 +36,7 @@ app.use(
       "http://192.168.1.110:5173",
     ],
     credentials: true,
+    exposedHeaders: ["x-access-token", "x-auth-refreshed"],
   })
 );
 
@@ -59,20 +62,10 @@ app.get("/health", (req, res) => {
 // --------------------
 if (process.env.NODE_ENV !== "production") {
   app.post("/auth/dev-login", (req, res) => {
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      return res.status(500).json({ ok: false, error: "JWT_SECRET is not configured" });
-    }
-
     const username = String(req.body?.username || "dev").trim() || "dev";
 
-    const accessToken = jwt.sign({ id: username, username }, secret, {
-      expiresIn: "15m",
-    });
-
-    const refreshToken = jwt.sign({ id: username, type: "refresh" }, secret, {
-      expiresIn: "30d",
-    });
+    const accessToken = signAccessToken({ id: username, username });
+    const refreshToken = signRefreshToken({ id: username, username, type: "refresh" });
 
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
@@ -86,29 +79,13 @@ if (process.env.NODE_ENV !== "production") {
   });
 
   app.post("/auth/refresh", (req, res) => {
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      return res.status(500).json({ ok: false, error: "JWT_SECRET is not configured" });
-    }
-
-    const token = req.cookies?.refreshToken;
-    if (!token) {
-      return res.status(401).json({ ok: false, error: "Missing refresh token" });
-    }
-
     try {
-      const payload = jwt.verify(token, secret);
-      if (payload?.type !== "refresh" || !payload?.id) {
-        return res.status(401).json({ ok: false, error: "Invalid refresh token" });
-      }
-
-      const accessToken = jwt.sign({ id: payload.id, username: payload.id }, secret, {
-        expiresIn: "15m",
-      });
+      const payload = validateRefreshCookie(req.cookies?.refreshToken);
+      const accessToken = signAccessToken({ id: payload.id, username: payload.username || payload.id });
 
       return res.json({ ok: true, accessToken });
-    } catch {
-      return res.status(401).json({ ok: false, error: "Invalid refresh token" });
+    } catch (error) {
+      return res.status(error.status || 401).json({ ok: false, error: "Your session has expired. Please login again.", code: error.code || "TOKEN_EXPIRED" });
     }
   });
 }

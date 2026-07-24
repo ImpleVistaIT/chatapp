@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Chat from "./components/Chat";
 import SapLogin from "./pages/saplogin";
 import Toast from "./components/Toast";
+import { clearAccessToken } from "./api/client";
 
 export default function App() {
   // ✅ Toast state
@@ -9,6 +10,23 @@ export default function App() {
 
   // ✅ Screen control
   const [showSapLogin, setShowSapLogin] = useState(false);
+
+  useEffect(() => {
+    function handleAuthExpired() {
+      clearAccessToken();
+      setShowSapLogin(true);
+      setToast({
+        type: "error",
+        message: "Your session has expired. Please login again.",
+      });
+    }
+
+    window.addEventListener("auth:expired", handleAuthExpired);
+
+    return () => {
+      window.removeEventListener("auth:expired", handleAuthExpired);
+    };
+  }, []);
 
   return (
     <>

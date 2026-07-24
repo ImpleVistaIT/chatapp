@@ -1,59 +1,25 @@
-import jwt from "jsonwebtoken";
-import { fileURLToPath } from "url";
-import path from "path";
-
-const __filename = fileURLToPath(import.meta.url);
+import { extractBearerToken, issueAccessTokenFromClaims, validateRefreshCookie } from "../services/auth/auth.service.js";
+import { isTokenExpiredError, verifyAccessToken } from "../services/auth/jwt.service.js";
 
 export function requireAuth(req, res, next) {
-  // console.log("🔥 requireAuth LOADED FROM:", __filename);
+  const authToken = extractBearerToken(req.headers.authorization);
 
-  // console.log("==== AUTH DEBUG ====");
-  // console.log("authorization header:", req.headers.authorization);
-  // console.log("====================");
-
-  const auth = req.headers.authorization;
-
-  if (!auth) {
+  if (!authToken) {
     return res.status(401).json({
       ok: false,
-      error: "Missing Authorization header"
-    });
-  }
-
-  if (!auth.startsWith("Bearer ")) {
-    return res.status(401).json({
-      ok: false,
-      error: "Invalid Authorization format (must be Bearer token)"
-    });
-  }
-
-  const token = auth.split(" ")[1]?.trim();
-
-  if (!token) {
-    return res.status(401).json({
-      ok: false,
-      error: "Token missing after Bearer"
-    });
-  }
-
-  const secret = process.env.JWT_SECRET;
-
-  if (!secret) {
-    return res.status(500).json({
-      ok: false,
-      error: "JWT_SECRET is not configured"
+      error: "Authentication failed",
+      code: "AUTH_REQUIRED",
     });
   }
 
   try {
-    const claims = jwt.verify(token, secret);
-
-    // console.log("🔥 DECODED CLAIMS:", claims);
+    const claims = verifyAccessToken(authToken);
 
     if (!claims?.id) {
       return res.status(401).json({
         ok: false,
-        error: "Invalid token (missing id)"
+        error: "Authentication failed",
+        code: "AUTH_INVALID",
       });
     }
 
@@ -64,11 +30,40 @@ export function requireAuth(req, res, next) {
 
     return next();
   } catch (err) {
-    console.log("JWT ERROR:", err.message);
+    if (!isTokenExpiredError(err)) {
+      console.log("JWT ERROR:", err.message);
 
-    return res.status(401).json({
-      ok: false,
-      error: "Invalid token"
-    });
+      return res.status(401).json({
+        ok: false,
+        error: "Authentication failed",
+        code: "AUTH_INVALID",
+      });
+    }
+
+    try {
+      const refreshPayload = validateRefreshCookie(req.cookies?.refreshToken);
+      const newAccessToken = issueAccessTokenFromClaims(refreshPayload);
+
+      req.user = {
+        id: String(refreshPayload.id),
+        claims: {
+          id: refreshPayload.id,
+          username: refreshPayload.username || refreshPayload.id,
+        },
+      };
+
+      res.setHeader("x-access-token", newAccessToken);
+      res.setHeader("x-auth-refreshed", "1");
+
+      return next();
+    } catch (refreshError) {
+      console.log("JWT REFRESH ERROR:", refreshError.message);
+
+      return res.status(401).json({
+        ok: false,
+        error: "Your session has expired. Please login again.",
+        code: refreshError.code || "TOKEN_EXPIRED",
+      });
+    }
   }
 }
