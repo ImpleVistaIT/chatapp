@@ -12,6 +12,7 @@ import {
   toCrDetailsArray,
 } from "./solman.shared.js";
 import { step } from "../stream.shared.js";
+import { SapSystem } from "../../../models/SapSystem.model.js";
 
 const LIST_CHART_PAGE_SIZE = 200;
 const LIST_CHART_MAX_PAGES = 500;
@@ -96,7 +97,6 @@ function shouldIncludeChartForCrList(query = "") {
   if (!q) return false;
 
   const explicitAnalyticsTerms = [
-    "status distribution",
     "status breakdown",
     "status analytics",
     "status chart",
@@ -577,6 +577,8 @@ export async function handleCrList(context) {
   const responseData = {
     viewType: useInteractiveCrStatusCard ? "solman_cr_status" : "solman_cr_list",
     rows,
+    systemId: effectiveSystemId,
+    sapUser: effectiveSapUser,
     ...(chart ? { chart } : {}),
     ...(chart && Array.isArray(chartRows) && chartRows.length > 0
       ? {
@@ -599,6 +601,28 @@ export async function handleCrList(context) {
         }
       : {}),
   };
+
+  const solmanSystem = await SapSystem.findOne({
+    owner: { $in: [owner, "local"] },
+    systemId: "HSD",
+  })
+    .select({ systemId: 1 })
+    .lean();
+
+  const solmanSystemId = String(solmanSystem?.systemId || "HSD").trim().toUpperCase();
+  const rowsWithContext = rows.map((row) => ({ ...row, systemId: solmanSystemId, sapUser: effectiveSapUser }));
+  const chartRowsWithContext = Array.isArray(chartRows) ? chartRows.map((row) => ({ ...row, systemId: solmanSystemId, sapUser: effectiveSapUser })) : chartRows;
+
+  responseData.rows = rowsWithContext;
+  responseData.systemId = solmanSystemId;
+  responseData.sapUser = effectiveSapUser;
+  if (Array.isArray(chartRowsWithContext) && chartRowsWithContext.length > 0) {
+    responseData.allCRRecords = chartRowsWithContext;
+  }
+  if (useInteractiveCrStatusCard) {
+    responseData.tableRecords = rowsWithContext;
+    responseData.allCRRecords = Array.isArray(chartRowsWithContext) && chartRowsWithContext.length > 0 ? chartRowsWithContext : rowsWithContext;
+  }
 
   if (rows.length === 0 && !isNextPageRequest) {
     const noResultsMessage = "No records found for the given criteria.";

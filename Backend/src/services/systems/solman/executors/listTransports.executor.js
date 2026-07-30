@@ -5,12 +5,19 @@ import { getOwner } from "../../../../controllers/_chat/auth.js";
 export async function executeSolmanListTransports({ payload = {}, req }) {
   try {
     const owner = getOwner(req);
-    const systemId = String(payload.systemId || req?.body?.systemId || req?.userContext?.systemId || "").trim();
-    const sapUser = String(payload.sapUser || req?.body?.sapUser || req?.userContext?.sapUser || "").trim();
+    const systemId = String(payload.systemId || req?.body?.systemId || "").trim();
     const changeRequestId = String(payload.changeRequestId || payload.objectId || payload.crNumber || "").trim();
     const processType = String(payload.processType || req?.body?.processType || "").trim();
 
-    const connection = await resolveSapConnection({ owner, systemId, sapUser });
+    if (!systemId) {
+      return {
+        ok: false,
+        message: "systemId is required for transport lookup.",
+        error: "systemId is required for transport lookup.",
+      };
+    }
+
+    const connection = await resolveSapConnection({ owner, systemId });
 
     const result = await getTransportNumbersFromCr({
       system: connection.system,

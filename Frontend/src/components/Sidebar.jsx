@@ -18,6 +18,194 @@ function classNames(...x) {
   return x.filter(Boolean).join(" ");
 }
 
+function InlineEditableName({ value, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(value || ""));
+
+  useEffect(() => {
+    if (!editing) setDraft(String(value || ""));
+  }, [value, editing]);
+
+  const commit = () => {
+    const nextValue = String(draft || "").trim();
+    const currentValue = String(value || "").trim();
+    if (!nextValue || nextValue === currentValue) {
+      setEditing(false);
+      setDraft(currentValue);
+      return;
+    }
+
+    onSave?.(nextValue);
+    setEditing(false);
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      {editing ? (
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commit();
+            if (event.key === "Escape") {
+              setEditing(false);
+              setDraft(String(value || ""));
+            }
+          }}
+          autoFocus
+          className="min-w-0 max-w-[14rem] rounded-md border border-slate-300 bg-white px-2 py-1 text-xl font-semibold text-slate-900 outline-none focus:border-slate-900"
+        />
+      ) : (
+        <span className="min-w-0 truncate text-xl font-semibold text-slate-900">{value}</span>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setEditing((current) => !current)}
+        className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+        aria-label="Edit system name"
+        title="Edit system name"
+      >
+        <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+function SystemDetailsModal({
+  open,
+  systems,
+  selectedSystemId,
+  onSelectSystem,
+  onRenameSystem,
+  onClose,
+}) {
+  const [closing, setClosing] = useState(false);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (open) setClosing(false);
+  }, [open]);
+
+  if (!open) return null;
+
+  const activeSystem = (systems || []).find((system) => system.systemId === selectedSystemId) || null;
+
+  const handleClose = () => {
+    setClosing(true);
+    window.setTimeout(() => onClose?.(), 140);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-[2px]"
+      onMouseDown={handleClose}
+    >
+      <div
+        className={classNames(
+          "w-full max-w-md overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[0_24px_60px_rgba(15,23,42,0.22)] transition-all duration-150",
+          closing ? "translate-y-2 scale-[0.985] opacity-0" : "translate-y-0 scale-100 opacity-100"
+        )}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3.5">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">System Details</div>
+            <div className="mt-1 text-xs text-slate-500">Connected systems only</div>
+          </div>
+          <button
+            type="button"
+            onClick={handleClose}
+            className="h-8 w-8 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+            aria-label="Close system details"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="px-4 py-4">
+          {systems.length > 0 ? (
+            <>
+              <div className="mb-4 flex flex-wrap gap-2">
+                {systems.map((system) => {
+                  const active = system.systemId === selectedSystemId;
+                  return (
+                    <button
+                      key={system.systemId}
+                      type="button"
+                      onClick={() => onSelectSystem?.(system.systemId)}
+                      className={classNames(
+                        "rounded-full border px-3.5 py-1.5 text-xs font-semibold transition",
+                        active
+                          ? "border-slate-900 bg-slate-900 text-white shadow-[0_8px_18px_rgba(15,23,42,0.18)]"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                      )}
+                    >
+                      {system.name || system.systemId}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {activeSystem ? (
+                <div className="rounded-[20px] border border-slate-200 bg-slate-50/80 p-4">
+                  <div className="mb-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Selected System</div>
+                    <div className="mt-1">
+                      <InlineEditableName
+                        value={activeSystem.name || activeSystem.systemId}
+                        onSave={(nextName) => onRenameSystem?.(activeSystem, nextName)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5 rounded-[16px] border border-white/70 bg-white p-3.5 shadow-sm">
+                    <CompactDetailRow label="Name" value={activeSystem.name || activeSystem.systemId} />
+                    <CompactDetailRow label="System ID" value={activeSystem.systemId || "—"} />
+                    <CompactDetailRow label="Protocol" value={activeSystem.protocol || "https"} />
+                    <CompactDetailRow label="Host" value={activeSystem.host || "—"} />
+                    <CompactDetailRow label="Port" value={activeSystem.port || "—"} />
+                    <CompactDetailRow label="SAP Router" value={activeSystem.sapRouter || "-"} />
+                    <CompactDetailRow label="SAP User" value={activeSystem.sapUser || activeSystem.user || "-"} />
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="rounded-[20px] border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
+              <div className="text-base font-semibold text-slate-900">No active system connection</div>
+              <div className="mt-1.5 text-sm text-slate-500">Connect a system to continue</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CompactDetailRow({ label, value }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-2 last:border-b-0 last:pb-0">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="text-sm font-semibold text-slate-900 text-right break-words max-w-[58%]">{value}</div>
+    </div>
+  );
+}
+
 function Sidebar({
   sidebarOpen = false,
   collapsed = false,
@@ -63,24 +251,11 @@ function Sidebar({
   const sessionsLoadingRef = useRef(false);
   const sessionsHasMoreRef = useRef(true);
 
-  const [activeSystemData, setActiveSystemData] = useState(null);
+  const [selectedSystemId, setSelectedSystemId] = useState("");
   const [connectingSid, setConnectingSid] = useState(null);
 
   const normalizeSid = (sid) => String(sid || "").trim().toUpperCase();
   const normalizeSapUser = (u) => String(u || "").trim().toUpperCase();
-
-  const loadActiveSystem = useCallback(() => {
-    try {
-      const s = JSON.parse(localStorage.getItem("sapActiveSystem") || "null");
-      setActiveSystemData(s || null);
-    } catch {
-      setActiveSystemData(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadActiveSystem();
-  }, [loadActiveSystem]);
 
   const fetchTiles = useCallback(async () => {
     try {
@@ -142,24 +317,19 @@ function Sidebar({
   }, [sessionsHasMore]);
 
   const activeTile = useMemo(() => {
-    const sid = normalizeSid(
-      activeSystemData?.systemId ||
-        activeSession?.systemId ||
-        activeSystemData?.name ||
-        ""
-    );
+    const sid = normalizeSid(selectedSystemId || activeSession?.systemId || "");
 
     if (!sid) return null;
 
     return (tiles || []).find((t) => normalizeSid(t?.systemId || t?.name) === sid) || null;
-  }, [activeSystemData, activeSession, tiles]);
+  }, [activeSession?.systemId, selectedSystemId, tiles]);
 
   const displaySystems = useMemo(() => {
     return Array.isArray(tiles) ? tiles : [];
   }, [tiles]);
 
-  const hasAnyConnectedSystems = useMemo(() => {
-    return displaySystems.some((sys) => {
+  const connectedSystems = useMemo(() => {
+    return displaySystems.filter((sys) => {
       const status = String(sys?.status || "").trim().toLowerCase();
       return (
         sys?.connected === true ||
@@ -171,6 +341,22 @@ function Sidebar({
       );
     });
   }, [displaySystems]);
+
+  const hasAnyConnectedSystems = useMemo(() => {
+    return connectedSystems.length > 0;
+  }, [connectedSystems]);
+
+  useEffect(() => {
+    if (!displaySystems.length) {
+      setSelectedSystemId("");
+      return;
+    }
+
+    const stillValid = displaySystems.some((sys) => normalizeSid(sys.systemId) === normalizeSid(selectedSystemId));
+    if (!stillValid) {
+      setSelectedSystemId(displaySystems[0].systemId);
+    }
+  }, [displaySystems, selectedSystemId]);
 
   const fetchSessions = useCallback(
     async ({ reset = false } = {}) => {
@@ -256,13 +442,12 @@ function Sidebar({
 
   useEffect(() => {
     const onSapSessionChanged = () => {
-      loadActiveSystem();
       fetchTiles();
     };
 
     window.addEventListener("sapActiveSessionChanged", onSapSessionChanged);
     return () => window.removeEventListener("sapActiveSessionChanged", onSapSessionChanged);
-  }, [fetchTiles, loadActiveSystem]);
+  }, [fetchTiles]);
 
   const renameSessionApi = useCallback(
     async (id, title) => {
@@ -383,18 +568,6 @@ function Sidebar({
 
       const label = sys?.name || sys?.description || sid;
 
-      const nextActiveSystem = {
-        systemId: sid,
-        name: label,
-        protocol: sys?.protocol || "https",
-        host: sys?.host || "",
-        port: sys?.port ?? null,
-        sapRouter: sys?.sapRouter || "",
-      };
-
-      localStorage.setItem("sapActiveSystem", JSON.stringify(nextActiveSystem));
-      setActiveSystemData(nextActiveSystem);
-
       localStorage.removeItem("chatSessionId");
       setActiveId?.("draft");
       onNewChat?.();
@@ -433,14 +606,6 @@ function Sidebar({
         }
 
         const connectedSapUser = normalizeSapUser(connPayload?.sapUser || "");
-
-        const updatedActive = {
-          ...nextActiveSystem,
-          sapUser: connectedSapUser || null,
-        };
-
-        localStorage.setItem("sapActiveSystem", JSON.stringify(updatedActive));
-        setActiveSystemData(updatedActive);
 
         localStorage.setItem(
           "sapActiveSession",
@@ -513,11 +678,16 @@ function Sidebar({
           throw new Error(payload?.error || `Disconnect failed (${res.status})`);
         }
 
-        if (normalizeSid(activeSystemData?.systemId || activeSystemData?.name) === sid) {
-          localStorage.removeItem("sapActiveSystem");
-          localStorage.removeItem("chatSessionId");
-          localStorage.removeItem("sapActiveSession");
-          setActiveSystemData(null);
+        if (normalizeSid(selectedSystemId) === sid) {
+          setSelectedSystemId((current) => {
+            const remaining = displaySystems.find((system) => normalizeSid(system.systemId) !== sid);
+            return remaining ? remaining.systemId : "";
+          });
+        }
+
+        localStorage.removeItem("chatSessionId");
+        localStorage.removeItem("sapActiveSession");
+        if (normalizeSid(selectedSystemId) === sid) {
           setActiveId?.("draft");
           onNewChat?.();
         }
@@ -540,20 +710,63 @@ function Sidebar({
       }
     },
     [
-      activeSystemData?.name,
-      activeSystemData?.systemId,
       apiBase,
       fetchSessions,
       fetchTiles,
       onNewChat,
       onSystemsChanged,
       setActiveId,
+      selectedSystemId,
+      displaySystems,
     ]
+  );
+
+  const renameSystem = useCallback(
+    async (sys, nextName = null) => {
+      const sid = normalizeSid(sys?.systemId || sys?.name);
+      if (!sid) {
+        toast.error("No system selected.");
+        return;
+      }
+
+      const currentName = String(sys?.name || sid).trim();
+      const rawName = nextName == null ? window.prompt("Enter system name", currentName) : nextName;
+      const cleanName = String(rawName || "").trim();
+
+      if (!cleanName || cleanName === currentName) return;
+
+      const toastId = toast.loading(`Updating ${currentName}...`);
+
+      try {
+        const res = await authFetch(`${apiBase}/sap/systems/${encodeURIComponent(sid)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: cleanName }),
+        });
+
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || payload?.ok !== true) {
+          throw new Error(payload?.error || `Rename failed (${res.status})`);
+        }
+
+        await fetchTiles();
+        window.dispatchEvent(new Event("sapActiveSessionChanged"));
+        toast.success(`Updated ${cleanName}`, { id: toastId });
+
+        if (typeof onSystemsChanged === "function") {
+          onSystemsChanged();
+        }
+      } catch (e) {
+        console.error("Rename failed:", e);
+        toast.error(e?.message || "Failed to update system name.", { id: toastId });
+      }
+    },
+    [apiBase, fetchTiles, onSystemsChanged]
   );
 
   const removeSystem = useCallback(
     async (sys) => {
-      const targetSystem = sys || activeSystemData;
+      const targetSystem = sys;
       const sid = normalizeSid(targetSystem?.systemId || targetSystem?.name);
 
       if (!sid) {
@@ -585,11 +798,14 @@ function Sidebar({
           )
         );
 
-        if (normalizeSid(activeSystemData?.systemId || activeSystemData?.name) === sid) {
+        if (normalizeSid(selectedSystemId) === sid) {
           localStorage.removeItem("sapActiveSystem");
           localStorage.removeItem("sapActiveSession");
           localStorage.removeItem("chatSessionId");
-          setActiveSystemData(null);
+          setSelectedSystemId((current) => {
+            const remaining = displaySystems.find((system) => normalizeSid(system.systemId) !== sid);
+            return remaining ? remaining.systemId : "";
+          });
           setActiveId?.("draft");
           onNewChat?.();
         }
@@ -611,15 +827,30 @@ function Sidebar({
       }
     },
     [
-      activeSystemData?.name,
-      activeSystemData?.systemId,
       apiBase,
       fetchSessions,
       onNewChat,
       onSystemsChanged,
       setActiveId,
+      selectedSystemId,
+      displaySystems,
     ]
   );
+
+  const selectedSystem = useMemo(() => {
+    return displaySystems.find((system) => normalizeSid(system.systemId) === normalizeSid(selectedSystemId)) || null;
+  }, [displaySystems, selectedSystemId]);
+
+  const handleOpenSystemDetails = useCallback(() => {
+    if (!selectedSystemId && displaySystems.length > 0) {
+      setSelectedSystemId(displaySystems[0].systemId);
+    }
+    setShowSystemDetails(true);
+  }, [displaySystems, selectedSystemId]);
+
+  const handleSelectSystem = useCallback((systemId) => {
+    setSelectedSystemId(normalizeSid(systemId));
+  }, []);
 
   return (
     <>
@@ -701,8 +932,7 @@ function Sidebar({
                 onNewChatWithToast={onNewChatWithToast}
                 onAddNewSystem={onAddNewSystem}
                 userName={userName}
-                activeSystemData={activeSystemData}
-                activeSession={activeSession}
+                  activeSession={activeSession}
                 displaySystems={displaySystems}
               />
             </div>
@@ -730,7 +960,7 @@ function Sidebar({
                   deleteSessionApi={deleteSessionApi}
                   fetchSessions={fetchSessions}
                   handleDelete={handleDelete}
-                  currentSystemId={activeSystemData?.systemId || activeSystemData?.name || ""}
+                  currentSystemId={selectedSystem?.systemId || ""}
                   showHistory={hasAnyConnectedSystems}
                 />
               </div>
@@ -747,6 +977,7 @@ function Sidebar({
                   connectingSid={connectingSid}
                   normalizeSid={normalizeSid}
                   setActiveSystemLocal={setActiveSystemLocal}
+                  onRenameSystem={renameSystem}
                   onDisconnectSystem={disconnectSystem}
                 />
               </div>
@@ -759,19 +990,29 @@ function Sidebar({
                   userMenuOpen={userMenuOpen}
                   setUserMenuOpen={setUserMenuOpen}
                   showSystemDetails={showSystemDetails}
-                  setShowSystemDetails={setShowSystemDetails}
-                  activeSystemData={activeSystemData}
+                  setShowSystemDetails={handleOpenSystemDetails}
+                  systems={displaySystems}
+                  selectedSystemId={selectedSystemId}
+                  onSelectSystem={handleSelectSystem}
                   userName={userName}
                   onAddNewSystem={onAddNewSystem}
                   removeActiveSystem={removeSystem}
                   activeSession={activeSession}
-                  activeTile={activeTile}
                 />
               </div>
             </>
           )}
         </div>
       </aside>
+
+      <SystemDetailsModal
+        open={showSystemDetails}
+        systems={connectedSystems}
+        selectedSystemId={selectedSystemId}
+        onSelectSystem={handleSelectSystem}
+        onRenameSystem={renameSystem}
+        onClose={() => setShowSystemDetails(false)}
+      />
     </>
   );
 }

@@ -195,6 +195,7 @@ export async function getS4dPurchaseOrderDetails({ systemId, sapUser, poNumber }
   const cleanPoNumber = String(poNumber || "").trim();
 
   const url = new URL(`${apiBase}/api/s4d/po/details/${encodeURIComponent(cleanPoNumber)}`);
+
   if (cleanSystemId) url.searchParams.set("systemId", cleanSystemId);
   if (cleanSapUser) url.searchParams.set("sapUser", cleanSapUser);
 

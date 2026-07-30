@@ -9,6 +9,7 @@ export default function SystemsGrid({
   connectingSid,
   normalizeSid,
   setActiveSystemLocal,
+  onRenameSystem = () => {},
   onDisconnectSystem = () => {},
 }) {
   const systemsArr = Array.isArray(displaySystems) ? displaySystems : [];
@@ -73,49 +74,49 @@ export default function SystemsGrid({
                     </span>
                   </div>
                 </div>
-              </div>
 
-              {!isConnecting && (
-                <div className="absolute inset-x-2 bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  {isConnected ? (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDisconnectSystem({
-                          ...sys,
-                          systemId: sid,
-                          name: label,
-                        });
-                      }}
-                      className="w-full rounded-xl bg-slate-900 px-2 py-1.5 text-[10px] font-semibold text-white hover:bg-slate-800"
-                      title={`Disconnect ${label}`}
-                    >
-                      Disconnect
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActiveSystemLocal({
-                          ...sys,
-                          systemId: sid,
-                          name: label,
-                          connected: false,
-                          isConnected: false,
-                          status: "disconnected",
-                          active: false,
-                        });
-                      }}
-                      className="w-full rounded-xl bg-blue-600 px-2 py-1.5 text-[10px] font-semibold text-white hover:bg-blue-700"
-                      title={`Connect ${label}`}
-                    >
-                      Connect
-                    </button>
-                  )}
-                </div>
-              )}
+                {!isConnecting && (
+                  <div className="absolute inset-x-2 bottom-2 opacity-0 transition-opacity group-hover:opacity-100">
+                    {isConnected ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDisconnectSystem({
+                            ...sys,
+                            systemId: sid,
+                            name: label,
+                          });
+                        }}
+                        className="w-full rounded-xl bg-slate-900 px-2 py-1.5 text-[10px] font-semibold text-white hover:bg-slate-800"
+                        title={`Disconnect ${label}`}
+                      >
+                        Disconnect
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveSystemLocal({
+                            ...sys,
+                            systemId: sid,
+                            name: label,
+                            connected: false,
+                            isConnected: false,
+                            status: "disconnected",
+                            active: false,
+                          });
+                        }}
+                        className="w-full rounded-xl bg-blue-600 px-2 py-1.5 text-[10px] font-semibold text-white hover:bg-blue-700"
+                        title={`Connect ${label}`}
+                      >
+                        Connect
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           );
         })}

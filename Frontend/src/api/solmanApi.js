@@ -219,6 +219,44 @@ export async function listSolmanTransports({
   return data;
 }
 
+export async function checkSolmanTransportDependencies({
+  systemId,
+  sapUser,
+  objectId,
+  processType = "",
+  businessScope = "",
+}) {
+  const res = await authFetch(
+    `${API_BASE}/chat/actions/solman/check-transport-dependencies`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        systemId,
+        sapUser,
+        objectId,
+        processType,
+        businessScope,
+      }),
+    }
+  );
+
+  const data = await parseJsonSafe(res);
+
+  if (
+    !res.ok ||
+    data?.ok === false ||
+    data?.status === "execution_failed" ||
+    data?.status === "validation_failed"
+  ) {
+    throw new Error(extractApiError(data, "Failed to fetch dependent transport details."));
+  }
+
+  return data;
+}
+
 export async function importTransportToProduction({
   systemId,
   sapUser,

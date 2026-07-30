@@ -197,7 +197,13 @@ export async function handleCrDetails(context) {
     sapUser: effectiveSapUser,
     reply,
     summary: `Fetched details for CR Number ${crNumber}.`,
-    data: rows,
+    data: {
+      rows,
+      systemId: effectiveSystemId,
+      sapUser: effectiveSapUser,
+      changeRequestId: objectId,
+      processType,
+    },
     suggestions: [
       `Show status of CR ${crNumber}`,
       "Create another change request",

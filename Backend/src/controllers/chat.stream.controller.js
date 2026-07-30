@@ -2,6 +2,7 @@ import { classifyPrompt } from "../services/routing/promptClassifier.service.js"
 import { resolveTargetSystem } from "../services/routing/systemContextResolver.service.js";
 import { normalizePromptWithLlm } from "../services/routing/promptNormalization.service.js";
 import { buildGeneralConversationResponse, detectConversationIntent } from "../services/routing/conversationIntent.service.js";
+import { SapSystem } from "../models/SapSystem.model.js";
 import { SapCredential } from "../models/SapCredential.model.js";
 import { ChatMessage } from "../models/ChatMessage.model.js";
 import { SapConnection } from "../models/SapConnection.model.js";
@@ -47,6 +48,24 @@ function extractCrNumber(query = "") {
 
   const fallback = text.match(/\b(8\d{9,})\b/);
   return fallback ? fallback[1] : "";
+}
+
+function isSystemOnline(system) {
+  if (!system) return false;
+  if (system.connected === false) return false;
+  if (system.isConnected === false) return false;
+  return String(system.status || "").toLowerCase() !== "disconnected";
+}
+
+function findResolvedSystem(availableSystems, systemId) {
+  const targetId = normalizeSystemId(systemId);
+  if (!targetId || !Array.isArray(availableSystems)) return null;
+
+  return (
+    availableSystems.find(
+      (system) => normalizeSystemId(system?.systemId || system?.id || system?.code) === targetId
+    ) || null
+  );
 }
 
 function isPurchaseOrderQuery(query) {
@@ -300,6 +319,9 @@ export function isSolmanCrQuery(query) {
 }
 
 function resolveSolmanSystemId({ systemResolution, systemId }) {
+  const resolvedFromDatabase = normalizeSystemId(systemResolution?.databaseSystemId);
+  if (resolvedFromDatabase) return resolvedFromDatabase;
+
   const resolvedFromRouting = normalizeSystemId(systemResolution?.targetSystemId);
   if (resolvedFromRouting) return resolvedFromRouting;
 
@@ -317,26 +339,18 @@ function buildSolmanSystemError(systemResolution) {
   if (hasTargetEndpoint) {
     return {
       message:
-        "The required SAP system could not be matched from your current system list. Please add or refresh the correct system to continue.",
-      status: "needs_input",
-      missingFields: ["systemId"],
+        "The required SAP system could not be matched from your current system list.",
+      status: "execution_failed",
+      missingFields: [],
       systemResolution,
-      action: {
-        type: "add_system",
-        label: "Add System",
-      },
     };
   }
 
   return {
-    message: "This system isn’t added yet. Please add it to continue.",
-    status: "needs_input",
-    missingFields: ["systemId"],
+    message: "SAP system resolution failed.",
+    status: "execution_failed",
+    missingFields: [],
     systemResolution,
-    action: {
-      type: "add_system",
-      label: "Add System",
-    },
   };
 }
 
@@ -461,7 +475,15 @@ async function withLiveConnectionFlags({ owner, availableSystems }) {
 
   return systems.map((item) => {
     const sid = normalizeSystemId(item?.systemId || item?.id || item?.code);
-    if (!sid || !connectedSidSet.has(sid)) return item;
+    if (!sid || !connectedSidSet.has(sid)) {
+      return {
+        ...item,
+        connected: false,
+        isConnected: false,
+        status: "disconnected",
+        active: false,
+      };
+    }
 
     return {
       ...item,
@@ -475,6 +497,8 @@ async function withLiveConnectionFlags({ owner, availableSystems }) {
 
 export async function handleChatStream(req, res) {
   const sse = createSseSession(res);
+  const requestId = String(req.headers["x-request-id"] || req.headers["x-correlation-id"] || `req_${Date.now().toString(36)}`).trim();
+  const streamId = `stream_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
   try {
     const owner = getOwner(req);
@@ -488,6 +512,23 @@ export async function handleChatStream(req, res) {
       pendingAction,
     } = req.body || {};
 
+    const sessionLog = {
+      requestId,
+      sessionId: sessionId || null,
+      streamId,
+      messageId: null,
+      reason: null,
+    };
+
+    const logStream = (event, extra = {}) => {
+      console.log(`[CHAT_STREAM] ${event}`, {
+        ...sessionLog,
+        ...extra,
+      });
+    };
+
+    logStream("SSE Started", { reason: "incoming_request" });
+
     const effectiveAvailableSystems = await step("withLiveConnectionFlags", () =>
       withLiveConnectionFlags({
         owner,
@@ -496,6 +537,8 @@ export async function handleChatStream(req, res) {
     );
 
     console.log("[SSE] incoming body:", {
+      requestId,
+      streamId,
       query,
       sessionId,
       systemId,
@@ -505,6 +548,7 @@ export async function handleChatStream(req, res) {
     });
 
     if (!query) {
+      logStream("SSE Completed", { reason: "missing_query" });
       sse.send("error", { message: "query is required" });
       return sse.end();
     }
@@ -552,7 +596,7 @@ export async function handleChatStream(req, res) {
         resolveTargetSystem({
           query: rawQuery,
           classified: classifiedReleaseTransport,
-          requestedSystemId: systemId,
+          requestedSystemId: "",
           availableSystems: effectiveAvailableSystems,
         })
       );
@@ -601,6 +645,7 @@ export async function handleChatStream(req, res) {
       console.log("Skipping SAP API call - General Conversation");
       sse.send("reply", buildGeneralConversationResponse(conversationIntent));
       sse.send("done", { ok: true });
+      logStream("SSE Completed", { reason: "general_conversation" });
       return sse.end();
     }
 
@@ -717,7 +762,7 @@ export async function handleChatStream(req, res) {
                 intent: restoredIntent,
               },
             },
-            requestedSystemId: cleanString(effectivePendingAction?.systemId) || systemId,
+            requestedSystemId: "",
             availableSystems: effectiveAvailableSystems,
           })
       );
@@ -835,6 +880,7 @@ export async function handleChatStream(req, res) {
         sse,
         owner,
         query: restoredQuery,
+        displayQuery: rawQuery,
         sessionId,
         systemId: resolvedSystemId,
         sapUser: resolvedSapUser,
@@ -886,7 +932,7 @@ export async function handleChatStream(req, res) {
     let resolvedSystemId = normalizeSystemId(systemId || "");
     let resolvedSapUser = cleanString(sapUser);
 
-    const routingRequestSystemId = routingMode === "fallback" ? systemId : "";
+    const routingRequestSystemId = normalizeSystemId(systemId || "");
 
     systemResolution = await step("resolveTargetSystem", () =>
       resolveTargetSystem({
@@ -897,7 +943,7 @@ export async function handleChatStream(req, res) {
             : routingMode === "po"
               ? { ...classified, system: "s4hana", module: "mm", intent: classified?.intent || "list_purchase_orders" }
               : classified,
-        requestedSystemId: routingRequestSystemId,
+        requestedSystemId: "",
         availableSystems: effectiveAvailableSystems,
       })
     );
@@ -926,11 +972,14 @@ export async function handleChatStream(req, res) {
 
     console.log("[SSE] FINAL_DECISION:", finalDecision);
 
-    if (systemResolution?.status === "disconnected") {
+    const resolvedTargetSystem = findResolvedSystem(
+      effectiveAvailableSystems,
+      systemResolution?.targetSystemId || resolvedSystemId
+    );
+
+    if (systemResolution?.targetSystemId && resolvedTargetSystem && !isSystemOnline(resolvedTargetSystem)) {
       sse.send("error", {
-        message: `The system ${
-          systemResolution.targetSystemId || "target"
-        } is disconnected. Please connect it and try again.`,
+        message: `The selected system ${systemResolution.targetSystemId} is disconnected. Please connect it and try again.`,
         status: "disconnected_system",
         action: {
           type: "reconnect_system",
@@ -962,6 +1011,60 @@ export async function handleChatStream(req, res) {
     if (useSolman) {
       console.log("[SSE] resolved system for SolMan:", resolvedSystemId || "(none)");
       console.log("[SSE] SolMan system resolution detail:", systemResolution);
+
+      const requestedFeatureName = cleanString(classified?.intent || classified?.system || "solman");
+      const selectedSystemId = normalizeSystemId(systemResolution?.targetSystemId || resolvedSystemId || systemId || "");
+      console.log("[SSE] SolMan routing inputs:", {
+        requestedSystemId: routingRequestSystemId || null,
+        featureName: requestedFeatureName,
+        requestedSystemIdFromResolver: systemResolution?.targetSystemId || null,
+        selectedSystemId: selectedSystemId || null,
+      });
+
+      const solmanSystemQuery = {
+        owner: { $in: [owner, "local"] },
+        systemId: selectedSystemId,
+      };
+
+      console.log("[SSE] Searching serverdb.sapsystems...");
+      console.log("[SSE] MongoDB query for SolMan system:", solmanSystemQuery);
+
+      const dbSolmanSystem = await step("load SolMan DB system", () =>
+        SapSystem.findOne(solmanSystemQuery).lean()
+      );
+
+      console.log("[SSE] MongoDB result for SolMan system:", dbSolmanSystem || null);
+
+      if (dbSolmanSystem?.systemId) {
+        systemResolution = {
+          ...(systemResolution || {}),
+          targetSystemId: normalizeSystemId(dbSolmanSystem.systemId),
+          targetEndpoint: {
+            host: String(dbSolmanSystem.host || "").trim().toLowerCase(),
+            port: String(dbSolmanSystem.port || "").trim(),
+          },
+          databaseSystemId: normalizeSystemId(dbSolmanSystem.systemId),
+          databaseHost: String(dbSolmanSystem.host || "").trim().toLowerCase(),
+          databasePort: String(dbSolmanSystem.port || "").trim(),
+          reason: "solman_db_system_resolved",
+        };
+        resolvedSystemId = normalizeSystemId(dbSolmanSystem.systemId);
+      } else {
+        console.log("[SSE] No MongoDB system document found for SolMan selection:", {
+          query: solmanSystemQuery,
+          selectedSystemId: selectedSystemId || null,
+          availableCandidates: Array.isArray(systemResolution?.candidates) ? systemResolution.candidates : [],
+        });
+      }
+
+      console.log("[SSE] SolMan final endpoint selection:", {
+        resolvedSystemId,
+        targetSystemId: systemResolution?.targetSystemId || null,
+        targetEndpoint: systemResolution?.targetEndpoint || null,
+        databaseSystemId: systemResolution?.databaseSystemId || null,
+        databaseHost: systemResolution?.databaseHost || null,
+        databasePort: systemResolution?.databasePort || null,
+      });
 
       resolvedSapUser = await step("resolveSolmanSapUser", () =>
         resolveSolmanSapUser({

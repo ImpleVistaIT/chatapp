@@ -1,5 +1,6 @@
 import { resolveSapConnection } from "../services/sap/sapConnectionResolver.service.js";
 import { fetchFromSap } from "../services/sap.service.js";
+import { SapServiceMap } from "../models/SapServiceMap.model.js";
 
 function cleanString(value) {
   return String(value || "").trim();
@@ -26,30 +27,44 @@ function normalizePoRow(row = {}, poNumber = "") {
 export async function getS4dPurchaseOrderDetails(req, res, next) {
   try {
     const poNumber = cleanString(req.params?.poNumber);
-    const systemId = cleanString(req.query?.systemId || req.body?.systemId).toUpperCase();
-    const sapUser = cleanString(req.query?.sapUser || req.body?.sapUser).toUpperCase();
 
     if (!poNumber) {
       return res.status(400).json({ success: false, error: "poNumber is required." });
     }
 
-    if (!systemId) {
-      return res.status(400).json({ success: false, error: "systemId is required." });
-    }
-
-    if (!sapUser) {
-      return res.status(400).json({ success: false, error: "sapUser is required." });
-    }
-
-    if (!systemId.startsWith("S4D")) {
-      return res.status(400).json({ success: false, error: "This endpoint is only available for S4D systems." });
-    }
-
     const owner = String(req.user?.id || "").trim();
-    const connection = await resolveSapConnection({ owner, systemId, sapUser });
+    const service = await SapServiceMap.findOne({
+      owner: { $in: [owner, "local"] },
+      systemId: "S4D",
+      serviceType: "PO",
+    }).lean();
 
-    const relativePath =
-      `Po_detailsSet?$filter=PoNo eq '${poNumber.replace(/'/g, "''")}'&$top=1`;
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        error: "PO service mapping not found for systemId=S4D.",
+      });
+    }
+
+    const requestedSystemId = cleanString(service.systemId).toUpperCase();
+
+    const connection = await resolveSapConnection({
+      owner,
+      systemId: requestedSystemId,
+    });
+
+    const relativePath = `${service.entitySet || "Po_detailsSet"}?$filter=PoNo eq '${poNumber.replace(/'/g, "''")}'&$top=1`;
+
+    console.log("[S4D PO] resolved requested system:", {
+      owner,
+      systemId: requestedSystemId,
+      systemHost: connection.system?.host || null,
+      systemPort: connection.system?.port || null,
+      credentialUser: connection.sapAuth?.username || null,
+      serviceName: service.serviceName,
+      entitySet: service.entitySet,
+      relativePath,
+    });
 
     const sapData = await fetchFromSap(
       {
@@ -58,9 +73,17 @@ export async function getS4dPurchaseOrderDetails(req, res, next) {
           protocol: connection.system?.protocol || "https",
           host: connection.system?.host,
           port: connection.system?.port,
-          serviceName: "ZMM_PO_DETAILS_SRV",
+          serviceName: service.serviceName,
         },
         relativePath,
+        requestMeta: {
+          feature: "PO",
+          requestedSystemId,
+          mappedSystemId: service.systemId || requestedSystemId,
+          databaseSystemId: connection.system?.systemId || requestedSystemId,
+          databaseHost: connection.system?.host || null,
+          databasePort: connection.system?.port || null,
+        },
       },
       connection.sapAuth
     );
@@ -76,6 +99,11 @@ export async function getS4dPurchaseOrderDetails(req, res, next) {
     });
   } catch (error) {
     if (typeof next === "function") return next(error);
-    return res.status(error?.status || 500).json({ success: false, error: error?.message || "Failed to fetch PO details." });
+    return res.status(error?.status || 500).json({
+      success: false,
+      error: error?.message || "Failed to fetch PO details.",
+      details: error?.responseBody || error?.details || null,
+      url: error?.url || null,
+    });
   }
 }

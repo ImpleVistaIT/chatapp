@@ -23,59 +23,48 @@ export async function resolveSapConnection({ owner, systemId, sapUser }) {
     throw err;
   }
 
-  if (!normalizedSapUser) {
-    const err = new Error("sapUser is required");
-    err.status = 400;
-    throw err;
-  }
-
-  let system = await SapSystem.findOne({
+  const system = await SapSystem.findOne({
     owner: { $in: [normalizedOwner, "local"] },
     systemId: normalizedSystemId,
   }).lean();
 
-  let resolvedSystemId = normalizedSystemId;
-
   if (!system) {
-    const credentialFallback = await SapCredential.findOne({
-      owner: normalizedOwner,
-      sapUser: normalizedSapUser,
-    }).lean();
-
-    const fallbackSystemId = cleanString(credentialFallback?.systemId).toUpperCase();
-
-    if (fallbackSystemId) {
-      const fallbackSystem = await SapSystem.findOne({
-        owner: { $in: [normalizedOwner, "local"] },
-        systemId: fallbackSystemId,
-      }).lean();
-
-      if (fallbackSystem) {
-        system = fallbackSystem;
-        resolvedSystemId = fallbackSystemId;
-      }
-    }
-
-    if (!system) {
-      const err = new Error(`SAP system not found for systemId ${normalizedSystemId}`);
-      err.status = 404;
-      throw err;
-    }
+    const err = new Error(`SAP system not found for systemId ${normalizedSystemId}`);
+    err.status = 404;
+    throw err;
   }
 
-  const credential = await SapCredential.findOne({
+  const baseQuery = {
     owner: normalizedOwner,
-    systemId: resolvedSystemId,
-    sapUser: normalizedSapUser,
-  }).lean();
+    systemId: normalizedSystemId,
+  };
+
+  let credential = null;
+
+  if (normalizedSapUser) {
+    credential = await SapCredential.findOne({
+      ...baseQuery,
+      sapUser: normalizedSapUser,
+    }).lean();
+  }
+
+  if (!credential) {
+    credential = await SapCredential.findOne(baseQuery)
+      .sort({ lastUsedAt: -1, updatedAt: -1 })
+      .lean();
+  }
 
   if (!credential) {
     const err = new Error(
-      `SAP credential not found for systemId ${resolvedSystemId} and sapUser ${normalizedSapUser}`
+      normalizedSapUser
+        ? `SAP credential not found for systemId ${normalizedSystemId} and sapUser ${normalizedSapUser}`
+        : `SAP credential not found for systemId ${normalizedSystemId}`
     );
     err.status = 404;
     throw err;
   }
+
+  const resolvedSapUser = cleanString(credential.sapUser).toUpperCase();
 
   const password = decryptString({
     enc: credential.encPassword,
@@ -103,11 +92,11 @@ export async function resolveSapConnection({ owner, systemId, sapUser }) {
     },
     meta: {
       owner: normalizedOwner,
-      systemId: resolvedSystemId,
-      sapUser: normalizedSapUser,
+      systemId: normalizedSystemId,
+      sapUser: resolvedSapUser,
       systemName: system.name || "",
       resolvedSystemOwner: system.owner || null,
-      resolvedViaSapUserFallback: resolvedSystemId !== normalizedSystemId,
+      resolvedViaSapUserFallback: !normalizedSapUser || resolvedSapUser !== normalizedSapUser,
     },
   };
 }

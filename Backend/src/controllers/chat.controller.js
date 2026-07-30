@@ -372,7 +372,7 @@ export async function handleDocChat({ req, res, defaultDocType, docTypeFast }) {
       systemResolution = await resolveTargetSystem({
         query,
         classified,
-        requestedSystemId: systemId,
+        requestedSystemId: "",
         availableSystems: Array.isArray(availableSystems) ? availableSystems : [],
       });
 

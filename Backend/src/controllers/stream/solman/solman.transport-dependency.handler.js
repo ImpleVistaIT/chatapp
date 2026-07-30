@@ -246,6 +246,8 @@ export async function handleTransportDependency(context) {
     },
     data: {
       ...(result?.result || {}),
+      systemId: effectiveSystemId,
+      sapUser: effectiveSapUser,
       viewType: "transport_dependency_table",
       columns: [
         "Original Transport",
@@ -275,6 +277,10 @@ export async function handleTransportDependency(context) {
     summary: result?.message || `Checked dependent transports for CR ${objectId}.`,
     data: {
       ...(result?.result || {}),
+      systemId: effectiveSystemId,
+      sapUser: effectiveSapUser,
+      changeRequestId: objectId,
+      processType,
       viewType: "transport_dependency_table",
       columns: [
         "Original Transport",

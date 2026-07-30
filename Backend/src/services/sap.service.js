@@ -219,8 +219,32 @@ async function doSapGet(url, authOverride) {
 // -----------------------
 // MAIN FUNCTION
 // -----------------------
-export async function fetchFromSap({ system, service, relativePath }, authOverride) {
+export async function fetchFromSap({ system, service, relativePath, requestMeta = null }, authOverride) {
   const url = buildSapUrl({ system, service, relativePath });
+  const databaseSystem = system || {};
+  const databaseService = service || {};
+  console.log("[SAP] resolver inputs:", {
+    requestedSystemId: requestMeta?.requestedSystemId || null,
+    mappedSystemId: requestMeta?.mappedSystemId || null,
+    feature: requestMeta?.feature || null,
+    serviceName: databaseService?.serviceName || null,
+  });
+  console.log("[SAP] request URL:", url);
+  console.log("[SAP] request context:", {
+    feature: requestMeta?.feature || null,
+    requestedSystemId: requestMeta?.requestedSystemId || null,
+    mappedSystemId: requestMeta?.mappedSystemId || null,
+    databaseSystemId: databaseSystem?.systemId || null,
+    databaseHost: databaseSystem?.host || databaseService?.host || null,
+    databasePort: databaseSystem?.port || databaseService?.port || null,
+    finalRequestHost: databaseService?.host || databaseSystem?.host || null,
+    finalRequestPort: databaseService?.port || databaseSystem?.port || null,
+    sapUrl: url,
+    systemId: system?.systemId || null,
+    host: service?.host || system?.host || null,
+    port: service?.port || system?.port || null,
+    serviceName: service?.serviceName || null,
+  });
 
   let res;
   try {
@@ -248,7 +272,11 @@ export async function fetchFromSap({ system, service, relativePath }, authOverri
     console.log("👉 SAP RAW PREVIEW:", safePreview(res.data, 200));
 
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(`SAP GET failed (${res.status}): ${String(res.data).slice(0, 800)}`);
+      const err = new Error(`SAP GET failed (${res.status}): ${String(res.data).slice(0, 800)}`);
+      err.status = res.status;
+      err.responseBody = res.data;
+      err.url = url;
+      throw err;
     }
 
     let parsed;

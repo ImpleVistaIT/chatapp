@@ -13,21 +13,29 @@ export async function getSapAuthOrThrow({ owner, systemId, sapUser }) {
 
   const su = String(sapUser || "").trim();
 
-  const cred = su
-    ? await SapCredential.findOne({ owner, systemId: sid, sapUser: su }).select({
+  const baseQuery = { owner, systemId: sid };
+
+  let cred = null;
+
+  if (su) {
+    cred = await SapCredential.findOne({ ...baseQuery, sapUser: su }).select({
+      sapUser: 1,
+      encPassword: 1,
+      encIv: 1,
+      encTag: 1,
+    });
+  }
+
+  if (!cred) {
+    cred = await SapCredential.findOne(baseQuery)
+      .sort({ lastUsedAt: -1, updatedAt: -1 })
+      .select({
         sapUser: 1,
         encPassword: 1,
         encIv: 1,
         encTag: 1,
-      })
-    : await SapCredential.findOne({ owner, systemId: sid })
-        .sort({ lastUsedAt: -1, updatedAt: -1 })
-        .select({
-          sapUser: 1,
-          encPassword: 1,
-          encIv: 1,
-          encTag: 1,
-        });
+      });
+  }
 
   if (!cred) {
     const e = new Error(

@@ -28,6 +28,13 @@ import { handleCreateTransportTask, isCreateTransportTaskRequest } from "./creat
 import { handleReleaseTransportTask, isReleaseTransportTaskRequest, isReleaseTransportRequest } from "./releaseTask.js";
 import { handleReleaseTransport, isReleaseTransportIntent } from "./releaseTransport.js";
 
+function pickSolmanSystem(system = {}) {
+  const systemId = cleanString(system?.systemId || system?.id || system?.code).toUpperCase();
+  if (systemId === "HSD") return system;
+
+  return system;
+}
+
 function normalizeIntentQuery(query = "") {
   return cleanString(query)
     .toLowerCase()
@@ -156,12 +163,16 @@ export async function handleSolmanChatStream({
   sse,
   owner,
   query,
+  displayQuery = null,
   sessionId,
   systemId,
   sapUser,
   classified,
+  systemResolution = null,
 }) {
-  const effectiveSystemId = normalizeSystemId(systemId);
+  const effectiveSystemId = normalizeSystemId(
+    systemResolution?.targetSystemId || systemId
+  );
 
   if (!effectiveSystemId) {
     sse.send("error", { message: "systemId is required" });
@@ -191,7 +202,7 @@ export async function handleSolmanChatStream({
     saveUserMessage({
       owner,
       sessionId: session._id,
-      text: query,
+      text: cleanString(displayQuery || query),
     })
   );
 
@@ -210,6 +221,8 @@ export async function handleSolmanChatStream({
       systemId: effectiveSystemId,
     }).lean()
   );
+
+  const solmanSystem = pickSolmanSystem(system);
 
   if (!system) {
     const message = `SAP system profile not found for systemId=${effectiveSystemId}`;
@@ -246,7 +259,7 @@ export async function handleSolmanChatStream({
     owner,
     query,
     session,
-    system,
+    system: solmanSystem,
     sapAuth,
     effectiveSystemId,
     effectiveSapUser,

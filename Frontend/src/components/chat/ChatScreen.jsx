@@ -879,15 +879,84 @@ export default function ChatScreen({
   const groupedMessages = [];
   const messages = Array.isArray(activeConv?.messages) ? activeConv.messages : [];
 
+  const isGreetingMessage = (message) => {
+    const text = String(message?.text || message?.summary || "").trim().toLowerCase();
+    return text === "hi, welcome to implevista ai. how may i assist you?";
+  };
+
+  const isLandscapeSelectionPrompt = (message) => {
+    const text = String(message?.text || message?.summary || "").trim().toLowerCase();
+    return (
+      text === "which landscape would you like to view the change requests from?" ||
+      text === "which landscape would you like to analyze for cr status distribution?"
+    );
+  };
+
+  const shouldShowAssistantActions = (assistantGroup) => {
+    const groupMessages = Array.isArray(assistantGroup?.messages) ? assistantGroup.messages : [];
+    if (groupMessages.length === 0) return false;
+
+    if (groupMessages.some(isGreetingMessage)) {
+      return false;
+    }
+
+    if (groupMessages.some(isLandscapeSelectionPrompt)) {
+      return false;
+    }
+
+    const hasRenderableContent = groupMessages.some((message) => {
+      const text = String(message?.text || "").trim();
+      const summary = String(message?.summary || "").trim();
+      const hasData = Boolean(message?.data && typeof message.data === "object");
+      const hasChart = Boolean(message?.chart);
+      const hasAction = Boolean(message?.action);
+      return Boolean(text || summary || hasData || hasChart || hasAction);
+    });
+
+    const isQuickReplyPromptOnly = groupMessages.every((message) => {
+      const hasData = Boolean(message?.data && typeof message.data === "object");
+      const hasChart = Boolean(message?.chart);
+      const hasAction = Boolean(message?.action);
+      const hasSummary = Boolean(String(message?.summary || "").trim());
+      const hasSuggestions = Array.isArray(message?.suggestions) && message.suggestions.length > 0;
+      return hasSuggestions && !hasData && !hasChart && !hasAction && !hasSummary;
+    });
+
+    return hasRenderableContent && !isQuickReplyPromptOnly;
+  };
+
+  const isRenderableAssistantMessage = (message) => {
+    if (!message || message.role !== "assistant") return false;
+
+    const text = String(message?.text || "").trim();
+    const summary = String(message?.summary || "").trim();
+    const hasData = Boolean(message?.data && typeof message.data === "object");
+    const hasChart = Boolean(message?.chart);
+    const hasSuggestions = Array.isArray(message?.suggestions) && message.suggestions.length > 0;
+    const hasAction = Boolean(message?.action);
+
+    return Boolean(text || summary || hasData || hasChart || hasSuggestions || hasAction);
+  };
+
   for (let i = 0; i < messages.length; i++) {
     const current = messages[i];
 
     if (current?.role === "assistant") {
+      if (!isRenderableAssistantMessage(current)) {
+        continue;
+      }
+
       const grouped = [current];
 
       while (i + 1 < messages.length && messages[i + 1]?.role === "assistant") {
-        grouped.push(messages[i + 1]);
+        if (isRenderableAssistantMessage(messages[i + 1])) {
+          grouped.push(messages[i + 1]);
+        }
         i++;
+      }
+
+      if (grouped.length === 0) {
+        continue;
       }
 
       groupedMessages.push({
@@ -918,9 +987,15 @@ export default function ChatScreen({
               const isUser = m?.role === "user";
               const isAssistantGroup = m?.role === "assistant-group";
               const isEditing = editingIndex === idx;
+              const showAssistantActions = isAssistantGroup ? shouldShowAssistantActions(m) : false;
+              const groupKey = String(
+                isAssistantGroup
+                  ? m?.messages?.map((msg, subIdx) => msg?.id || msg?.createdAt || `${msg?.text || "msg"}_${subIdx}`).join("|")
+                  : m?.id || m?.createdAt || `${m?.text || "msg"}_${idx}`
+              );
 
               return (
-                <div key={idx} className="group">
+                <div key={groupKey} className="group">
                   {isUser && !isEditing && (
                     <div className="flex flex-col items-end">
                       <MessageBubble
@@ -1006,10 +1081,10 @@ export default function ChatScreen({
                   )}
 
                   {isAssistantGroup && (
-                    <div className="relative">
+                    <div className="relative" data-assistant-group="true">
                       <div className="space-y-3">
                         {m.messages.map((msg, subIdx) => (
-                          <div key={subIdx}>
+                          <div key={msg?.id || msg?.createdAt || `${groupKey}_${subIdx}`}>
                             <MessageBubble
                               role={msg?.role}
                               text={msg?.text}
@@ -1029,100 +1104,102 @@ export default function ChatScreen({
                         ))}
                       </div>
 
-                      <div className="relative mt-2 flex items-center gap-2 ml-12">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const fullText = m.messages.map((msg) => msg?.text || "").join("\n\n");
-                            handleCopyText(fullText, idx);
-                          }}
-                          className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
-                          title="Copy"
-                        >
-                          {copiedIndex === idx ? (
-                            <FiCheck size={15} className="text-green-600" />
-                          ) : (
-                            <FiCopy size={15} />
-                          )}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleRegenerateMessage(idx)}
-                          className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
-                          title="Regenerate"
-                          disabled={regeneratingIndex === idx || !isConnected}
-                        >
-                          <FiRefreshCw
-                            size={15}
-                            className={regeneratingIndex === idx ? "animate-spin" : ""}
-                          />
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleEmailChoice(m)}
-                          className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
-                          title="Email"
-                        >
-                          <FiMail size={15} />
-                        </button>
-
-                        <div className="relative">
+                      {showAssistantActions && (
+                        <div className="relative mt-2 flex items-center gap-2 ml-12">
                           <button
                             type="button"
-                            onClick={() =>
-                              setDownloadMenuIndex(downloadMenuIndex === idx ? null : idx)
-                            }
-
-                            ref={(node) => {
-                              if (node) {
-                                downloadButtonRefs.current.set(idx, node);
-                              } else {
-                                downloadButtonRefs.current.delete(idx);
-                              }
+                            onClick={() => {
+                              const fullText = m.messages.map((msg) => msg?.text || "").join("\n\n");
+                              handleCopyText(fullText, idx);
                             }}
-                            className="relative flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
-                            title="Download"
+                            className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                            title="Copy"
                           >
-                            <FiDownload size={15} />
+                            {copiedIndex === idx ? (
+                              <FiCheck size={15} className="text-green-600" />
+                            ) : (
+                              <FiCopy size={15} />
+                            )}
                           </button>
-                        </div>
 
-                        {downloadMenuIndex === idx &&
-                          downloadMenuStyle &&
-                          typeof document !== "undefined" &&
-                          createPortal(
-                            <div
-                              data-download-menu="true"
-                              className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-[0_20px_50px_rgba(0,0,0,0.15)]"
-                              style={downloadMenuStyle}
+                          <button
+                            type="button"
+                            onClick={() => handleRegenerateMessage(idx)}
+                            className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                            title="Regenerate"
+                            disabled={regeneratingIndex === idx || !isConnected}
+                          >
+                            <FiRefreshCw
+                              size={15}
+                              className={regeneratingIndex === idx ? "animate-spin" : ""}
+                            />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleEmailChoice(m)}
+                            className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                            title="Email"
+                          >
+                            <FiMail size={15} />
+                          </button>
+
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setDownloadMenuIndex(downloadMenuIndex === idx ? null : idx)
+                              }
+
+                              ref={(node) => {
+                                if (node) {
+                                  downloadButtonRefs.current.set(idx, node);
+                                } else {
+                                  downloadButtonRefs.current.delete(idx);
+                                }
+                              }}
+                              className="relative flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-200 text-gray-500 hover:text-black transition"
+                              title="Download"
                             >
-                              <div className="px-4 py-3 border-b border-gray-100">
-                                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
-                                  Download Options
-                                </p>
-                              </div>
+                              <FiDownload size={15} />
+                            </button>
+                          </div>
 
-                              <button
-                                type="button"
-                                onClick={() => handleDownloadChoice(m, "current")}
-                                className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          {downloadMenuIndex === idx &&
+                            downloadMenuStyle &&
+                            typeof document !== "undefined" &&
+                            createPortal(
+                              <div
+                                data-download-menu="true"
+                                className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-[0_20px_50px_rgba(0,0,0,0.15)]"
+                                style={downloadMenuStyle}
                               >
-                                Download current section
-                              </button>
+                                <div className="px-4 py-3 border-b border-gray-100">
+                                  <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                                    Download Options
+                                  </p>
+                                </div>
 
-                              <button
-                                type="button"
-                                onClick={() => handleDownloadChoice(m, "range")}
-                                className="flex w-full items-center gap-3 border-t border-gray-100 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-                              >
-                                Download by Date Range
-                              </button>
-                            </div>,
-                            document.body
-                          )}
-                      </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadChoice(m, "current")}
+                                  className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                >
+                                  Download current section
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadChoice(m, "range")}
+                                  className="flex w-full items-center gap-3 border-t border-gray-100 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                >
+                                  Download by Date Range
+                                </button>
+                              </div>,
+                              document.body
+                            )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

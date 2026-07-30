@@ -1,7 +1,18 @@
 import { fetchFromSap } from "../../sap.service.js";
+import { SapSystem } from "../../../models/SapSystem.model.js";
+import { SapServiceCatalog } from "../../../models/SapServiceCatalog.model.js";
 
 function cleanString(v) {
   return String(v || "").trim();
+}
+
+function safePreview(value, max = 300) {
+  try {
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    return text.length > max ? `${text.slice(0, max)}...` : text;
+  } catch {
+    return "<unpreviewable>";
+  }
 }
 
 function escapeODataString(value) {
@@ -97,6 +108,8 @@ function normalizeTransportsFromCr(raw, { changeRequestId = "" } = {}) {
     ]);
 
   const normalizedRows = effectiveRows.map((item) => ({
+    raw: item,
+    _raw: item,
     ChangeRequestId: pickString(item, ["ChangeRequestId", "CHANGE_REQUEST_ID", "ZchangeRequest", "ZCHANGE_REQUEST", "ChangeRequest", "CHANGE_REQUEST"]),
     Trkorr: pickString(item, ["Trkorr", "TRKORR", "Transport", "TRANSPORT", "TransportNo", "TRANSPORT_NO"]),
     Trfunction: pickString(item, ["Trfunction", "TRFUNCTION", "TransportType", "TRANSPORT_TYPE", "TRFUNCTION_CODE"]),
@@ -171,58 +184,23 @@ function normalizeDependencyRows(raw) {
   };
 }
 
-function mergeDependencyRows(results = []) {
-  const dependencies = [];
-  const sourceTransports = [];
-  const dependencyMessages = [];
-  const rawResponses = [];
+function extractTransportNumbersFromCrRows(rows = []) {
+  const transports = [];
 
-  for (const entry of Array.isArray(results) ? results : []) {
-    if (!entry || typeof entry !== "object") continue;
+  for (const item of Array.isArray(rows) ? rows : []) {
+    const transport = cleanString(
+      item?.Trkorr ||
+        item?.TRKORR ||
+        item?.Transport ||
+        item?.TRANSPORT ||
+        item?.TransportNo ||
+        item?.TRANSPORT_NO
+    );
 
-    if (Array.isArray(entry.sourceTransports)) {
-      sourceTransports.push(...entry.sourceTransports);
-    }
-
-    if (Array.isArray(entry.dependencies)) {
-      dependencies.push(...entry.dependencies);
-    }
-
-    if (cleanString(entry.dependencyMessage)) {
-      dependencyMessages.push(cleanString(entry.dependencyMessage));
-    }
-
-    if (entry.raw != null) {
-      rawResponses.push(entry.raw);
-    }
+    if (transport) transports.push(transport);
   }
 
-  const uniqueDependencies = [];
-  const seen = new Set();
-
-  for (const item of dependencies) {
-    const key = [
-      cleanString(item?.transportEntered),
-      cleanString(item?.dependentTransport),
-      cleanString(item?.description),
-      cleanString(item?.owner),
-      cleanString(item?.exportDate),
-      cleanString(item?.exportTime),
-      cleanString(item?.importDate),
-      cleanString(item?.importTime),
-    ].join("|");
-
-    if (seen.has(key)) continue;
-    seen.add(key);
-    uniqueDependencies.push(item);
-  }
-
-  return {
-    sourceTransports: unique(sourceTransports),
-    dependencies: uniqueDependencies,
-    dependencyMessage: dependencyMessages.filter(Boolean).join(" ").trim(),
-    rawResponses,
-  };
+  return unique(transports);
 }
 
 function isSapServiceNotFoundError(error, serviceName) {
@@ -237,15 +215,10 @@ function isSapServiceNotFoundError(error, serviceName) {
 
 function mapSapServiceError(error, { serviceName }) {
   if (isSapServiceNotFoundError(error, serviceName)) {
-    const e = new Error("This system isn’t added yet. Please add it to continue.");
+    const e = new Error("SAP service is not available on this system.");
     e.status = 400;
     e.code = "SAP_SERVICE_NOT_AVAILABLE";
     e.userMessage = e.message;
-    e.action = {
-      type: "add_system",
-      label: "Add System",
-    };
-    e.missingFields = ["systemId"];
     throw e;
   }
 
@@ -308,6 +281,127 @@ function buildCrTransportAllRowsVariants() {
   return ["", "$top=500"];
 }
 
+function resolveCrDetailsServiceName() {
+  return String(process.env.DEFAULT_SOLMAN_CR_DETAILS_SERVICE_NAME || "ZNEW_TRS_FROM_CR_SRV").trim() || "ZNEW_TRS_FROM_CR_SRV";
+}
+
+function resolveDependentTransportsServiceName() {
+  return String(process.env.DEFAULT_SOLMAN_DEPENDENT_TRANSPORTS_SERVICE_NAME || "ZNEW_TRS_FROM_CR_SRV").trim() || "ZNEW_TRS_FROM_CR_SRV";
+}
+
+async function resolveSolmanCrCatalog({ owner, systemId, serviceName = "" }) {
+  const sid = cleanString(systemId).toUpperCase();
+  const deploymentOwner = cleanString(owner || "local");
+
+  const query = {
+    owner: { $in: [deploymentOwner, "local"] },
+    isActive: true,
+  };
+
+  if (sid) {
+    query.systemId = sid;
+  }
+
+  const activeCatalogEntries = await SapServiceCatalog.find(query)
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  const activeCatalogEntry = activeCatalogEntries.find((entry) => {
+    if (serviceName && cleanString(entry?.serviceName).toUpperCase() !== cleanString(serviceName).toUpperCase()) {
+      return false;
+    }
+
+    const searchText = [
+      entry?.serviceName,
+      entry?.entitySet,
+      entry?.entityTypeName,
+      entry?.labelsText,
+      Array.isArray(entry?.domainHints) ? entry.domainHints.join(" ") : "",
+      Array.isArray(entry?.keys) ? entry.keys.join(" ") : "",
+      Array.isArray(entry?.fields)
+        ? entry.fields.map((field) => `${field?.name || ""} ${field?.label || ""}`).join(" ")
+        : "",
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .join(" ");
+
+    return /\b(zcr|zchange|charm|change request|change request.*status|cr)\b/i.test(searchText);
+  }) || null;
+
+  return activeCatalogEntry;
+}
+
+function isSolmanCrServiceName(serviceName) {
+  const normalized = cleanString(serviceName).toUpperCase();
+  return normalized === "ZCR_DETAILS_SRV" || normalized === "ZNEW_TRS_FROM_CR_SRV";
+}
+
+async function resolveSolmanSystem(system, serviceName) {
+  const incomingSystemId = cleanString(system?.systemId || system?.id || system?.code).toUpperCase();
+  const incomingOwner = cleanString(system?.owner || "local") || "local";
+
+  console.log("[SOLMAN][SYSTEM_RESOLVER] incoming SAP system:", {
+    systemId: incomingSystemId || null,
+    host: cleanString(system?.host) || null,
+    port: cleanString(system?.port) || null,
+    serviceName: cleanString(serviceName) || null,
+  });
+
+  if (!isSolmanCrServiceName(serviceName)) {
+    return system;
+  }
+
+  const catalogEntry = await resolveSolmanCrCatalog({
+    owner: incomingOwner,
+    systemId: incomingSystemId,
+    serviceName: cleanString(serviceName),
+  });
+
+  const mappedSystemId = cleanString(catalogEntry?.systemId).toUpperCase();
+  const targetSystemId = incomingSystemId || mappedSystemId;
+
+  const query = {
+    owner: { $in: [incomingOwner, "local"] },
+    systemId: targetSystemId,
+  };
+
+  console.log("[SOLMAN][SYSTEM_RESOLVER] Searching serverdb.sapsystems...");
+  console.log("[SOLMAN][SYSTEM_RESOLVER] Mongo query:", query);
+
+  const solmanSystem = await SapSystem.findOne(query).lean();
+
+  console.log("[SOLMAN][SYSTEM_RESOLVER] Mongo result:", solmanSystem || null);
+
+  if (!solmanSystem) {
+    const err = new Error("SAP system mapping not found.");
+    err.status = 404;
+    err.code = "SAP_SYSTEM_MAPPING_NOT_FOUND";
+    throw err;
+  }
+
+  console.log("[SOLMAN][SYSTEM_RESOLVER] Selected Mongo document:", {
+    databaseSystemId: cleanString(solmanSystem.systemId).toUpperCase() || null,
+    databaseHost: cleanString(solmanSystem.host) || null,
+    databasePort: cleanString(solmanSystem.port) || null,
+  });
+
+  return solmanSystem;
+}
+
+function resolveCrEntitySet() {
+  return String(process.env.DEFAULT_SOLMAN_CR_ENTITYSET || "CR_DetailsSet").trim() || "CR_DetailsSet";
+}
+
+function resolveTransportFallbackEntitySet(serviceName) {
+  const normalized = cleanString(serviceName).toUpperCase();
+
+  if (normalized === "ZNEW_TRS_FROM_CR_SRV") {
+    return String(process.env.DEFAULT_SOLMAN_DEPENDENT_TRANSPORTS_ENTITYSET || "CR_DetailsSet").trim() || "CR_DetailsSet";
+  }
+
+  return resolveCrEntitySet();
+}
+
 function buildCrTransportLookupFallbackVariants({ changeRequestId, processType }) {
   const cleanCr = cleanString(changeRequestId);
   const cleanProcessType = cleanString(processType);
@@ -350,15 +444,34 @@ export async function getTransportNumbersFromCr({
     throw err;
   }
 
+  const resolvedSystem = await resolveSolmanSystem(system, resolveCrDetailsServiceName());
+  const catalogEntry = await resolveSolmanCrCatalog({
+    owner: resolvedSystem?.owner || system?.owner || "local",
+    systemId: resolvedSystem?.systemId || system?.systemId || "",
+    serviceName: resolveCrDetailsServiceName(),
+  });
+
   const resolvedProcessType = explicitProcessType || (await resolveCrProcessType({
-    system,
+    system: resolvedSystem,
     sapAuth,
     changeRequestId: cleanCr,
   }));
 
+  const serviceName = cleanString(catalogEntry?.serviceName) || resolveCrDetailsServiceName();
+
   const variants = buildCrTransportLookupVariants({
     changeRequestId: cleanCr,
     processType: resolvedProcessType,
+  });
+  const entitySetName = cleanString(catalogEntry?.entitySet) || resolveTransportFallbackEntitySet(serviceName);
+
+  console.log("[SOLMAN][DEPENDENT] CR Number received:", cleanCr);
+  console.log("[SOLMAN][DEPENDENT] First API service:", serviceName);
+  console.log("[SOLMAN][DEPENDENT] First API entity set:", entitySetName);
+  console.log("[SOLMAN][DEPENDENT] Catalog selection:", {
+    serviceName,
+    entitySet: entitySetName,
+    entityTypeName: cleanString(catalogEntry?.entityTypeName) || null,
   });
 
   let raw = null;
@@ -366,19 +479,39 @@ export async function getTransportNumbersFromCr({
   let normalized = null;
 
   for (const filter of variants) {
-    const relativePath = `CR_DetailsSet?$filter=${encodeURIComponent(filter)}`;
+    const relativePath = `${entitySetName}?$filter=${encodeURIComponent(filter)}`;
 
     try {
       raw = await fetchFromSap(
         {
-          system,
-          service: { serviceName: "ZNEW_TRS_FROM_CR_SRV" },
+          system: resolvedSystem,
+          service: { serviceName },
           relativePath,
+          requestMeta: {
+            feature: "solman",
+            serviceName,
+            requestedSystemId: cleanString(system?.systemId || system?.id || system?.code).toUpperCase() || null,
+            mappedSystemId: cleanString(resolvedSystem?.systemId).toUpperCase() || null,
+          },
         },
         sapAuth
       );
 
+      console.log("[SOLMAN][DEPENDENT] First API URL path:", relativePath);
+      console.log("[SOLMAN][DEPENDENT] First API full response:", JSON.stringify(raw));
+
+      const rowsForLogging = Array.isArray(raw?.d?.results) ? raw.d.results : raw?.d ? [raw.d] : [];
+      console.log("[SOLMAN][DEPENDENT] First API record count:", rowsForLogging.length);
+      rowsForLogging.forEach((item, index) => {
+        console.log("[SOLMAN][DEPENDENT] First API record property names:", {
+          index,
+          properties: item && typeof item === "object" ? Object.keys(item) : [],
+        });
+      });
+
       normalized = normalizeTransportsFromCr(raw, { changeRequestId: cleanCr });
+      console.log("[SOLMAN][DEPENDENT] First API normalized rows:", normalized.rows.length);
+      console.log("[SOLMAN][DEPENDENT] Transport field selected from normalized rows:", normalized.rows.map((item) => item.Trkorr).filter(Boolean));
       if (normalized.transports.length > 0 || normalized.rows.length > 0) break;
     } catch (error) {
       lastError = error;
@@ -389,8 +522,12 @@ export async function getTransportNumbersFromCr({
         msg.includes("not implemented in data provider class")
       ) {
         mapSapServiceError(error, {
-          serviceName: "ZNEW_TRS_FROM_CR_SRV",
+            serviceName,
         });
+      }
+
+      if (error?.status === 401 || msg.includes("logon error") || msg.includes("authentication")) {
+        throw error;
       }
     }
   }
@@ -402,14 +539,20 @@ export async function getTransportNumbersFromCr({
     });
 
     for (const filter of fallbackVariants) {
-      const relativePath = `CR_DetailsSet?$filter=${encodeURIComponent(filter)}`;
+      const relativePath = `${entitySetName}?$filter=${encodeURIComponent(filter)}`;
 
       try {
         raw = await fetchFromSap(
           {
-            system,
-            service: { serviceName: "ZNEW_TRS_FROM_CR_SRV" },
+          system: resolvedSystem,
+            service: { serviceName },
             relativePath,
+          requestMeta: {
+            feature: "solman",
+            serviceName,
+            requestedSystemId: cleanString(system?.systemId || system?.id || system?.code).toUpperCase() || null,
+            mappedSystemId: cleanString(resolvedSystem?.systemId).toUpperCase() || null,
+          },
           },
           sapAuth
         );
@@ -425,8 +568,12 @@ export async function getTransportNumbersFromCr({
           msg.includes("not implemented in data provider class")
         ) {
           mapSapServiceError(error, {
-            serviceName: "ZNEW_TRS_FROM_CR_SRV",
+              serviceName,
           });
+        }
+
+        if (error?.status === 401 || msg.includes("logon error") || msg.includes("authentication")) {
+          throw error;
         }
       }
     }
@@ -435,12 +582,18 @@ export async function getTransportNumbersFromCr({
   if (!normalized || (normalized.transports.length === 0 && normalized.rows.length === 0)) {
     for (const suffix of buildCrTransportAllRowsVariants()) {
       try {
-        const relativePath = suffix ? `CR_DetailsSet?${suffix}` : `CR_DetailsSet`;
+        const relativePath = suffix ? `${entitySetName}?${suffix}` : entitySetName;
         raw = await fetchFromSap(
           {
-            system,
-            service: { serviceName: "ZNEW_TRS_FROM_CR_SRV" },
+            system: resolvedSystem,
+            service: { serviceName },
             relativePath,
+            requestMeta: {
+              feature: "solman",
+              serviceName,
+              requestedSystemId: cleanString(system?.systemId || system?.id || system?.code).toUpperCase() || null,
+              mappedSystemId: cleanString(resolvedSystem?.systemId).toUpperCase() || null,
+            },
           },
           sapAuth
         );
@@ -449,11 +602,20 @@ export async function getTransportNumbersFromCr({
         if (normalized.transports.length > 0 || normalized.rows.length > 0) break;
       } catch (error) {
         lastError = error;
+
+        if (error?.status === 401 || cleanString(error?.message).toLowerCase().includes("logon error")) {
+          throw error;
+        }
       }
     }
   }
 
   if (!normalized || (normalized.transports.length === 0 && normalized.rows.length === 0)) {
+    if (lastError) {
+      throw lastError;
+    }
+
+    console.log("[SOLMAN][DEPENDENT] first API returned no transport rows; skipping second API.");
     return {
       ok: true,
       message: `No transports found for CR ${cleanCr}.`,
@@ -484,132 +646,36 @@ export async function getTransportNumbersFromCr({
   };
 }
 
-export async function getTransportDependencyDetails({
-  system,
-  sapAuth,
-  transports = [],
-}) {
-  const cleanTransports = unique(transports);
-
-  if (cleanTransports.length === 0) {
-    const err = new Error("At least one transport is required.");
-    err.status = 400;
-    err.code = "VALIDATION_FAILED";
-    throw err;
-  }
-
-  const dependencySystem = {
-    ...system,
-    protocol: cleanString(system?.protocol) || "https",
-    port: Number(system?.port) || 50101,
-  };
-
-  const perTransportResults = [];
-  const failures = [];
-
-  for (const transport of cleanTransports) {
-    const relativePath = `zmessageSet?$filter=${encodeURIComponent(
-      `TRANSPORT eq '${escapeODataString(transport)}'`
-    )}&$expand=message_nav`;
-
-    try {
-      const raw = await fetchFromSap(
-        {
-          system: dependencySystem,
-          service: { serviceName: "ZTR_DEP_CHECK_SRV" },
-          relativePath,
-        },
-        sapAuth
-      );
-
-      const normalized = normalizeDependencyRows(raw);
-      perTransportResults.push({
-        transport,
-        ...normalized,
-        raw,
-      });
-    } catch (error) {
-      failures.push({
-        transport,
-        error: cleanString(error?.message) || "Unknown SAP error",
-        status: error?.status || null,
-      });
-
-      const msg = cleanString(error?.message).toLowerCase();
-      if (
-        error?.status === 501 ||
-        msg.includes("no service found") ||
-        msg.includes("not implemented in data provider class")
-      ) {
-        mapSapServiceError(error, {
-          serviceName: "ZTR_DEP_CHECK_SRV",
-        });
-      }
-    }
-  }
-
-  if (perTransportResults.length === 0) {
-    const err = new Error(
-      failures.length > 0
-        ? `SAP dependency check failed for all transports: ${failures.map((f) => `${f.transport} (${f.error})`).join(", ")}`
-        : "Dependency check failed."
-    );
-    err.status = 500;
-    err.code = "SAP_DEPENDENCY_CHECK_FAILED";
-    err.details = { failures };
-    throw err;
-  }
-
-  const merged = mergeDependencyRows(
-    perTransportResults.map((entry) => ({
-      sourceTransports: [entry.transport],
-      dependencies: entry.dependencies,
-      dependencyMessage: entry.dependencyMessage,
-      raw: entry.raw,
-    }))
-  );
-
-  const warningMessage =
-    failures.length > 0
-      ? `Dependency check completed with ${failures.length} transport failure(s).`
-      : "";
-
-  return {
-    ok: true,
-    message:
-      [merged.dependencyMessage, warningMessage].filter(Boolean).join(" ").trim() ||
-      "Dependency check completed.",
-    result: {
-      transports: merged.sourceTransports,
-      dependencyMessage: merged.dependencyMessage,
-      dependencies: merged.dependencies,
-      raw: {
-        responses: merged.rawResponses,
-        failures,
-      },
-    },
-  };
-}
-
 export async function getDependentTransportsFromCr({
   system,
   sapAuth,
   changeRequestId,
   processType = "",
 }) {
+  const cleanCr = cleanString(changeRequestId);
+  console.log("[SOLMAN][DEPENDENT] CR Number received:", cleanCr);
+
   const trResult = await getTransportNumbersFromCr({
     system,
     sapAuth,
-    changeRequestId,
+    changeRequestId: cleanCr,
     processType,
   });
 
+  console.log("[SOLMAN][DEPENDENT] first API response:", {
+    ok: Boolean(trResult?.ok),
+    message: trResult?.message || "",
+    changeRequestId: trResult?.result?.changeRequestId || cleanCr,
+    rawPreview: safePreview?.(trResult?.result?.raw || trResult?.raw || null),
+  });
+
   if (!trResult?.ok) {
+    console.log("[SOLMAN][DEPENDENT] first API failed, skipping second API call.");
     return {
       ok: true,
-      message: `No transports were found for CR ${changeRequestId}.`,
+      message: `No transports were found for CR ${cleanCr}.`,
       result: {
-        changeRequestId: cleanString(changeRequestId),
+        changeRequestId: cleanCr,
         processType: cleanString(processType) || null,
         sourceTransports: [],
         dependencyMessage: "",
@@ -623,14 +689,17 @@ export async function getDependentTransportsFromCr({
     };
   }
 
-  const sourceTransports = trResult?.result?.transports || [];
+  const sourceTransports = extractTransportNumbersFromCrRows(trResult?.result?.rows || []);
+  console.log("[SOLMAN][DEPENDENT] extracted transport numbers:", sourceTransports);
+  console.log("[SOLMAN][DEPENDENT] number of transports found:", sourceTransports.length);
 
   if (sourceTransports.length === 0) {
+    console.log("[SOLMAN][DEPENDENT] no transport numbers found, second API will not be called.");
     return {
       ok: true,
-      message: `No transports were found for CR ${changeRequestId}.`,
+      message: `No transports were found for CR ${cleanCr}.`,
       result: {
-        changeRequestId: cleanString(changeRequestId),
+        changeRequestId: cleanCr,
         processType: trResult?.result?.processType || null,
         sourceTransports: [],
         dependencyMessage: "",
@@ -643,29 +712,18 @@ export async function getDependentTransportsFromCr({
     };
   }
 
-  const depResult = await getTransportDependencyDetails({
-    system: {
-      ...system,
-      protocol: "https",
-      port: 50101,
-    },
-    sapAuth,
-    transports: sourceTransports,
-  });
-
   return {
     ok: true,
-    message: depResult?.message || "Dependency check completed.",
+    message: `Found ${sourceTransports.length} transport(s) for CR ${cleanCr}.`,
     result: {
-      changeRequestId:
-        cleanString(trResult?.result?.changeRequestId) || cleanString(changeRequestId),
+      changeRequestId: cleanCr,
       processType: trResult?.result?.processType || null,
       sourceTransports,
-      dependencyMessage: depResult?.result?.dependencyMessage || "",
-      dependencies: depResult?.result?.dependencies || [],
+      dependencyMessage: "",
+      dependencies: [],
       raw: {
         transportLookup: trResult?.result?.raw || null,
-        dependencyLookup: depResult?.result?.raw || null,
+        dependencyLookup: null,
       },
     },
   };

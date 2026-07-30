@@ -387,13 +387,16 @@ function isTransientSapNetworkError(err) {
   ].includes(code);
 }
 
-export async function resolveSolmanDataServiceName({ owner, systemId }) {
+export async function resolveSolmanDataServiceMapping({ owner, systemId }) {
   const sid = cleanString(systemId).toUpperCase();
   const deploymentOwner = getDeploymentOwner("local");
+  const ownerCandidates = Array.from(
+    new Set([cleanString(owner), "local", deploymentOwner].map((value) => cleanString(value)).filter(Boolean))
+  );
   const activeCatalogEntries = await SapServiceCatalog.find({
-    owner: { $in: [owner, "local", deploymentOwner] },
     systemId: sid,
     isActive: true,
+    owner: { $in: ownerCandidates },
   })
     .sort({ updatedAt: -1 })
     .lean();
@@ -425,30 +428,13 @@ export async function resolveSolmanDataServiceName({ owner, systemId }) {
       entitySet: cleanString(activeCatalogEntry?.entitySet),
       entityTypeName: cleanString(activeCatalogEntry?.entityTypeName),
     });
-    return catalogServiceName;
+    return {
+      serviceName: catalogServiceName,
+      entitySetName: cleanString(activeCatalogEntry?.entitySet) || resolveSolmanCrEntitySet(),
+    };
   }
 
   const systemConfigured = cleanString(process.env[`DEFAULT_SOLMAN_CR_SERVICE_NAME_${sid}`] || "");
-  if (systemConfigured) {
-    console.log("[SOLMAN] using system-specific configured CR service name:", {
-      owner,
-      systemId: sid,
-      serviceName: systemConfigured,
-    });
-    return systemConfigured;
-  }
-
-  const configured = cleanString(process.env.DEFAULT_SOLMAN_CR_SERVICE_NAME || "ZCR_DETAILS_SRV");
-
-  if (configured) {
-    console.log("[SOLMAN] using configured CR service name:", {
-      owner,
-      systemId: sid,
-      serviceName: configured,
-    });
-    return configured;
-  }
-
   const serviceMaps = await SapServiceMap.find({ owner: { $in: [owner, "local"] }, systemId: sid })
     .sort({ updatedAt: -1 })
     .lean();
@@ -465,11 +451,43 @@ export async function resolveSolmanDataServiceName({ owner, systemId }) {
       entitySet: cleanString(fallbackCandidate?.entitySet),
       entityTypeName: cleanString(fallbackCandidate?.entityTypeName),
     });
-    return mappedServiceName;
+    return {
+      serviceName: mappedServiceName,
+      entitySetName: cleanString(fallbackCandidate?.entitySet) || resolveSolmanCrEntitySet(),
+    };
+  }
+
+  if (systemConfigured) {
+    console.log("[SOLMAN] using system-specific configured CR service name:", {
+      owner,
+      systemId: sid,
+      serviceName: systemConfigured,
+    });
+    return {
+      serviceName: systemConfigured,
+      entitySetName: resolveSolmanCrEntitySet(),
+    };
+  }
+
+  const configured = cleanString(process.env.DEFAULT_SOLMAN_CR_SERVICE_NAME || "ZCR_DETAILS_SRV");
+
+  if (configured) {
+    console.log("[SOLMAN] using configured CR service name:", {
+      owner,
+      systemId: sid,
+      serviceName: configured,
+    });
+    return {
+      serviceName: configured,
+      entitySetName: resolveSolmanCrEntitySet(),
+    };
   }
 
   console.log("[SOLMAN] using legacy fallback service name:", { owner, systemId: sid, serviceName: "ZCR_DETAILS_SRV" });
-  return "ZCR_DETAILS_SRV";
+  return {
+    serviceName: "ZCR_DETAILS_SRV",
+    entitySetName: resolveSolmanCrEntitySet(),
+  };
 }
 
 async function preflightSolmanCrMetadata({ system, sapAuth, owner, serviceName, entitySetName }) {
@@ -497,7 +515,11 @@ async function preflightSolmanCrMetadata({ system, sapAuth, owner, serviceName, 
       code: err?.code || null,
     });
 
-    if (isTransientSapNetworkError(err)) {
+    const message = cleanString(err?.message || "");
+    const serviceInactiveMessage =
+      message === "OData service not found/active on this SAP system. Check service name and activation.";
+
+    if (isTransientSapNetworkError(err) || serviceInactiveMessage) {
       console.log("[SOLMAN] metadata preflight skipped due to transient network error:", {
         owner,
         systemId: system?.systemId || null,
@@ -726,14 +748,16 @@ export async function getSolmanChangeRequestDetailsById({
     throw err;
   }
 
-  const serviceName = "ZCR_DETAILS_SRV";
+  const serviceMapping = await resolveSolmanDataServiceMapping({ owner: sapAuth?.owner || "local", systemId: system?.systemId });
+  const serviceName = cleanString(serviceMapping?.serviceName) || "ZCR_DETAILS_SRV";
+  const entitySetName = cleanString(serviceMapping?.entitySetName) || resolveSolmanCrEntitySet();
 
   await preflightSolmanCrMetadata({
     system,
     sapAuth,
     owner: sapAuth?.owner || "local",
     serviceName,
-    entitySetName: resolveSolmanCrEntitySet(),
+    entitySetName,
   });
 
   const processTypeCandidates = requestedProcessType
@@ -843,14 +867,16 @@ export async function listSolmanChangeRequestsByDateRange({
     orderBy,
   });
 
-  const serviceName = await resolveSolmanDataServiceName({ owner: sapAuth?.owner || "local", systemId: system?.systemId });
+  const serviceMapping = await resolveSolmanDataServiceMapping({ owner: sapAuth?.owner || "local", systemId: system?.systemId });
+  const serviceName = cleanString(serviceMapping?.serviceName) || "ZCR_DETAILS_SRV";
+  const entitySetName = cleanString(serviceMapping?.entitySetName) || resolveSolmanCrEntitySet();
 
   await preflightSolmanCrMetadata({
     system,
     sapAuth,
     owner: sapAuth?.owner || "local",
     serviceName,
-    entitySetName: resolveSolmanCrEntitySet(),
+    entitySetName,
   });
 
   const raw = await fetchFromSap(

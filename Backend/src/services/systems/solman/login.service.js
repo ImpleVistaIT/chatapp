@@ -37,12 +37,34 @@ function extractTagValue(xml, tagName) {
   return cleanString(m?.[1]);
 }
 
+function extractJsonField(jsonText, fieldName) {
+  try {
+    const parsed = JSON.parse(jsonText);
+    const candidates = [parsed?.d, parsed?.data, parsed];
+
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const value = candidate?.[fieldName];
+      if (value != null && String(value).trim()) {
+        return cleanString(value);
+      }
+    }
+  } catch {
+    // ignore parse failures; the caller will fall back to XML-only checks
+  }
+
+  return "";
+}
+
 export function normalizeSolmanLoginResponse(xml, requestUrl) {
-  const message = extractTagValue(xml, "Message");
-  const userName = extractTagValue(xml, "UserName");
+  const message = extractTagValue(xml, "Message") || extractJsonField(xml, "Message");
+  const userName = extractTagValue(xml, "UserName") || extractJsonField(xml, "UserName");
+  const normalizedMessage = String(message || "").toLowerCase();
+  const errorLike = /error|failed|invalid|unauthorized|forbidden|denied/.test(normalizedMessage);
+  const hasPayload = Boolean(String(message || "").trim() || String(userName || "").trim());
 
   return {
-    ok: /login successful/i.test(message),
+    ok: hasPayload && !errorLike,
     message: message || "Login failed",
     userName,
     raw: xml,
@@ -80,6 +102,7 @@ export async function loginToSolman({
   sapPassword,
   loginTargets = undefined,
   requireMappedSystem = false,
+  fallbackTarget = null,
 }) {
   const user = cleanString(sapUser);
   const password = cleanString(sapPassword);
@@ -92,6 +115,7 @@ export async function loginToSolman({
         sapPassword: password,
         loginTargets,
         requireMappedSystem,
+        fallbackTarget,
       })
     : null;
 
@@ -160,13 +184,15 @@ export async function loginToSolman({
     throw e;
   }
 
-  if (!response.ok) {
-    const e = new Error(`SolMan login failed (${response.status})`);
-    e.status = response.status;
+  const normalized = normalizeSolmanLoginResponse(text, url);
+
+  if (!response.ok || !normalized.ok) {
+    const e = new Error(normalized.message || `SolMan login failed (${response.status})`);
+    e.status = response.ok ? 401 : response.status;
     e.responseData = text;
     e.requestUrl = url;
     throw e;
   }
 
-  return normalizeSolmanLoginResponse(text, url);
+  return normalized;
 }

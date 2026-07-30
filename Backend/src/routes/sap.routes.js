@@ -202,8 +202,8 @@ function getDefaultServiceMaps({ owner, systemId }) {
       owner,
       systemId,
       serviceType: "PO",
-      serviceName: process.env.DEFAULT_PO_SERVICE_NAME || "ZMM_PO_DETAILS_SRV",
-      entitySet: process.env.DEFAULT_PO_ENTITYSET || "Po_detailsSet",
+      serviceName: process.env.DEFAULT_PO_SERVICE_NAME || "",
+      entitySet: process.env.DEFAULT_PO_ENTITYSET || "",
       entityTypeName: "Po_details",
       idField: "PoNo",
       itemField: "PoItem",
@@ -477,6 +477,55 @@ sapRoutes.post("/systems", async (req, res, next) => {
   }
 });
 
+// PATCH /sap/systems/:systemId
+sapRoutes.patch("/systems/:systemId", async (req, res, next) => {
+  try {
+    const owner = getOwner(req);
+    const systemId = normalizeSystemId(req.params.systemId);
+    const name = clampString(req.body?.name || req.body?.description || "", 80);
+
+    if (!systemId) {
+      return res.status(400).json({ ok: false, error: "systemId is required" });
+    }
+
+    if (!name) {
+      return res.status(400).json({ ok: false, error: "name is required" });
+    }
+
+    const doc = await SapSystem.findOneAndUpdate(
+      { owner: { $in: [owner, "local"] }, systemId },
+      {
+        $set: {
+          name,
+          updatedAt: new Date(),
+        },
+      },
+      { returnDocument: "after" }
+    ).lean();
+
+    if (!doc) {
+      return res.status(404).json({ ok: false, error: `System not found for systemId=${systemId}` });
+    }
+
+    return res.json({
+      ok: true,
+      item: {
+        _id: String(doc._id),
+        name: doc.name || "",
+        systemId: doc.systemId,
+        protocol: doc.protocol || "https",
+        host: doc.host,
+        port: doc.port,
+        sapRouter: doc.sapRouter || "",
+        createdAt: doc.createdAt,
+        updatedAt: doc.updatedAt,
+      },
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // DELETE /sap/systems/:systemId
 sapRoutes.delete("/systems/:systemId", async (req, res, next) => {
   try {
@@ -687,7 +736,7 @@ sapRoutes.post("/credentials", async (req, res, next) => {
             port: system.port,
             sapUser,
             sapPassword,
-            requireMappedSystem: true,
+            requireMappedSystem: false,
           });
 
           if (!loginResult?.ok) {
@@ -736,6 +785,13 @@ sapRoutes.post("/credentials", async (req, res, next) => {
 
         validationInfo = { validated: true };
       }
+    }
+
+    if (validate && validationInfo?.validated !== true) {
+      return res.status(401).json({
+        ok: false,
+        error: validationInfo?.warning || "SAP credential validation failed",
+      });
     }
 
     const enc = encryptString(sapPassword);
@@ -898,7 +954,7 @@ sapRoutes.post("/connect", async (req, res, next) => {
             port: sys.port,
             sapUser: cred.sapUser,
             sapPassword: plainPassword,
-            requireMappedSystem: true,
+            requireMappedSystem: false,
           });
 
           if (!loginResult?.ok) {
@@ -946,6 +1002,13 @@ sapRoutes.post("/connect", async (req, res, next) => {
           return res.status(401).json({ ok: false, error: msg });
         }
       }
+    }
+
+    if (validate && validationInfo?.validated !== true) {
+      return res.status(401).json({
+        ok: false,
+        error: validationInfo?.warning || "SAP connection validation failed",
+      });
     }
 
     const now = new Date();
@@ -1081,72 +1144,21 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
       });
     }
 
-    let plainPassword = "";
-    try {
-      plainPassword = decryptString({
-        enc: cred.encPassword,
-        iv: cred.encIv,
-        tag: cred.encTag,
-      });
-    } catch {
-      return res.status(500).json({ ok: false, error: "Failed to decrypt stored SAP credentials." });
-    }
-
-    const loginRequest = buildSapLoginRequest({
-      systemId,
+    const profile = {
       sapUser,
-      sapPassword: plainPassword,
-      requireMappedSystem: true,
-    });
-
-    console.info("[sap.routes] selected user-profile login target", {
+      firstName: String(cred?.profileFirstName || "").trim(),
+      lastName: String(cred?.profileLastName || "").trim(),
+      fullName: String(cred?.profileFullName || "").trim() || String(sys?.name || "").trim(),
+      email: String(cred?.profileEmail || "").trim(),
+      cached: true,
+      source: "db",
       systemId,
-      baseUrl: loginRequest.baseUrl,
-      serviceName: loginRequest.serviceName,
-      entitySet: loginRequest.entitySet,
-      requestUrl: loginRequest.requestUrl,
-    });
-
-    const response = await fetch(loginRequest.requestUrl, {
-      method: "GET",
-      headers: {
-        Accept: "application/json, application/xml, text/xml, application/atom+xml",
-        Authorization: buildBasicAuthHeader(cred.sapUser, plainPassword),
-        "X-Requested-With": "XMLHttpRequest",
-      },
-    });
-
-    const { data: sapData, raw: sapRaw } = await parseJsonResponse(response);
-
-    if (!response.ok) {
-      const err = new Error(`SAP login request failed (${response.status})`);
-      err.status = response.status;
-      err.responseData = sapRaw;
-      err.requestUrl = loginRequest.requestUrl;
-      throw err;
-    }
-
-    if (!sapData) {
-      const err = new Error("SAP login response was not valid JSON.");
-      err.status = 502;
-      err.responseData = sapRaw;
-      err.requestUrl = loginRequest.requestUrl;
-      throw err;
-    }
-
-    const results = sapData?.d?.results;
-    const row = Array.isArray(results) ? results[0] : sapData?.d;
-
-    const profile = row
-      ? {
-          sapUser,
-          firstName: String(row?.Firstname || "").trim(),
-          lastName: String(row?.Lastname || "").trim(),
-          fullName: String(row?.Fullname || "").trim(),
-          email: extractProfileEmail(row),
-          cached: false,
-        }
-      : { sapUser, firstName: "", lastName: "", fullName: "", email: "", cached: false };
+      systemName: String(sys?.name || "").trim(),
+      protocol: String(sys?.protocol || "https").trim(),
+      host: String(sys?.host || "").trim(),
+      port: sys?.port ?? null,
+      sapRouter: String(sys?.sapRouter || "").trim(),
+    };
 
     const now = new Date();
 

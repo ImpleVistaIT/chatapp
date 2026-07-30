@@ -55,6 +55,8 @@ function mapSuggestionsFromMessage(message = {}) {
 
 function mapDbMessageToUi(message = {}) {
   return {
+    id: message?._id || message?.id || null,
+    createdAt: message?.createdAt || message?.created_at || null,
     role: message?.role,
     text: message?.text,
     summary: message?.summary,
@@ -129,10 +131,12 @@ export default function ChatWindow({
   const [showSystemDropdown, setShowSystemDropdown] = useState(false);
   const [connectingSystemId, setConnectingSystemId] = useState(null);
   const [localConnectedSession, setLocalConnectedSession] = useState(null);
+  const composerSendLockRef = useRef({ text: "", at: 0 });
 
   const apiBase = API_BASE;
 
   const normalizeSystemId = useCallback((sid) => String(sid || "").trim().toUpperCase(), []);
+  const isMongoId = (v) => /^[a-f0-9]{24}$/i.test(String(v || ""));
 
   const normalizedAvailableSystems = useMemo(() => {
     const tileList = Array.isArray(tiles) ? tiles : [];
@@ -209,22 +213,28 @@ export default function ChatWindow({
   const activeSapUser = String(effectiveSession?.sapUser || "").trim();
 
   const resolvedSessionId = useMemo(() => {
-    if (sessionId) return sessionId;
+    if (sessionId && isMongoId(sessionId)) return sessionId;
+
+    try {
+      const stored = JSON.parse(localStorage.getItem("chatSessionId") || "null");
+      if (isMongoId(stored)) return stored;
+    } catch {}
+
     const id = activeConv?.id;
-    return typeof id === "string" ? id : null;
+    return isMongoId(id) ? id : null;
   }, [sessionId, activeConv?.id]);
 
   const buildSendPayload = useCallback(
     (overrides = {}) => {
       const {
-        systemId: _ignoredSystemId,
+        systemId: overrideSystemId,
         sapUser: overrideSapUser,
         ...rest
       } = overrides || {};
 
       return {
         availableSystems: normalizedAvailableSystems,
-        systemId: activeSystemId || "",
+        systemId: overrideSystemId || activeSystemId || "",
         sapUser: overrideSapUser ?? activeSapUser ?? "",
         sessionId: resolvedSessionId,
         ...rest,
@@ -279,10 +289,9 @@ const isConnected = useMemo(() => {
   const [msgNextBefore, setMsgNextBefore] = useState(null);
   const [msgLoadingMore, setMsgLoadingMore] = useState(false);
   const [msgHasMore, setMsgHasMore] = useState(true);
+  const hydratedSessionRef = useRef(null);
 
   const messagesElRef = useRef(null);
-
-  const isMongoId = useCallback((v) => /^[a-f0-9]{24}$/i.test(String(v || "")), []);
 
   const canFetchDbMessages = Boolean(resolvedSessionId && isMongoId(resolvedSessionId));
 
@@ -373,6 +382,7 @@ const isConnected = useMemo(() => {
 
   const fetchLatestMessages = useCallback(async () => {
     if (!canFetchDbMessages) return;
+    if (!resolvedSessionId || !isMongoId(resolvedSessionId)) return;
 
     setMsgLoadingMore(true);
     try {
@@ -399,11 +409,46 @@ const isConnected = useMemo(() => {
 
       const uiMessages = items.map(mapDbMessageToUi);
 
-      if (typeof setConversations === "function" && activeConv?.id) {
+      if (typeof setConversations === "function" && activeConv?.id === resolvedSessionId) {
         setConversations((prev) =>
           prev.map((c) => {
             if (c.id !== activeConv.id) return c;
-            return { ...c, messages: uiMessages, updatedAt: Date.now() };
+
+            const existingMessages = Array.isArray(c.messages) ? c.messages : [];
+            const existingById = new Map(
+              existingMessages
+                .filter((message) => message?.id)
+                .map((message) => [String(message.id), message])
+            );
+
+            const mergedMessages = uiMessages.map((message) => {
+              const existing = message?.id ? existingById.get(String(message.id)) : null;
+              if (!existing) return message;
+
+              const mergedSuggestions =
+                Array.isArray(existing.suggestions) && existing.suggestions.length > 0
+                  ? existing.suggestions
+                  : message.suggestions;
+
+              const mergedAction = existing.action || message.action || null;
+
+              return {
+                ...message,
+                ...existing,
+                suggestions: mergedSuggestions,
+                action: mergedAction,
+              };
+            });
+
+            console.log("[ChatWindow] fetchLatestMessages replace", {
+              activeConvId: activeConv.id,
+              serverCount: uiMessages.length,
+              existingCount: existingMessages.length,
+              serverIds: uiMessages.map((message) => message?.id || null),
+              existingIds: existingMessages.map((message) => message?.id || null),
+            });
+
+            return { ...c, messages: mergedMessages, updatedAt: Date.now() };
           })
         );
       }
@@ -412,7 +457,19 @@ const isConnected = useMemo(() => {
       setMsgHasMore(Boolean(nextBefore) && items.length > 0);
 
       setTimeout(() => {
-        bottomRef?.current?.scrollIntoView?.({ behavior: "auto" });
+        if (loading) {
+          const assistantGroups = messagesElRef.current?.querySelectorAll("[data-assistant-group='true']");
+          const target = assistantGroups?.[assistantGroups.length - 1];
+          target?.scrollIntoView?.({ block: "start", behavior: "auto" });
+          return;
+        }
+
+        const el = messagesElRef.current;
+        if (!el) return;
+
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 12) {
+          bottomRef?.current?.scrollIntoView?.({ behavior: "auto" });
+        }
       }, 0);
     } catch (e) {
       console.error("Failed to fetch latest messages:", e);
@@ -423,10 +480,13 @@ const isConnected = useMemo(() => {
     apiBase,
     bottomRef,
     canFetchDbMessages,
+    loading,
+    messagesElRef,
     normalizeSystemId,
     resolvedSessionId,
     setConversations,
     activeConv?.id,
+    resolvedSessionId,
   ]);
 
   const fetchOlderMessages = useCallback(async () => {
@@ -494,7 +554,8 @@ const isConnected = useMemo(() => {
     setMsgNextBefore(null);
     setMsgHasMore(true);
 
-    if (canFetchDbMessages) {
+    if (canFetchDbMessages && hydratedSessionRef.current !== resolvedSessionId) {
+      hydratedSessionRef.current = resolvedSessionId;
       fetchLatestMessages();
     }
   }, [canFetchDbMessages, fetchLatestMessages]);
@@ -803,22 +864,11 @@ const isConnected = useMemo(() => {
 
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
+        e.stopPropagation();
         if (!canInteract) return;
         if (loading) return;
         if (!String(input || "").trim()) return;
-        console.log("[ChatWindow] composer send", {
-          activeSystemId,
-          activeSapUser,
-          normalizedAvailableSystems,
-          sessionId: resolvedSessionId,
-        });
-        onSend?.(
-          buildSendPayload({
-            overrideText: input,
-            displayText: input,
-            sessionId: resolvedSessionId,
-          })
-        );
+        submitComposerMessage("enter");
       }
     },
     [
@@ -833,6 +883,34 @@ const isConnected = useMemo(() => {
       normalizedAvailableSystems,
       resolvedSessionId,
     ]
+  );
+
+  const submitComposerMessage = useCallback(
+    (source = "submit") => {
+      if (!canInteract) return;
+      if (loading) return;
+
+      const text = String(input || "").trim();
+      if (!text) return;
+
+      const now = Date.now();
+      const last = composerSendLockRef.current;
+      if (last.text === text && now - last.at < 600) {
+        return;
+      }
+
+      composerSendLockRef.current = { text, at: now };
+
+      onSend?.(
+        buildSendPayload({
+          overrideText: text,
+          displayText: text,
+          sessionId: resolvedSessionId,
+          source,
+        })
+      );
+    },
+    [canInteract, loading, input, onSend, buildSendPayload, resolvedSessionId]
   );
 
   return (
@@ -896,16 +974,8 @@ const isConnected = useMemo(() => {
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (!canInteract) return;
-                  if (loading) return;
-                  if (!String(input || "").trim()) return;
-                  onSend?.(
-                    buildSendPayload({
-                      overrideText: input,
-                      displayText: input,
-                      sessionId: resolvedSessionId,
-                    })
-                  );
+                  e.stopPropagation();
+                  submitComposerMessage("submit");
                 }}
               >
                 <div className="flex items-end gap-2">

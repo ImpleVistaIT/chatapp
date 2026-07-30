@@ -189,6 +189,16 @@ export async function getSapAuthOrThrow({ owner, systemId, sapUser }) {
   const cred = await findCredentialForSystem({ owner, systemId: sid, sapUser: su });
 
   console.log("[SSE] credential found?", Boolean(cred));
+  if (cred) {
+    console.log("[SSE] credential selected", {
+      owner,
+      systemId: sid,
+      sapUser: String(cred.sapUser || "").trim().toUpperCase() || null,
+      lastUsedAt: cred.lastUsedAt || null,
+      updatedAt: cred.updatedAt || null,
+      source: su ? "exact-or-regex-match" : "same-system-fallback",
+    });
+  }
 
   if (!cred) {
     const e = new Error(

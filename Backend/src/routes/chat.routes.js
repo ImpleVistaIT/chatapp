@@ -9,6 +9,7 @@ import {
   getSolmanChangeRequestDetails,
   listSolmanChangeRequests,
   listSolmanTransports,
+  checkSolmanTransportDependencies,
   getPurchaseOrderDetailsAction,
 } from "../controllers/chat.actions.controller.js";
 import { sendChatReportEmail } from "../controllers/chat.email.controller.js";
@@ -59,6 +60,11 @@ chatRoutes.post(
 chatRoutes.post(
   "/actions/solman/list-transports",
   listSolmanTransports
+);
+
+chatRoutes.post(
+  "/actions/solman/check-transport-dependencies",
+  checkSolmanTransportDependencies
 );
 
 chatRoutes.post(

@@ -216,6 +216,7 @@ export default function ReplyTable({ columns, rows, forceGrid = false, renderCel
                         row,
                         column: c,
                         columnIndex: colIdx,
+                        rowIndex: idx,
                       }) : null;
 
                       return (

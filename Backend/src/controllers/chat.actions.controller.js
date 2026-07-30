@@ -6,7 +6,7 @@ import {
   listSolmanChangeRequestsByDateRange,
 } from "../services/systems/solman/charm.service.js";
 import { getPurchaseOrderDetails } from "../services/systems/s4hana/po.service.js";
-import { getTransportNumbersFromCr } from "../services/systems/solman/transport.service.js";
+import { getDependentTransportsFromCr, getTransportNumbersFromCr } from "../services/systems/solman/transport.service.js";
 import { createTransportRequest } from "../services/systems/solman/transportRequest.service.js";
 import { postToSap } from "../services/sap/sapWrite.service.js";
 import { persistAssistantAndTouchSession } from "./stream/solman/solman.shared.js";
@@ -98,14 +98,6 @@ function validateListChangeRequestsInput(body) {
 }
 
 function validateListTransportsInput(body) {
-  if (!cleanString(body?.systemId)) {
-    return "systemId is required.";
-  }
-
-  if (!cleanString(body?.sapUser)) {
-    return "sapUser is required.";
-  }
-
   if (!cleanString(body?.objectId)) {
     return "objectId is required.";
   }
@@ -479,6 +471,41 @@ export const listSolmanTransports = createSapActionHandler({
   }),
 });
 
+export const checkSolmanTransportDependencies = createSapActionHandler({
+  executor: "solman.transport.dependencyCheck",
+
+  validate: validateListTransportsInput,
+
+  execute: async ({ owner, body }) => {
+    const connection = await resolveSapConnection({
+      owner,
+      systemId: body.systemId,
+      sapUser: body.sapUser,
+    });
+
+    return await getDependentTransportsFromCr({
+      system: connection.system,
+      sapAuth: connection.sapAuth,
+      changeRequestId: body.objectId,
+      processType: body.processType || "",
+    });
+  },
+
+  mapSuccessResult: (result) => ({
+    changeRequestId: result?.result?.changeRequestId || result?.changeRequestId || "",
+    processType: result?.result?.processType || result?.processType || "",
+    sourceTransports: Array.isArray(result?.result?.sourceTransports)
+      ? result.result.sourceTransports
+      : [],
+    dependencies: Array.isArray(result?.result?.dependencies)
+      ? result.result.dependencies
+      : [],
+    dependencyMessage: result?.result?.dependencyMessage || "",
+    raw: result?.result?.raw || result?.raw || null,
+    message: result?.message || "",
+  }),
+});
+
 export const submitSolmanCreateTransportTask = createSapActionHandler({
   executor: "solman.transport.createTransportTask",
 
@@ -678,8 +705,8 @@ export const getPurchaseOrderDetailsAction = createSapActionHandler({
       req: {
         sapSystem: connection.system,
         sapService: {
-          serviceName: body.serviceName || process.env.DEFAULT_PO_SERVICE_NAME || "ZMM_PO_DETAILS_SRV",
-          entitySet: body.entitySet || process.env.DEFAULT_PO_ENTITYSET || "Po_detailsSet",
+          serviceName: body.serviceName || process.env.DEFAULT_PO_SERVICE_NAME || "",
+          entitySet: body.entitySet || process.env.DEFAULT_PO_ENTITYSET || "",
         },
         sapAuth: connection.sapAuth,
       },

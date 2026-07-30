@@ -6,19 +6,6 @@ export function normalizeSystemId(systemId) {
 	return cleanString(systemId).toUpperCase();
 }
 
-export const SAP_LOGIN_TARGETS = Object.freeze({
-	HSD: Object.freeze({
-		baseUrl: "https://vedr.go.akamai-access.com",
-		serviceName: "ZNEW_USER_LOGIN_SRV",
-		entitySet: "user_loginSet",
-	}),
-	S4D: Object.freeze({
-		baseUrl: "https://vhcals4dci.dummy.nodomain:44300",
-		serviceName: "ZSAP_USER_LOGIN_SRV",
-		entitySet: "user_dataSet",
-	}),
-});
-
 function normalizeTargetConfig(systemId, target) {
 	return {
 		systemId,
@@ -28,7 +15,10 @@ function normalizeTargetConfig(systemId, target) {
 	};
 }
 
-export function resolveSapLoginTargetConfig(systemId, { loginTargets = SAP_LOGIN_TARGETS, requireMappedSystem = true } = {}) {
+export function resolveSapLoginTargetConfig(
+	systemId,
+	{ loginTargets = null, requireMappedSystem = true, fallbackTarget = null } = {}
+) {
 	const normalizedSystemId = normalizeSystemId(systemId);
 
 	if (!normalizedSystemId) {
@@ -38,7 +28,8 @@ export function resolveSapLoginTargetConfig(systemId, { loginTargets = SAP_LOGIN
 		throw err;
 	}
 
-	const target = normalizeTargetConfig(normalizedSystemId, loginTargets?.[normalizedSystemId]);
+	const targetSource = loginTargets?.[normalizedSystemId] || fallbackTarget || null;
+	const target = normalizeTargetConfig(normalizedSystemId, targetSource);
 
 	if (!target.baseUrl || !target.serviceName || !target.entitySet) {
 		if (!loginTargets?.[normalizedSystemId]) {
@@ -67,10 +58,11 @@ export function buildSapLoginRequest({
 	systemId,
 	sapUser,
 	sapPassword,
-	loginTargets = SAP_LOGIN_TARGETS,
+	loginTargets = null,
 	requireMappedSystem = true,
+	fallbackTarget = null,
 } = {}) {
-	const target = resolveSapLoginTargetConfig(systemId, { loginTargets, requireMappedSystem });
+	const target = resolveSapLoginTargetConfig(systemId, { loginTargets, requireMappedSystem, fallbackTarget });
 
 	if (!target) {
 		return null;

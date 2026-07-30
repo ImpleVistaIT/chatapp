@@ -110,15 +110,14 @@ export async function orchestrateChatRequest({
     ? req.body.availableSystems
     : [];
 
-  const incomingSystemId = String(req?.body?.systemId || "").trim();
-  let resolvedSystemId = incomingSystemId || null;
+  let resolvedSystemId = null;
   let systemResolution = null;
 
-  if (!incomingSystemId && availableSystems.length > 0) {
+  if (availableSystems.length > 0) {
     systemResolution = await resolveTargetSystem({
       query: classifierQuery,
       classified,
-      requestedSystemId: incomingSystemId,
+      requestedSystemId: "",
       availableSystems,
     });
 

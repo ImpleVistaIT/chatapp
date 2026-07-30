@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReplyTable from "./ReplyTable";
 import PODetailsDrawer from "./PODetailsDrawer";
 import { replyToTable } from "../utils/replyToTable";
-import { getSolmanChangeRequestDetails, listSolmanTransports } from "../api/solmanApi";
+import { checkSolmanTransportDependencies, getSolmanChangeRequestDetails, listSolmanTransports } from "../api/solmanApi";
 import { getPurchaseOrderDetails, getS4dPurchaseOrderDetails } from "../api/chatApi";
 import {
   Cell,
@@ -32,8 +32,8 @@ function Avatar({ role, showAvatar = true }) {
 
   return (
     <div
-      className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full bg-white shadow-sm"
-      title="Bot"
+      className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full shadow-sm"
+      title="AI BOT"
     >
       <video
         src="/bot.mp4"
@@ -119,6 +119,14 @@ function renderPieSliceLabel({ cx = 0, cy = 0, midAngle = 0, innerRadius = 0, ou
 }
 
 function TransportDrawer({ open, title, status = "", loading, error, transports, onClose }) {
+  const normalizedTransports = Array.isArray(transports)
+    ? transports
+    : Array.isArray(transports?.drawerRows)
+      ? transports.drawerRows
+      : Array.isArray(transports?.rows)
+        ? transports.rows
+        : [];
+
   useEffect(() => {
     if (!open) return undefined;
 
@@ -131,6 +139,82 @@ function TransportDrawer({ open, title, status = "", loading, error, transports,
   }, [open, onClose]);
 
   if (!open) return null;
+
+  function readTransportFieldValue(row, keys = []) {
+    if (typeof row === "string" || typeof row === "number") {
+      const text = String(row).trim();
+      return text || "";
+    }
+
+    const sourceRow = row?.raw || row?._raw || row;
+
+    for (const key of Array.isArray(keys) ? keys : []) {
+      const value = sourceRow?.[key];
+      if (value == null) continue;
+
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        const text = String(value).trim();
+        if (text) return text;
+      }
+
+      if (typeof value === "object") {
+        const nestedCandidates = [
+          value.value,
+          value.text,
+          value.Text,
+          value.description,
+          value.Description,
+          value.label,
+          value.Label,
+          value.name,
+          value.Name,
+          value._,
+          value.__text,
+          value.__value,
+        ];
+
+        for (const candidate of nestedCandidates) {
+          const text = String(candidate ?? "").trim();
+          if (text) return text;
+        }
+      }
+    }
+
+    if (sourceRow && typeof sourceRow === "object") {
+      for (const value of Object.values(sourceRow)) {
+        if (value == null) continue;
+
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+          const text = String(value).trim();
+          if (text) return text;
+        }
+
+        if (typeof value === "object") {
+          const nestedCandidates = [
+            value.value,
+            value.text,
+            value.Text,
+            value.description,
+            value.Description,
+            value.label,
+            value.Label,
+            value.name,
+            value.Name,
+            value._,
+            value.__text,
+            value.__value,
+          ];
+
+          for (const candidate of nestedCandidates) {
+            const text = String(candidate ?? "").trim();
+            if (text) return text;
+          }
+        }
+      }
+    }
+
+    return "";
+  }
 
   const drawerContent = (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40 backdrop-blur-[1px]" onMouseDown={onClose}>
@@ -170,29 +254,95 @@ function TransportDrawer({ open, title, status = "", loading, error, transports,
             <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
               {error}
             </div>
-          ) : Array.isArray(transports) && transports.length > 0 ? (
+          ) : Array.isArray(normalizedTransports) && normalizedTransports.length > 0 ? (
             <div className="space-y-3">
-              {transports.map((transport, index) => {
-                const showRowNumber = transports.length > 1;
+              {normalizedTransports.map((transport, index) => {
+                const showRowNumber = normalizedTransports.length > 1;
+                const sourceTransport = typeof transport === "object" && transport !== null ? transport : { transport };
+                const transportValue = readTransportFieldValue(transport, [
+                  "transport",
+                  "Trkorr",
+                  "TRKORR",
+                  "Transport",
+                  "TRANSPORT",
+                  "TransportNo",
+                  "TRANSPORT_NO",
+                ]);
+                const descriptionValue = readTransportFieldValue(transport, [
+                  "description",
+                  "Desc",
+                  "DESC",
+                  "Description",
+                  "DESCRIPTION",
+                  "ShortText",
+                  "SHORT_TEXT",
+                ]);
+                const ownerValue = readTransportFieldValue(transport, [
+                  "owner",
+                  "Owner",
+                  "OWNER",
+                  "CreatedBy",
+                  "CREATED_BY",
+                  "User",
+                  "USERNAME",
+                  "AS4USER",
+                ]);
+                const transportTypeValue = readTransportFieldValue(transport, [
+                  "TrfuncDescription",
+                  "transportType",
+                  "taskType",
+                  "taskReleased",
+                  "Trfunction",
+                  "TRFUNCTION",
+                  "TransportType",
+                  "TRANSPORT_TYPE",
+                  "TRFUNCTION_CODE",
+                  "TaskFuncDescription",
+                  "TASK_FUNC_DESCRIPTION",
+                  "TaskFuncText",
+                  "TASK_FUNC_TEXT",
+                ]);
+                const taskValue = readTransportFieldValue(transport, [
+                  "Tasks",
+                  "TASKS",
+                  "Task",
+                  "TASK",
+                ]);
+                const taskOwnerValue = readTransportFieldValue(transport, [
+                  "TaskOwner",
+                  "TASK_OWNER",
+                  "owner",
+                  "Owner",
+                  "OWNER",
+                  "AS4USER",
+                ]);
+                const taskTypeValue = readTransportFieldValue(transport, [
+                  "TaskFuncDescription",
+                  "TASK_FUNC_DESCRIPTION",
+                  "TaskFuncText",
+                  "TASK_FUNC_TEXT",
+                  "TaskFunc",
+                  "TASK_FUNC",
+                ]);
                 const rows = [
                   ...(showRowNumber ? [{ label: "No", value: index + 1 }] : []),
-                  { label: "Transport", value: transport?.transport || transport?.Trkorr || "-" },
-                  { label: "Description", value: transport?.description || transport?.Desc || "-" },
-                  { label: "Owner", value: transport?.owner || transport?.Owner || transport?.TaskOwner || "-" },
-                  { label: "Transport Type", value: transport?.TrfuncDescription || transport?.transportType || transport?.taskType || transport?.taskReleased || "-" },
-                  { label: "Task", value: transport?.Tasks || transport?.TaskFuncDescription || transport?.TaskFunc || "-" },
-                  { label: "Task Owner", value: transport?.TaskOwner || transport?.owner || "-" },
-                  { label: "Task Type", value: transport?.TaskFuncDescription || transport?.taskType || transport?.TaskFunc || "-" },
-                  { label: "Dev Created", value: formatSapDateTime(transport?.DevCreatedDate, transport?.DevCreatedTime) },
-                  { label: "Dev Released", value: formatSapDateTime(transport?.DevReleasedDate, transport?.DevReleasedTime) },
-                  { label: "Task Released", value: formatSapDateTime(transport?.TaskExdate, transport?.TaskExtime) },
+                  { label: "Transport", value: transportValue },
+                  { label: "Description", value: descriptionValue },
+                  { label: "Owner", value: ownerValue },
+                  { label: "Transport Type", value: transportTypeValue },
+                  { label: "Task", value: taskValue },
+                  { label: "Task Owner", value: taskOwnerValue },
+                  { label: "Task Type", value: taskTypeValue },
+                  { label: "Dev Created", value: formatSapDateTime(sourceTransport?.DevCreatedDate, sourceTransport?.DevCreatedTime) },
+                  { label: "Dev Released", value: formatSapDateTime(sourceTransport?.DevReleasedDate, sourceTransport?.DevReleasedTime) },
+                  { label: "Task Released", value: formatSapDateTime(sourceTransport?.TaskExdate, sourceTransport?.TaskExtime) },
                 ];
 
                 return (
-                  <div key={`${transport?.Trkorr || transport?.transport || index}`} className="overflow-hidden rounded-3xl border border-sky-100 bg-gradient-to-br from-white to-sky-50/30 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
+                  <div key={`${transportValue || transport?.Trkorr || transport?.transport || index}`} className="overflow-hidden rounded-3xl border border-sky-100 bg-gradient-to-br from-white to-sky-50/30 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
                     <div className="border-b border-sky-100 bg-gradient-to-r from-sky-50 to-cyan-50 px-4 py-3">
                       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Transport Record</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-900">{transport?.transport || transport?.Trkorr || `Record ${index + 1}`}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{transportValue || `Record ${index + 1}`}</div>
                     </div>
 
                     <table className="w-full border-collapse text-sm">
@@ -203,7 +353,7 @@ function TransportDrawer({ open, title, status = "", loading, error, transports,
                               {field.label}
                             </th>
                             <td className="px-4 py-3 align-top text-sm font-medium text-slate-900 break-words whitespace-pre-wrap">
-                              {String(field.value || "-").trim() || "-"}
+                              {String(field.value ?? "-").trim() || "-"}
                             </td>
                           </tr>
                         ))}
@@ -215,7 +365,7 @@ function TransportDrawer({ open, title, status = "", loading, error, transports,
             </div>
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
-              No transports found for this Change Request.
+              {error || "No transport details found for the connected system."}
             </div>
           )}
         </div>
@@ -238,6 +388,24 @@ function formatPoDrawerValue(value) {
 function formatPoDrawerError(value) {
   const text = poValueToText(value);
   return text || "Failed to fetch purchase order details.";
+}
+
+function readStoredActiveSession() {
+  try {
+    const raw = localStorage.getItem("sapActiveSession");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredSelectedSystem() {
+  try {
+    const raw = localStorage.getItem("sapSelectedSystem");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
 }
 
 function poValueToText(value) {
@@ -1134,16 +1302,52 @@ export default function MessageBubble({
   }, []);
 
   const handleOpenTransportDrawer = useCallback(
-    async (changeRequestId) => {
-      const cr = String(changeRequestId || "").trim();
+    async (changeRequestIdOrRow) => {
+      const sourceRow = changeRequestIdOrRow && typeof changeRequestIdOrRow === "object" ? changeRequestIdOrRow : null;
+      const cr = sourceRow
+        ? String(
+            sourceRow.crNumber ||
+              sourceRow.CR_NUMBER ||
+              sourceRow.CrNumber ||
+              sourceRow.changeRequestId ||
+              sourceRow.ChangeRequestId ||
+              sourceRow.OBJECT_ID ||
+              sourceRow.OBJ_ID ||
+              sourceRow.CR_NO ||
+              sourceRow.CR ||
+              ""
+          ).trim() || getSolmanCrNumber(sourceRow)
+        : String(changeRequestIdOrRow || "").trim();
       if (!cr) return;
 
-      const storedContext = readStoredSapContext();
+      const backendContextSystemId = String(
+        sourceRow?.systemId ||
+          sourceRow?.SYSTEM_ID ||
+          sourceRow?.system ||
+          sourceRow?.SystemId ||
+          data?.systemId ||
+          data?.result?.systemId ||
+          data?.responseMeta?.systemId ||
+          data?.systemResolution?.databaseSystemId ||
+          data?.systemResolution?.targetSystemId ||
+          readStoredActiveSession()?.systemId ||
+          readStoredSelectedSystem()?.systemId ||
+          ""
+      ).trim();
+      const backendContextSapUser = String(
+        data?.sapUser ||
+          data?.result?.sapUser ||
+          data?.responseMeta?.sapUser ||
+          readStoredActiveSession()?.sapUser ||
+          readStoredSelectedSystem()?.sapUser ||
+          ""
+      ).trim();
+
       const resolvedSystemId = String(
-        systemId || storedContext.systemId || data?.systemId || data?.result?.systemId || ""
+        backendContextSystemId || systemId || ""
       ).trim();
       const resolvedSapUser = String(
-        sapUser || storedContext.sapUser || data?.sapUser || data?.result?.sapUser || ""
+        backendContextSapUser || sapUser || ""
       ).trim();
 
       setTransportDrawer({
@@ -1158,31 +1362,70 @@ export default function MessageBubble({
 
       try {
         if (!resolvedSystemId) {
-          throw new Error("systemId is required.");
+          const missingReason = sourceRow?.systemId || sourceRow?.SYSTEM_ID || data?.systemId || data?.result?.systemId
+            ? "The selected record did not carry a usable SAP system mapping for transport lookup."
+            : "The backend response did not include a SAP system mapping for this record.";
+
+          setTransportDrawer({
+            open: true,
+            loading: false,
+            error: `${missingReason} The drawer needs the record's systemId mapped in the database before it can fetch transport details.`,
+            title: `CR ${cr}`,
+            status: "",
+            changeRequestId: cr,
+            transports: [],
+          });
+          return;
         }
 
-        const transportResult = await listSolmanTransports({
+        const transportResult = await checkSolmanTransportDependencies({
           systemId: resolvedSystemId,
           sapUser: resolvedSapUser,
           objectId: cr,
         });
 
-        const transportRows = Array.isArray(transportResult?.result?.rows)
-          ? transportResult.result.rows
-          : Array.isArray(transportResult?.result?.transports)
-            ? transportResult.result.transports
-            : Array.isArray(transportResult?.transports)
-              ? transportResult.transports
-              : Array.isArray(transportResult?.rows)
-                ? transportResult.rows
-                : [];
+        console.log("[UI][TRANSPORT_DRAWER] transport dependency response", {
+          hasResult: Boolean(transportResult?.result),
+          sourceTransports: Array.isArray(transportResult?.result?.sourceTransports)
+            ? transportResult.result.sourceTransports.length
+            : null,
+          dependencies: Array.isArray(transportResult?.result?.dependencies)
+            ? transportResult.result.dependencies.length
+            : null,
+          rows: Array.isArray(transportResult?.result?.rows) ? transportResult.result.rows.length : null,
+          topLevelSourceTransports: Array.isArray(transportResult?.sourceTransports)
+            ? transportResult.sourceTransports.length
+            : null,
+          topLevelDependencies: Array.isArray(transportResult?.dependencies)
+            ? transportResult.dependencies.length
+            : null,
+        });
+
+        const transportRows = Array.isArray(transportResult?.result?.raw?.transportLookup?.d?.results)
+          ? transportResult.result.raw.transportLookup.d.results
+          : Array.isArray(transportResult?.result?.rows)
+            ? transportResult.result.rows
+            : Array.isArray(transportResult?.result?.dependencies)
+              ? transportResult.result.dependencies
+              : Array.isArray(transportResult?.result?.tableRows)
+                ? transportResult.result.tableRows
+                : Array.isArray(transportResult?.dependencies)
+                  ? transportResult.dependencies
+                  : Array.isArray(transportResult?.sourceTransports)
+                    ? transportResult.sourceTransports.map((transport) => ({ Trkorr: transport }))
+                    : Array.isArray(transportResult?.tableRows)
+                      ? transportResult.tableRows
+                      : Array.isArray(transportResult?.rows)
+                        ? transportResult.rows
+                        : [];
 
         const resolvedStatus = String(
           transportResult?.message ||
             transportResult?.result?.message ||
+            transportResult?.result?.dependencyMessage ||
             transportRows[0]?.Message ||
-            transportRows[0]?.TrfuncDescription ||
-            transportRows[0]?.Trfunction ||
+            transportRows[0]?.description ||
+            transportRows[0]?.dependentTransport ||
             ""
         ).trim();
 
@@ -1200,7 +1443,7 @@ export default function MessageBubble({
           open: true,
           loading: false,
           status: "",
-          error: err?.message || "Failed to fetch transport details.",
+          error: err?.message || "Transport lookup failed because the record could not be mapped to a SAP system in the database.",
           title: `CR ${cr}`,
           changeRequestId: cr,
           transports: [],
@@ -1230,23 +1473,7 @@ export default function MessageBubble({
     });
 
     try {
-      const storedContext = readStoredSapContext();
-      const resolvedSystemId = String(systemId || data?.systemId || data?.result?.systemId || "").trim();
-      const resolvedSapUser = String(sapUser || data?.sapUser || data?.result?.sapUser || "").trim();
-      const finalSystemId = resolvedSystemId || storedContext.systemId;
-      const finalSapUser = resolvedSapUser || storedContext.sapUser;
-
-      if (!finalSystemId) {
-        throw new Error("systemId is required.");
-      }
-
-      if (!finalSapUser) {
-        throw new Error("sapUser is required.");
-      }
-
       const poResult = await getS4dPurchaseOrderDetails({
-        systemId: finalSystemId,
-        sapUser: finalSapUser,
         poNumber,
       });
 
@@ -1275,16 +1502,27 @@ export default function MessageBubble({
   }, []);
 
   const renderCrNumberCell = useCallback(
-    ({ value, column }) => {
+    ({ value, column, row, rowIndex }) => {
       if (String(column || "").toLowerCase() !== "cr number") return null;
 
       const cr = String(value || "").trim();
       if (!cr || cr === "-") return null;
 
+      const sourceRow =
+        (row && typeof row === "object" ? row : null) ||
+        visibleCRRecords?.[Number(rowIndex)] ||
+        searchFilteredRecords?.[Number(rowIndex)] ||
+        allCRRecords?.[Number(rowIndex)] ||
+        null;
+
+      const drawerRow = sourceRow && typeof sourceRow === "object"
+        ? { ...sourceRow, crNumber: cr }
+        : { crNumber: cr };
+
       return (
         <button
           type="button"
-          onClick={() => handleOpenTransportDrawer(cr)}
+          onClick={() => handleOpenTransportDrawer(drawerRow)}
           className="text-blue-600 underline decoration-blue-400 decoration-1 underline-offset-2 transition hover:text-blue-800"
         >
           {cr}

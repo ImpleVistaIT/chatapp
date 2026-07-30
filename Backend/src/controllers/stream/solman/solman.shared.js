@@ -1245,15 +1245,27 @@ export function buildPaginationSuggestions(rows = []) {
 
 export function buildCrSuggestions(query = "", scopeLabel = "", rows = []) {
   const q = cleanString(query).toLowerCase();
-  void q;
-  void scopeLabel;
-  void rows;
+  const crNumber = cleanString(getCrNumber(Array.isArray(rows) ? rows[0] : null));
+  const crLabel = crNumber || "the CR from the result";
+  const scopePrefix = cleanString(scopeLabel) ? `${cleanString(scopeLabel)} ` : "";
 
-  return [
-    "Create Task",
-    "Release Task",
-    "Create Transport Request",
+  const suggestions = [
+    `Show transport for the CR ${crLabel}`,
+    `Show dependency check for the CR ${crLabel}`,
+    `Show CR created last month`,
   ];
+
+  if (q.includes("week")) {
+    suggestions[2] = `Show CR created last week`;
+  } else if (q.includes("yesterday")) {
+    suggestions[2] = `Show CR created yesterday`;
+  }
+
+  if (scopePrefix) {
+    return suggestions.map((suggestion) => suggestion.replace(/^Show /, `Show ${scopePrefix}`));
+  }
+
+  return suggestions;
 }
 
 export async function persistAssistantAndTouchSession({

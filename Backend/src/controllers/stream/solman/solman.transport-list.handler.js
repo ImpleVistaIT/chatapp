@@ -72,6 +72,30 @@ function buildTransportTableRows(rows = []) {
   }));
 }
 
+function buildTransportDrawerRows(rows = []) {
+  return rows.map((item, index) => ({
+    no: index + 1,
+    transport: cleanString(item?.Trkorr) || cleanString(item?.TRKORR) || "-",
+    description: cleanString(item?.Desc) || cleanString(item?.DESCRIPTION) || cleanString(item?.ShortText) || "-",
+    owner: cleanString(item?.Owner) || cleanString(item?.CreatedBy) || cleanString(item?.AS4USER) || "-",
+    transportType:
+      cleanString(item?.TrfuncDescription) ||
+      cleanString(item?.Trfunction) ||
+      cleanString(item?.TransportTypeText) ||
+      "-",
+    task: cleanString(item?.Tasks) || cleanString(item?.Task) || "-",
+    taskOwner: cleanString(item?.TaskOwner) || cleanString(item?.owner) || cleanString(item?.Owner) || "-",
+    taskType:
+      cleanString(item?.TaskFuncDescription) ||
+      cleanString(item?.TaskFunc) ||
+      cleanString(item?.TaskFuncText) ||
+      "-",
+    devCreated: formatDateTime(item?.DevCreatedDate, item?.DevCreatedTime),
+    devReleased: formatDateTime(item?.DevReleasedDate, item?.DevReleasedTime),
+    taskReleased: formatDateTime(item?.TaskExdate, item?.TaskExtime),
+  }));
+}
+
 function formatTransportListReply(result = {}) {
   const changeRequestId = cleanString(result?.changeRequestId);
   const rows = Array.isArray(result?.rows) ? result.rows : [];
@@ -191,10 +215,13 @@ export async function handleTransportList(context) {
 
   const rows = Array.isArray(result?.result?.rows) ? result.result.rows : [];
   const tableRows = buildTransportTableRows(rows);
+  const drawerRows = buildTransportDrawerRows(rows);
   const reply = formatTransportListReply(result.result);
 
   const responseData = {
     ...(result?.result || {}),
+    systemId: effectiveSystemId,
+    sapUser: effectiveSapUser,
     viewType: "transport_list_table",
     columns: [
       "No",
@@ -210,6 +237,7 @@ export async function handleTransportList(context) {
       "Task Released",
     ],
     tableRows,
+    drawerRows,
     emptyState:
       rows.length === 0
         ? `Transport details for CR ${objectId || "-"}\n\nNo transports found for this change request.`

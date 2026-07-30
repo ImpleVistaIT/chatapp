@@ -1,5 +1,4 @@
 import userImg from "../../assets/user.png";
-import SystemDetailsPanel from "./SystemDetailsPanel.jsx";
 import { FiPlus, FiSettings, FiShield, FiTrash2, FiUser } from "react-icons/fi";
 
 function classNames(...x) {
@@ -19,7 +18,7 @@ function resolveAppDisplayName(userNameProp) {
   const fromProp = String(userNameProp || "").trim();
   if (fromProp) return fromProp;
 
-  return "User";
+  return "";
 }
 
 export default function UserMenu({
@@ -28,118 +27,92 @@ export default function UserMenu({
   setUserMenuOpen,
   showSystemDetails,
   setShowSystemDetails,
-  activeSystemData,
+  systems = [],
+  selectedSystemId = "",
+  onSelectSystem = () => {},
   userName,
   onAddNewSystem,
   removeActiveSystem,
   activeSession,
-  activeTile = null,
 }) {
-  const appName = resolveAppDisplayName(userName);
+  const hasSystems = Array.isArray(systems) && systems.length > 0;
+  const selectedSystem = systems.find((system) => normalizeSystemId(system?.systemId) === normalizeSystemId(selectedSystemId)) || null;
+  const hasSelection = Boolean(selectedSystem);
 
-  const selectedSid = normalizeSystemId(activeSystemData?.systemId || activeSystemData?.name);
-  const selectedSapUser = String(activeSystemData?.sapUser || "").trim();
-
-  const activeSid = normalizeSystemId(activeSession?.systemId || "");
-  const activeSapUser = String(activeSession?.sapUser || "").trim();
-
-  const tileSapUser = String(
-    activeTile?.sapUser || activeTile?.system?.sapUser || ""
+  const selectedSystemUserName = String(
+    selectedSystem?.profileFullName ||
+      selectedSystem?.system?.profileFullName ||
+      selectedSystem?.sapUser ||
+      ""
   ).trim();
-  const tileFirstName = String(activeTile?.profileFirstName || "").trim();
-  const tileFullName = String(activeTile?.profileFullName || "").trim();
 
-  const tileConnected =
-    activeTile?.connected === true ||
-    activeTile?.isConnected === true ||
-    activeTile?.status === "connected" ||
-    activeTile?.active === true;
+  const fallbackSystemUserName = String(
+    systems.find((system) => String(system?.profileFullName || system?.system?.profileFullName || "").trim())?.profileFullName ||
+      systems.find((system) => String(system?.profileFullName || system?.system?.profileFullName || "").trim())?.system?.profileFullName ||
+      ""
+  ).trim();
 
-  const hasSelection = Boolean(selectedSid || activeSid);
-  const isConnected = Boolean(
-    tileConnected ||
-      activeSapUser ||
-      selectedSapUser ||
-      tileSapUser ||
-      (activeSid && selectedSid && activeSid === selectedSid)
-  );
+  const primaryName = String(
+    activeSession?.fullName ||
+      selectedSystemUserName ||
+      activeSession?.sapUser ||
+      fallbackSystemUserName ||
+      ""
+  ).trim();
 
-  const isActiveForSelected =
-    Boolean(selectedSid) &&
-    Boolean(activeSid) &&
-    selectedSid === activeSid &&
-    Boolean(activeSapUser || selectedSapUser);
-
-  const systemLabel =
-    String(activeSystemData?.name || "").trim() ||
-    String(activeTile?.name || "").trim() ||
-    String(activeSystemData?.systemId || "").trim() ||
-    String(activeTile?.systemId || "").trim() ||
-    activeSid ||
-    "";
-
-  const displayName =
-    String(activeSession?.fullName || "").trim() ||
-    String(activeSession?.firstName || "").trim() ||
-    activeSapUser ||
-    tileFullName ||
-    tileFirstName ||
-    tileSapUser ||
-    selectedSapUser ||
-    appName;
-
-  const primaryName = isConnected ? displayName : appName;
-
-  const secondaryLine = hasSelection
-    ? `${systemLabel || selectedSid}${isConnected ? "" : " (Disconnected)"}`
-    : "Disconnected";
+  const displayName = primaryName || normalizeSystemId(selectedSystem?.systemId || "") || "";
+  const showEmptyState = !displayName && !hasSelection && !hasSystems;
 
   return (
     <div className="p-3 flex-shrink-0 relative">
-      <SystemDetailsPanel
-        open={showSystemDetails}
-        onClose={() => setShowSystemDetails(false)}
-        system={activeTile}
-      />
-
       <div ref={menuRef} className="relative rounded-[18px] border border-slate-200 bg-white/90 p-3 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl">
         <button
           onClick={() => {
-            if (!hasSelection && !isConnected) return;
+            if (!hasSelection && !hasSystems) return;
             setUserMenuOpen((v) => !v);
           }}
           className={classNames(
             "flex items-center gap-3 w-full text-left rounded-2xl p-0 transition-all duration-150",
-            hasSelection || isConnected ? "hover:bg-slate-50" : "opacity-70 cursor-default"
+            hasSelection || hasSystems ? "hover:bg-slate-50" : "opacity-70 cursor-default"
           )}
           type="button"
-          disabled={!hasSelection && !isConnected}
-          aria-disabled={!hasSelection && !isConnected}
+          disabled={!hasSelection && !hasSystems}
+          aria-disabled={!hasSelection && !hasSystems}
         >
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-sm">
             <FiUser className="h-5 w-5" />
           </div>
 
           <div className="flex flex-col min-w-0 flex-1 text-left">
-            <span className="text-xs font-semibold text-slate-900 truncate">
-              {primaryName}
-            </span>
-
-            <div className="flex items-center gap-1 mt-0.5">
-              <span className="text-[11px] text-slate-500 truncate flex-1">
-                {secondaryLine}
-              </span>
-
-              {isActiveForSelected && isConnected && (
-                <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                  <FiShield className="h-3 w-3" />
-                  Active
+            {showEmptyState ? (
+              <>
+                <span className="text-xs font-semibold text-slate-400 truncate">No active system</span>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="inline-flex items-center gap-1 text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                    <FiShield className="h-3 w-3" />
+                    Inactive
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <span className="text-xs font-semibold text-slate-900 truncate">
+                  {displayName}
                 </span>
-              )}
-            </div>
+
+                <div className="flex items-center gap-1 mt-0.5">
+                  {selectedSystem && (
+                    <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                      <FiShield className="h-3 w-3" />
+                      Active
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
-          {(hasSelection || isConnected) && (
+          {(hasSelection || hasSystems) && (
             <svg
               className={classNames(
                 "w-3.5 h-3.5 text-slate-400 flex-shrink-0 transition-transform duration-200",
@@ -157,11 +130,12 @@ export default function UserMenu({
           )}
         </button>
 
-        {(hasSelection || isConnected) && userMenuOpen && (
+        {(hasSelection || hasSystems) && userMenuOpen && (
           <div className="absolute bottom-full left-0 w-72 rounded-[20px] border border-slate-200 bg-white shadow-[0_20px_50px_rgba(15,23,42,0.14)] z-50 mb-2 overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-200 bg-slate-50">
-              <div className="text-xs font-semibold text-slate-900">{primaryName}</div>
-              <div className="text-[11px] text-slate-500">{secondaryLine}</div>
+              <div className="text-xs font-semibold text-slate-900">
+                {displayName || "No active system"}
+              </div>
             </div>
 
             <div className="py-2 text-xs">
@@ -169,11 +143,11 @@ export default function UserMenu({
                 className="w-full text-left px-4 py-2.5 hover:bg-slate-50 text-slate-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
                 onClick={() => {
                   setUserMenuOpen(false);
-                  setShowSystemDetails(true);
+                  setShowSystemDetails?.(true);
                 }}
                 type="button"
-                disabled={!isConnected}
-                title={!isConnected ? "Connect to view system details" : "System Details"}
+                disabled={!hasSystems}
+                title={!hasSystems ? "No connected systems" : "System Details"}
               >
                 <FiSettings className="h-3.5 w-3.5" />
                 System Details
@@ -195,7 +169,7 @@ export default function UserMenu({
                 className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-red-600 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
                 onClick={() => {
                   setUserMenuOpen(false);
-                  removeActiveSystem?.(activeSystemData);
+                  removeActiveSystem?.(selectedSystem);
                 }}
                 type="button"
                 disabled={!hasSelection}

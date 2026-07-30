@@ -62,6 +62,20 @@ function isMongoId(v) {
   return /^[a-f0-9]{24}$/i.test(String(v || ""));
 }
 
+function createMessageId(prefix = "msg") {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createChatMessage(message = {}) {
+  const role = String(message?.role || "").toLowerCase() === "assistant" ? "assistant" : "user";
+
+  return {
+    id: createMessageId(role),
+    createdAt: Date.now(),
+    ...message,
+  };
+}
+
 function normalizeSystemId(sid) {
   return String(sid || "").trim().toUpperCase();
 }
@@ -138,6 +152,15 @@ function isPurchaseOrderPrompt(text) {
 function readStoredSelectedSystem() {
   try {
     return normalizeSelectedSystem(JSON.parse(localStorage.getItem("sapSelectedSystem") || "null"));
+  } catch {
+    return null;
+  }
+}
+
+function readStoredPendingAction() {
+  try {
+    const raw = localStorage.getItem("solmanPendingAction");
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
@@ -447,7 +470,7 @@ export default function Chat({ onToast = null } = {}) {
   const [showSolmanImportTransportToProductionForm, setShowSolmanImportTransportToProductionForm] = useState(false);
   const [showSolmanReleaseTaskForm, setShowSolmanReleaseTaskForm] = useState(false);
   const [showSolmanReleaseTransportForm, setShowSolmanReleaseTransportForm] = useState(false);
-  const [pendingAction, setPendingAction] = useState(null);
+  const [pendingAction, setPendingAction] = useState(() => readStoredPendingAction());
 
   const [activeSession, setActiveSession] = useState(() => {
     try {
@@ -472,6 +495,14 @@ export default function Chat({ onToast = null } = {}) {
       localStorage.removeItem("sapSelectedSystem");
     }
   }, [selectedSystem]);
+
+  useEffect(() => {
+    if (pendingAction) {
+      localStorage.setItem("solmanPendingAction", JSON.stringify(pendingAction));
+    } else {
+      localStorage.removeItem("solmanPendingAction");
+    }
+  }, [pendingAction]);
 
   const [systems, setSystems] = useState([]);
   const [tiles, setTiles] = useState([]);
@@ -706,7 +737,7 @@ export default function Chat({ onToast = null } = {}) {
       id: "draft",
       title: "New chat",
       messages: [
-        {
+        createChatMessage({
           role: "assistant",
           text: "Hi, Welcome to ImpleVista AI. How may I assist you?",
           suggestions: [
@@ -714,7 +745,7 @@ export default function Chat({ onToast = null } = {}) {
             "Show PO created in January 2026",
             "Show details of PO 4500001933",
           ],
-        },
+        }),
       ],
       updatedAt: Date.now(),
     },
@@ -743,6 +774,10 @@ export default function Chat({ onToast = null } = {}) {
 
   const abortRef = useRef(null);
   const sendingRef = useRef(false);
+  const lastSendGuardRef = useRef({ text: "", convId: "", at: 0 });
+  const lastStreamRequestRef = useRef(null);
+  const placeholderMessageIdRef = useRef(null);
+  const restoredPendingActionRef = useRef(new Set());
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -760,6 +795,23 @@ export default function Chat({ onToast = null } = {}) {
 
     return conversations[0] || null;
   }, [conversations, activeId]);
+
+  useEffect(() => {
+    if (pendingAction) return;
+    if (!activeConv?.messages?.length) return;
+
+    const restoreKey = String(activeConv.id || "");
+    if (restoredPendingActionRef.current.has(restoreKey)) return;
+
+    const messages = Array.isArray(activeConv.messages) ? activeConv.messages : [];
+    const lastAssistant = [...messages].reverse().find((message) => message?.role === "assistant");
+    const restoredPendingAction = lastAssistant?.pendingAction || lastAssistant?.data?.pendingAction || null;
+
+    if (restoredPendingAction && typeof restoredPendingAction === "object") {
+      restoredPendingActionRef.current.add(restoreKey);
+      setPendingAction(restoredPendingAction);
+    }
+  }, [activeConv?.messages, pendingAction]);
 
   const availableSystems = useMemo(() => {
     return buildAvailableSystemsFromTiles(tiles);
@@ -855,6 +907,13 @@ export default function Chat({ onToast = null } = {}) {
       prev.map((c) => {
         if (String(c.id) !== String(convId)) return c;
         const messages = typeof updater === "function" ? updater(c.messages) : updater;
+        console.log("[Chat] updateConversationById", {
+          convId,
+          beforeCount: Array.isArray(c.messages) ? c.messages.length : 0,
+          afterCount: Array.isArray(messages) ? messages.length : 0,
+          beforeIds: (Array.isArray(c.messages) ? c.messages : []).map((message) => message?.id || null),
+          afterIds: (Array.isArray(messages) ? messages : []).map((message) => message?.id || null),
+        });
         return { ...c, messages, updatedAt: Date.now() };
       })
     );
@@ -862,6 +921,114 @@ export default function Chat({ onToast = null } = {}) {
 
   function updateActiveMessages(updater) {
     updateConversationById(activeId, updater);
+  }
+
+  function upsertAssistantPlaceholder(convId, messageId, payload = {}) {
+    if (!messageId) return;
+
+    const normalizeSuggestions = (value) => {
+      if (!Array.isArray(value)) return null;
+      const filtered = value.filter(Boolean);
+      return filtered.length > 0 ? filtered : null;
+    };
+
+    setConversations((prev) =>
+      prev.map((conversation) => {
+        if (String(conversation.id) !== String(convId)) return conversation;
+
+        const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+        const placeholderIndex = messages.findIndex((message) => String(message?.id) === String(messageId));
+        const existingMessage = placeholderIndex >= 0 ? messages[placeholderIndex] : null;
+        console.log("[Chat] upsertAssistantPlaceholder", {
+          convId,
+          messageId,
+          placeholderIndex,
+          beforeCount: messages.length,
+          payloadKeys: Object.keys(payload || {}),
+        });
+        const placeholder = createChatMessage({
+          id: messageId,
+          role: "assistant",
+          text: payload.text ?? "",
+          suggestions:
+            normalizeSuggestions(payload.suggestions) !== null
+              ? normalizeSuggestions(payload.suggestions)
+              : existingMessage?.suggestions,
+          summary: payload.summary || "",
+          summaryStatus: payload.summary ? "done" : "pending",
+          data: payload.data !== undefined ? payload.data : existingMessage?.data || null,
+          chart:
+            payload.chart ||
+            (payload?.type === "status_distribution" ? payload : null) ||
+            (payload?.data?.statusDistribution ? payload.data.statusDistribution : null) ||
+            existingMessage?.chart ||
+            null,
+          extracted: payload.extracted !== undefined ? payload.extracted : existingMessage?.extracted || null,
+          responseMeta:
+            payload.responseMeta !== undefined
+              ? payload.responseMeta
+              : existingMessage?.responseMeta || null,
+          query: payload.query || "",
+          pagination: payload.pagination !== undefined ? payload.pagination : existingMessage?.pagination || null,
+          pendingAction:
+            payload.pendingAction !== undefined
+              ? payload.pendingAction
+              : existingMessage?.pendingAction || null,
+          action: payload.action !== undefined ? payload.action : existingMessage?.action || null,
+        });
+
+        if (placeholderIndex === -1) {
+          return {
+            ...conversation,
+            messages: [...messages, placeholder],
+            updatedAt: Date.now(),
+          };
+        }
+
+        const nextMessages = [...messages];
+        nextMessages[placeholderIndex] = {
+          ...nextMessages[placeholderIndex],
+          ...placeholder,
+        };
+
+        return {
+          ...conversation,
+          messages: nextMessages,
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  }
+
+  function appendUserMessageOnce(convId, messageText) {
+    const nextText = String(messageText || "").trim();
+    if (!nextText) return;
+
+    setConversations((prev) =>
+      prev.map((conversation) => {
+        if (String(conversation.id) !== String(convId)) return conversation;
+
+        const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+        const lastMessage = messages[messages.length - 1] || null;
+        const lastText = String(lastMessage?.text || lastMessage?.summary || "").trim();
+
+        if (lastMessage?.role === "user" && lastText === nextText) {
+          return conversation;
+        }
+
+        console.log("[Chat] appendUserMessageOnce", {
+          convId,
+          beforeCount: messages.length,
+          nextText,
+        });
+
+        return {
+          ...conversation,
+          messages: [...messages, createChatMessage({ role: "user", text: nextText })],
+          updatedAt: Date.now(),
+        };
+      })
+    );
   }
 
   function handleDelete(id) {
@@ -1148,9 +1315,39 @@ export default function Chat({ onToast = null } = {}) {
     const upperText = String(text || "").trim().toUpperCase();
     const isFollowupChoice = upperText === "ROW" || upperText === "INDIA";
     const isPendingFollowup = Boolean(pendingContext || pendingAction);
+    const sendSignature = `${currentConvId}::${uiText}::${isFollowupChoice ? "choice" : "normal"}`;
+    const now = Date.now();
+    const lastSend = lastSendGuardRef.current;
+    const isDuplicateLocalSend =
+      lastSend.convId === currentConvId &&
+      lastSend.text === uiText &&
+      now - lastSend.at < 1000;
+
+    if (isDuplicateLocalSend) {
+      return;
+    }
+
+    lastSendGuardRef.current = {
+      text: uiText,
+      convId: currentConvId,
+      at: now,
+    };
+
+    const logMessages = (label, messages) => {
+      console.log(`[Chat] ${label}`, (Array.isArray(messages) ? messages : []).map((message) => ({
+        id: message?.id || null,
+        role: message?.role || null,
+        text: String(message?.text || message?.summary || "").slice(0, 80),
+        createdAt: message?.createdAt || null,
+        updatedAt: message?.updatedAt || null,
+      })));
+    };
 
     if (!fromEdit) {
-      updateConversationById(currentConvId, (m) => [...m, { role: "user", text: uiText }]);
+      const beforeMessages = activeConv?.messages || [];
+      logMessages("messages before Prompt 2", beforeMessages);
+
+      appendUserMessageOnce(currentConvId, uiText);
 
       setConversations((prev) =>
         prev.map((c) => {
@@ -1181,13 +1378,31 @@ export default function Chat({ onToast = null } = {}) {
       const isNextQuery = /\b(next|more|another|load|show\s+more)\b/i.test(text);
       if (!isNextQuery) cursorRef.current = null;
 
+      if (!isFollowupChoice && !isPendingFollowup) {
+        console.log("[Chat] preserving prior assistant messages for new request", {
+          currentConvId,
+          activeMessageCount: Array.isArray(activeConv?.messages) ? activeConv.messages.length : 0,
+        });
+      }
+
       setStatusText("Interpreting your query...");
 
       let streamedPayload = null;
+      const streamRequestId = createMessageId("stream");
+      lastStreamRequestRef.current = streamRequestId;
+      const assistantPlaceholderId = createMessageId("assistant");
+      placeholderMessageIdRef.current = assistantPlaceholderId;
+
+      upsertAssistantPlaceholder(currentConvId, assistantPlaceholderId, {
+        text: "",
+        summary: "",
+        query: text,
+        pendingAction: pendingContext || pendingAction || null,
+      });
 
       await sendChatMessageStream(text, {
         apiBase,
-        systemId: safeExplicitSystemId || fallbackConnectedSystemId || null,
+        systemId: safeExplicitSystemId || null,
         sapUser: effectiveSapUser || null,
         sessionId: sessionIdToSend,
         availableSystems:
@@ -1202,9 +1417,14 @@ export default function Chat({ onToast = null } = {}) {
         },
 
         onReply: (payload) => {
+          if (lastStreamRequestRef.current !== streamRequestId) return;
           streamedPayload = payload;
         },
       });
+
+      if (lastStreamRequestRef.current !== streamRequestId) {
+        return;
+      }
 
       const data = streamedPayload;
       if (!data) throw new Error("No reply received from stream");
@@ -1232,25 +1452,23 @@ export default function Chat({ onToast = null } = {}) {
         window.dispatchEvent(new Event("chatSessionsChanged"));
       }
 
-      updateConversationById(targetConvId, (m) => [
-        ...m,
-        {
-          role: "assistant",
-          text: data.reply ?? "",
-          suggestions: data.suggestions,
-          summary: data.summary || "",
-          summaryStatus: data.summary ? "done" : "pending",
-          data: data.data || null,
-          chart:
-            data.chart ||
-            (data?.type === "status_distribution" ? data : null) ||
-            (data?.data?.statusDistribution ? data.data.statusDistribution : null),
-          extracted: data.extracted || null,
-          responseMeta: data.responseMeta || null,
-          query: text,
-          pagination: data.pagination || null,
-        },
-      ]);
+      upsertAssistantPlaceholder(targetConvId, placeholderMessageIdRef.current, {
+        text: data.reply ?? "",
+        suggestions: data.suggestions,
+        summary: data.summary || "",
+        summaryStatus: data.summary ? "done" : "pending",
+        data: data.data || null,
+        chart:
+          data.chart ||
+          (data?.type === "status_distribution" ? data : null) ||
+          (data?.data?.statusDistribution ? data.data.statusDistribution : null),
+        extracted: data.extracted || null,
+        responseMeta: data.responseMeta || null,
+        query: text,
+        pagination: data.pagination || null,
+      });
+
+      placeholderMessageIdRef.current = null;
 
       cursorRef.current = data?.cursor || null;
     } catch (e) {
@@ -1264,6 +1482,13 @@ export default function Chat({ onToast = null } = {}) {
         window.dispatchEvent(new Event("chatSessionsChanged"));
       }
 
+      const assistantPlaceholderId = placeholderMessageIdRef.current;
+      const updateAssistantPlaceholder = (nextPayload) => {
+        if (!assistantPlaceholderId) return false;
+        upsertAssistantPlaceholder(errorConvId, assistantPlaceholderId, nextPayload);
+        return true;
+      };
+
       const actionType = String(payload?.action?.type || payload?.action || "").toLowerCase();
       const actionFormId = String(payload?.action?.formId || payload?.formId || "").trim();
 
@@ -1275,13 +1500,10 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanReleaseTaskForm(false);
         setShowSolmanReleaseTransportForm(false);
 
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          {
-            role: "assistant",
-            text: payload?.message || "Please complete the required change request details.",
-          },
-        ]);
+        updateAssistantPlaceholder({
+          text: payload?.message || "Please complete the required change request details.",
+          pendingAction: payload?.pendingAction || null,
+        }) || updateConversationById(errorConvId, (m) => m);
       } else if (actionType === "open_form" && actionFormId === "solman_create_transport_task") {
         setPendingAction({
           collected: payload?.prefilledData || payload?.pendingAction?.collected || {},
@@ -1293,15 +1515,12 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanReleaseTaskForm(false);
         setShowSolmanReleaseTransportForm(false);
 
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          {
-            role: "assistant",
-            text:
-              payload?.message ||
-              "Please complete the required transport task details.",
-          },
-        ]);
+        updateAssistantPlaceholder({
+          text:
+            payload?.message ||
+            "Please complete the required transport task details.",
+          pendingAction: payload?.pendingAction || null,
+        }) || updateConversationById(errorConvId, (m) => m);
       } else if (actionType === "open_form" && actionFormId === "solman_release_transport_task") {
         setPendingAction({
           collected: payload?.prefilledData || payload?.pendingAction?.collected || {},
@@ -1313,13 +1532,10 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanTransportRequestForm(false);
         setShowSolmanReleaseTransportForm(false);
 
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          {
-            role: "assistant",
-            text: payload?.message || "Please complete the required task number.",
-          },
-        ]);
+        updateAssistantPlaceholder({
+          text: payload?.message || "Please complete the required task number.",
+          pendingAction: payload?.pendingAction || null,
+        }) || updateConversationById(errorConvId, (m) => m);
       } else if (actionType === "open_form" && actionFormId === "solman_create_transport_request") {
         setPendingAction({
           collected: payload?.prefilledData || payload?.pendingAction?.collected || {},
@@ -1332,13 +1548,10 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanReleaseTaskForm(false);
         setShowSolmanReleaseTransportForm(false);
 
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          {
-            role: "assistant",
-            text: payload?.message || "Please complete the required transport request details.",
-          },
-        ]);
+        updateAssistantPlaceholder({
+          text: payload?.message || "Please complete the required transport request details.",
+          pendingAction: payload?.pendingAction || null,
+        }) || updateConversationById(errorConvId, (m) => m);
       } else if (actionType === "open_form" && actionFormId === "solman_release_transport") {
         setPendingAction({
           collected: payload?.prefilledData || payload?.pendingAction?.collected || {},
@@ -1351,10 +1564,10 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanReleaseTaskForm(false);
         setShowSolmanImportTransportToProductionForm(false);
 
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          { role: "assistant", text: payload?.message || "Please complete the required transport release details." },
-        ]);
+        updateAssistantPlaceholder({
+          text: payload?.message || "Please complete the required transport release details.",
+          pendingAction: payload?.pendingAction || null,
+        }) || updateConversationById(errorConvId, (m) => m);
       } else if (actionType === "open_form" && actionFormId === "solman_import_transport_to_production") {
         setPendingAction({
           collected: payload?.prefilledData || payload?.pendingAction?.collected || {},
@@ -1367,22 +1580,18 @@ export default function Chat({ onToast = null } = {}) {
         setShowSolmanReleaseTaskForm(false);
         setShowSolmanReleaseTransportForm(false);
 
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          { role: "assistant", text: payload?.message || "Please provide the transport number to import to production." },
-        ]);
+        updateAssistantPlaceholder({
+          text: payload?.message || "Please provide the transport number to import to production.",
+          pendingAction: payload?.pendingAction || null,
+        }) || updateConversationById(errorConvId, (m) => m);
       } else if (payload?.action?.type === "add_system") {
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          {
-            role: "assistant",
-            text:
-              payload?.message ||
-              "This system isn’t added yet. Please add it to continue.",
-            suggestions: [payload?.action?.label || "Add System"],
-            action: payload?.action || null,
-          },
-        ]);
+        updateAssistantPlaceholder({
+          text:
+            payload?.message ||
+            "No transport details found for the connected system.",
+          suggestions: [payload?.action?.label || "Add System"],
+          action: payload?.action || null,
+        }) || updateConversationById(errorConvId, (m) => m);
       } else if (
         payload?.status === "needs_input" &&
         Array.isArray(payload?.missingFields) &&
@@ -1394,17 +1603,13 @@ export default function Chat({ onToast = null } = {}) {
           ? payload.action.options.map((x) => x?.label || x?.value).filter(Boolean)
           : ["ROW", "INDIA"];
 
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          {
-            role: "assistant",
-            text:
-              payload?.message ||
-              "Which landscape would you like to view the Change Requests from?",
-            suggestions: options,
-            pendingAction: payload?.pendingAction || null,
-          },
-        ]);
+        updateAssistantPlaceholder({
+          text:
+            payload?.message ||
+            "Which landscape would you like to view the Change Requests from?",
+          suggestions: options,
+          pendingAction: payload?.pendingAction || null,
+        }) || updateConversationById(errorConvId, (m) => m);
       } else if (
         payload?.status === "needs_input" &&
         Array.isArray(payload?.missingFields) &&
@@ -1414,18 +1619,14 @@ export default function Chat({ onToast = null } = {}) {
           ? payload.systemResolution.candidates
           : [];
 
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          {
-            role: "assistant",
-            text: payload?.message || "Please specify which system to use.",
-            ...(candidates.length > 0
-              ? {
-                  suggestions: candidates.map((id) => `Use ${id}`),
-                }
-              : {}),
-          },
-        ]);
+        updateAssistantPlaceholder({
+          text: payload?.message || "Please specify which system to use.",
+          ...(candidates.length > 0
+            ? {
+                suggestions: candidates.map((id) => `Use ${id}`),
+              }
+            : {}),
+        }) || updateConversationById(errorConvId, (m) => m);
       } else if (payload?.status === "disconnected_system") {
         const targetSystem =
           payload?.systemResolution?.targetSystem ||
@@ -1436,20 +1637,14 @@ export default function Chat({ onToast = null } = {}) {
           null;
         const notice = buildDisconnectedSystemNotice(targetSystem);
 
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          {
-            role: "assistant",
-            text: notice.text,
-            suggestions: notice.suggestions,
-            action: notice.action,
-          },
-        ]);
+        updateAssistantPlaceholder({
+          text: notice.text,
+          suggestions: notice.suggestions,
+          action: notice.action,
+        }) || updateConversationById(errorConvId, (m) => m);
       } else {
-        updateConversationById(errorConvId, (m) => [
-          ...m,
-          { role: "assistant", text: `Error: ${e.message}` },
-        ]);
+        updateAssistantPlaceholder({ text: `Error: ${e.message}` }) ||
+          updateConversationById(errorConvId, (m) => m);
       }
     } finally {
       setLoading(false);
@@ -1904,36 +2099,7 @@ export default function Chat({ onToast = null } = {}) {
     const systemId = String(resolvedConnection?.systemId || "").trim();
     const sapUser = String(resolvedConnection?.sapUser || "").trim();
 
-    const isConnectedTile = (tile) => {
-      if (!tile || typeof tile !== "object") return false;
-      if (tile.connected === true || tile.isConnected === true || tile.active === true) return true;
-      const status = String(tile.status || "").trim().toLowerCase();
-      return ["connected", "online", "active"].includes(status);
-    };
-
-    const fallbackTile = Array.isArray(tiles)
-      ? tiles.find((tile) => isConnectedTile(tile) && String(tile?.systemId || tile?.SystemId || "").trim())
-      : null;
-
-    const fallbackSystemId = String(fallbackTile?.systemId || fallbackTile?.SystemId || "").trim();
-
-    const effectiveSystemId = systemId || fallbackSystemId;
-    const effectiveSapUser = sapUser || String(fallbackTile?.sapUser || fallbackTile?.user || "").trim();
-
-    let resolvedSapUser = effectiveSapUser;
-
-    if (effectiveSystemId && !resolvedSapUser) {
-      const statusResponse = await authFetch(`${apiBase}/sap/status?systemId=${encodeURIComponent(effectiveSystemId)}`, {
-        method: "GET",
-      });
-
-      const statusPayload = await statusResponse.json().catch(() => ({}));
-      if (statusResponse.ok && statusPayload?.ok === true) {
-        resolvedSapUser = String(statusPayload?.sapUser || "").trim();
-      }
-    }
-
-    if (!effectiveSystemId || !resolvedSapUser) {
+    if (!systemId || !sapUser) {
       throw new Error("Active SAP connection is required to resolve the sender email.");
     }
 
@@ -1942,7 +2108,7 @@ export default function Chat({ onToast = null } = {}) {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ systemId: effectiveSystemId, sapUser: resolvedSapUser }),
+      body: JSON.stringify({ systemId, sapUser }),
     });
 
     const payload = await response.json().catch(() => ({}));

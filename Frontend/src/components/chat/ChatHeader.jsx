@@ -83,11 +83,11 @@ export default function ChatHeader({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <div className="text-sm font-semibold tracking-tight text-slate-900">
-              SAP Enterprise AI Assistant
+              Next-Gen Enterprise AI Assistant
             </div>
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              {systemLabel}
+              LIVE
             </span>
           </div>
           <div className="mt-1 text-xs text-slate-600">
@@ -97,14 +97,6 @@ export default function ChatHeader({
       </div>
 
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 shadow-sm ai-smooth hover:bg-blue-50 hover:text-blue-700 md:inline-flex"
-          title="Global Search"
-        >
-          <FiSearch className="h-4 w-4" />
-          <span>Search</span>
-        </button>
 
         <button
           type="button"
