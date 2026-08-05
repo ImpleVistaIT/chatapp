@@ -21,4 +21,27 @@ Thumbs.db
 dist/
 build/
  
- chatapp124
+# ==========================
+# Python / AI Service
+# ==========================
+
+# Virtual environments
+ai-service/venv/
+ai-service/.venv/
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Environment files
+ai-service/.env
+
+# Pytest / type checker caches
+.pytest_cache/
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
