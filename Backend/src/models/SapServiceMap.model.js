@@ -5,8 +5,8 @@ const SapServiceMapSchema = new mongoose.Schema(
     owner: { type: String, required: true },
     systemId: { type: String, required: true },
 
-    // ✅ PO ONLY
-    serviceType: { type: String, enum: ["PO"], required: true },
+    // Supports any extendable procurement CDS source.
+    serviceType: { type: String, required: true },
 
     serviceName: { type: String, required: true },     // Z*/Y*
     entitySet: { type: String, required: true },       // Po_detailsSet

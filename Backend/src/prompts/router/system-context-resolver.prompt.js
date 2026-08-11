@@ -34,6 +34,9 @@ export function buildSystemContextResolverPrompt({
   return `
 You are a system-target resolver for an SAP chatbot.
 
+Your task is to map the user's wording to one of the provided systems using meaning, aliases, and exact IDs.
+Do not depend on grammar or exact keywords. Treat quoted and unquoted system references the same.
+
 Your task:
 Given a user query, a classified business intent, and a list of available systems,
 identify which exact system the user most likely means.
@@ -55,6 +58,11 @@ Important decision rules:
 8. For "resolved" and "disconnected", "targetSystemId" must be one of the provided systemIds.
 9. In "candidates", include only systemIds from the provided list.
 10. Keep "reason" short and concrete.
+
+Examples:
+- "show crs in row" -> prefer the connected system whose aliases include ROW or whose name indicates ROW
+- "use s4h" -> resolve to the connected system whose systemId/name/alias matches S4H
+- "show status in 'India'" -> resolve to the connected INDIA system if available
 
 Return strict JSON only with this exact shape:
 {

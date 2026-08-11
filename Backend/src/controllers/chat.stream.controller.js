@@ -1,9 +1,12 @@
 import { classifyPrompt } from "../services/routing/promptClassifier.service.js";
 import { resolveTargetSystem } from "../services/routing/systemContextResolver.service.js";
 import { normalizePromptWithLlm } from "../services/routing/promptNormalization.service.js";
+import { buildGeneralConversationResponse, detectConversationIntent } from "../services/routing/conversationIntent.service.js";
+import { SapSystem } from "../models/SapSystem.model.js";
 import { SapCredential } from "../models/SapCredential.model.js";
 import { ChatMessage } from "../models/ChatMessage.model.js";
 import { SapConnection } from "../models/SapConnection.model.js";
+import { getSessionPendingAction } from "../services/chat/chatSessionPending.service.js";
 
 import {
   createSseSession,
@@ -19,17 +22,76 @@ function cleanString(v) {
   return String(v || "").trim();
 }
 
+function normalizeSolmanQueryText(query = "") {
+  return cleanString(query)
+    .toLowerCase()
+    .replace(/\bc\.?r\.?['’]?s?\b/g, "cr")
+    .replace(/\bchange requests?\b/g, "cr")
+    .replace(/\brejected\b/g, "withdrawn")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function isNextPageQuery(query) {
   return /\b(?:show\s+)?next\s+\d+\b/.test(cleanString(query).toLowerCase());
 }
 
 function isLandscapeOnlyQuery(query) {
   const q = cleanString(query).toUpperCase();
-  return q === "ROW" || q === "INDIA";
+  return ["ROW", "INDIA", "PRD", "QAS", "DEV", "QA", "UAT", "PROD"].includes(q);
+}
+
+function extractCrNumber(query = "") {
+  const text = String(query || "");
+  const explicit = text.match(/\b(?:cr|change request)\s*(?:number\s*)?(\d{6,20})\b/i);
+  if (explicit) return explicit[1];
+
+  const fallback = text.match(/\b(8\d{9,})\b/);
+  return fallback ? fallback[1] : "";
+}
+
+function isSystemOnline(system) {
+  if (!system) return false;
+  if (system.connected === false) return false;
+  if (system.isConnected === false) return false;
+  return String(system.status || "").toLowerCase() !== "disconnected";
+}
+
+function findResolvedSystem(availableSystems, systemId) {
+  const targetId = normalizeSystemId(systemId);
+  if (!targetId || !Array.isArray(availableSystems)) return null;
+
+  return (
+    availableSystems.find(
+      (system) => normalizeSystemId(system?.systemId || system?.id || system?.code) === targetId
+    ) || null
+  );
+}
+
+function isPurchaseOrderQuery(query) {
+  const q = cleanString(query).toLowerCase();
+  if (!q) return false;
+
+  const hasPoKeyword = /\b(po|purchase\s*order|purchase\s*orders)\b/i.test(q);
+  const hasSolmanCrKeyword = /\b(change\s*request|change\s*requests|cr\b|charm|transport|solman)\b/i.test(q);
+
+  return hasPoKeyword && !hasSolmanCrKeyword;
+}
+
+function isSolmanRelatedQuery(query, classified = null) {
+  const q = cleanString(query).toLowerCase();
+  const system = cleanString(classified?.system || classified?.routing?.system).toLowerCase();
+  const intent = cleanString(classified?.intent || classified?.routing?.intent).toLowerCase();
+
+  if (system === "solman" || intent.includes("change_request") || intent.includes("transport")) {
+    return true;
+  }
+
+  return /\b(change request|change requests|crs?|charm|transport|solman|release\s+task|release\s+transport\s+task|release\s+transport|release\s+tr|transport\s+release|task\s+[a-z]{2,6}\d{4,20}|latest\s+\d+\s+crs?|last\s+\d+\s+crs?|most\s+recent\s+\d+\s+crs?|top\s+\d+\s+crs?)\b/i.test(q);
 }
 
 const ROUTING_KEYWORD_REGEX =
-  /\b(po|purchase\s*order|purchase\s*orders|invoice|vendor|supplier|material|delivery|sales\s*order|change\s*request|change\s*requests|cr|charm|transport|solman|s4|s4hana|created|date|month|year|count|top|skip|offset|order\s*by|latest|recent|newest|status)\b/i;
+  /\b(po|purchase\s*order|purchase\s*orders|invoice|vendor|supplier|material|delivery|sales\s*order|change\s*request|change\s*requests|cr|charm|transport|solman|release\s*task|task|s4|s4hana|created|date|month|year|count|top|skip|offset|order\s*by|latest|recent|newest|status)\b/i;
 
 const COMMON_PROMPT_WORDS = new Set([
   "show",
@@ -105,6 +167,10 @@ export function isLikelyGibberishQuery(query) {
     return true;
   }
 
+  if (/\b(?:release\s+transport|release\s+transport\s+request|release\s+tr|release\s+tr\s+request|transport\s+release|relase\s+tr|relase\s+transport)\b/i.test(q)) {
+    return false;
+  }
+
   if (tokens.length === 1) {
     const t = tokens[0];
     if (t.length < 12) return false;
@@ -148,8 +214,24 @@ function scopeToProcessType(scope) {
   return "";
 }
 
+export function resolveRestoredSolmanQuery({
+  queryIsNextPage,
+  queryIsLandscapeOnly,
+  effectivePendingActionQuery,
+  rawQuery,
+  effectiveQuery,
+}) {
+  return cleanString(
+    queryIsNextPage
+      ? effectivePendingActionQuery || "show cr list"
+      : queryIsLandscapeOnly
+        ? effectivePendingActionQuery || rawQuery || "show cr list"
+        : effectiveQuery || effectivePendingActionQuery
+  );
+}
+
 export function isSolmanCrQuery(query) {
-  const q = cleanString(query).toLowerCase();
+  const q = normalizeSolmanQueryText(query);
 
   if (!q) return false;
 
@@ -173,8 +255,8 @@ export function isSolmanCrQuery(query) {
     /\bapproved cr\b/.test(q) ||
     /\brejected cr\b/.test(q) ||
     /\bpending cr\b/.test(q) ||
-    /\bdependency transport\b/.test(q) ||
-    /\bdependency transports\b/.test(q) ||
+    /\bdependency check\b/.test(q) ||
+    /\bdependency analysis\b/.test(q) ||
     /\btransport created cr\b/.test(q) ||
     /\btransports created cr\b/.test(q) ||
     /\bcreated by me\b/.test(q) ||
@@ -206,8 +288,8 @@ export function isSolmanCrQuery(query) {
     /\bapproved cr\b/,
     /\brejected cr\b/,
     /\bpending cr\b/,
-    /\bdependency transport\b/,
-    /\bdependency transports\b/,
+    /\bdependency check\b/,
+    /\bdependency analysis\b/,
     /\btransport created cr\b/,
     /\btransports created cr\b/,
     /\blast\s+\d+\s+cr\b/,
@@ -237,6 +319,9 @@ export function isSolmanCrQuery(query) {
 }
 
 function resolveSolmanSystemId({ systemResolution, systemId }) {
+  const resolvedFromDatabase = normalizeSystemId(systemResolution?.databaseSystemId);
+  if (resolvedFromDatabase) return resolvedFromDatabase;
+
   const resolvedFromRouting = normalizeSystemId(systemResolution?.targetSystemId);
   if (resolvedFromRouting) return resolvedFromRouting;
 
@@ -254,26 +339,18 @@ function buildSolmanSystemError(systemResolution) {
   if (hasTargetEndpoint) {
     return {
       message:
-        "The required SAP system could not be matched from your current system list. Please add or refresh the correct system to continue.",
-      status: "needs_input",
-      missingFields: ["systemId"],
+        "The required SAP system could not be matched from your current system list.",
+      status: "execution_failed",
+      missingFields: [],
       systemResolution,
-      action: {
-        type: "add_system",
-        label: "Add System",
-      },
     };
   }
 
   return {
-    message: "This system isn’t added yet. Please add it to continue.",
-    status: "needs_input",
-    missingFields: ["systemId"],
+    message: "SAP system resolution failed.",
+    status: "execution_failed",
+    missingFields: [],
     systemResolution,
-    action: {
-      type: "add_system",
-      label: "Add System",
-    },
   };
 }
 
@@ -398,7 +475,15 @@ async function withLiveConnectionFlags({ owner, availableSystems }) {
 
   return systems.map((item) => {
     const sid = normalizeSystemId(item?.systemId || item?.id || item?.code);
-    if (!sid || !connectedSidSet.has(sid)) return item;
+    if (!sid || !connectedSidSet.has(sid)) {
+      return {
+        ...item,
+        connected: false,
+        isConnected: false,
+        status: "disconnected",
+        active: false,
+      };
+    }
 
     return {
       ...item,
@@ -412,6 +497,8 @@ async function withLiveConnectionFlags({ owner, availableSystems }) {
 
 export async function handleChatStream(req, res) {
   const sse = createSseSession(res);
+  const requestId = String(req.headers["x-request-id"] || req.headers["x-correlation-id"] || `req_${Date.now().toString(36)}`).trim();
+  const streamId = `stream_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
   try {
     const owner = getOwner(req);
@@ -425,6 +512,23 @@ export async function handleChatStream(req, res) {
       pendingAction,
     } = req.body || {};
 
+    const sessionLog = {
+      requestId,
+      sessionId: sessionId || null,
+      streamId,
+      messageId: null,
+      reason: null,
+    };
+
+    const logStream = (event, extra = {}) => {
+      console.log(`[CHAT_STREAM] ${event}`, {
+        ...sessionLog,
+        ...extra,
+      });
+    };
+
+    logStream("SSE Started", { reason: "incoming_request" });
+
     const effectiveAvailableSystems = await step("withLiveConnectionFlags", () =>
       withLiveConnectionFlags({
         owner,
@@ -433,6 +537,8 @@ export async function handleChatStream(req, res) {
     );
 
     console.log("[SSE] incoming body:", {
+      requestId,
+      streamId,
       query,
       sessionId,
       systemId,
@@ -442,11 +548,35 @@ export async function handleChatStream(req, res) {
     });
 
     if (!query) {
+      logStream("SSE Completed", { reason: "missing_query" });
       sse.send("error", { message: "query is required" });
       return sse.end();
     }
 
-    if (isLikelyGibberishQuery(query)) {
+    const rawQuery = cleanString(query);
+    const queryLooksLikePo = isPurchaseOrderQuery(rawQuery);
+    const queryLooksLikeReleaseTransport = /\b(?:release\s+transport\s+request|release\s+transport|release\s+tr\s+request|release\s+tr|transport\s+release|relase\s+transport|relase\s+tr)\b/i.test(rawQuery);
+    const preclassifiedRouting = {
+      po: queryLooksLikePo,
+      solman: false,
+      fallback: false,
+      systemId: null,
+      reason: "",
+    };
+    const sessionPendingAction =
+      pendingAction ||
+      (sessionId
+        ? await step("getSessionPendingAction", () => getSessionPendingAction(sessionId))
+        : null);
+    const isExactSolmanContinuation =
+      Boolean(sessionPendingAction) &&
+      (isLandscapeOnlyQuery(rawQuery) || isNextPageQuery(rawQuery));
+
+    const conversationIntent = await step("detectConversationIntent", () =>
+      detectConversationIntent({ query: rawQuery })
+    );
+
+    if (!isExactSolmanContinuation && !queryLooksLikePo && !queryLooksLikeReleaseTransport && isLikelyGibberishQuery(rawQuery)) {
       sse.send("error", {
         message: buildInvalidPromptMessage(),
         status: "invalid_prompt",
@@ -454,13 +584,81 @@ export async function handleChatStream(req, res) {
       return sse.end();
     }
 
+    if (queryLooksLikeReleaseTransport) {
+      const classifiedReleaseTransport = {
+        system: "solman",
+        module: "transport",
+        intent: "release_transport_request",
+        entities: {},
+      };
+
+      const releaseTransportSystemResolution = await step("resolveTargetSystem (release transport)", () =>
+        resolveTargetSystem({
+          query: rawQuery,
+          classified: classifiedReleaseTransport,
+          requestedSystemId: "",
+          availableSystems: effectiveAvailableSystems,
+        })
+      );
+
+      const releaseTransportSystemId = normalizeSystemId(releaseTransportSystemResolution?.targetSystemId || systemId || "");
+      if (!releaseTransportSystemId) {
+        sse.send("error", {
+          message: "Please connect a Solution Manager system to release a transport request.",
+          status: "needs_input",
+          missingFields: ["systemId"],
+        });
+        return sse.end();
+      }
+
+      const releaseTransportSapUser = await step("resolveSolmanSapUser (release transport)", () =>
+        resolveSolmanSapUser({
+          owner,
+          systemId: releaseTransportSystemId,
+          requestedSapUser: sapUser,
+        })
+      );
+
+      if (!releaseTransportSapUser) {
+        sse.send("error", {
+          message: `No SAP credentials saved for systemId=${releaseTransportSystemId}. Please login to Solution Manager first.`,
+          status: "missing_solman_credentials",
+          missingFields: ["sapUser"],
+        });
+        return sse.end();
+      }
+
+      const releaseTransportContext = {
+        sse,
+        owner,
+        query: rawQuery,
+        sessionId,
+        systemId: releaseTransportSystemId,
+        sapUser: releaseTransportSapUser,
+        classified: classifiedReleaseTransport,
+      };
+
+      return await handleSolmanChatStream(releaseTransportContext);
+    }
+
+    if (conversationIntent?.handled && !isExactSolmanContinuation && !queryLooksLikePo) {
+      console.log("Skipping SAP API call - General Conversation");
+      sse.send("reply", buildGeneralConversationResponse(conversationIntent));
+      sse.send("done", { ok: true });
+      logStream("SSE Completed", { reason: "general_conversation" });
+      return sse.end();
+    }
+
+    console.log("SAP Query Detected - Calling SAP API");
+
     const normalizedPrompt = await step("normalizePromptWithLlm", () =>
-      normalizePromptWithLlm({ query })
+      normalizePromptWithLlm({ query: rawQuery })
     );
 
-    const effectiveQuery = cleanString(normalizedPrompt?.normalizedQuery || query) || cleanString(query);
+    const effectiveQuery =
+      cleanString(normalizedPrompt?.normalizedQuery || rawQuery) || rawQuery;
 
-    if (normalizedPrompt?.rejected) {
+    if (normalizedPrompt?.rejected && !isExactSolmanContinuation && !queryLooksLikePo) {
       sse.send("error", {
         message: buildInvalidPromptMessage(),
         status: "invalid_prompt",
@@ -478,10 +676,10 @@ export async function handleChatStream(req, res) {
       message: "Understanding your request...",
     });
 
-    const queryIsNextPage = isNextPageQuery(effectiveQuery);
-    const queryIsLandscapeOnly = isLandscapeOnlyQuery(effectiveQuery);
+    const queryIsNextPage = isNextPageQuery(rawQuery);
+    const queryIsLandscapeOnly = isLandscapeOnlyQuery(rawQuery);
 
-    let effectivePendingAction = pendingAction || null;
+    let effectivePendingAction = sessionPendingAction || null;
 
     if (!effectivePendingAction && sessionId) {
       effectivePendingAction = await step("findLastSolmanListContext", () =>
@@ -506,6 +704,7 @@ export async function handleChatStream(req, res) {
       Boolean(effectivePendingAction) &&
       pendingSystem === "solman" &&
       supportedPendingIntents.has(pendingIntent) &&
+      !queryLooksLikePo &&
       (queryIsNextPage || queryIsLandscapeOnly);
 
     if (
@@ -524,9 +723,17 @@ export async function handleChatStream(req, res) {
 
     if (shouldRestorePendingSolman) {
       const pendingFilters = effectivePendingAction?.filters || {};
+      const restoredOriginalQuery = cleanString(effectivePendingAction?.query) || rawQuery || "show cr list";
+
+      const restoredPromptClassification = await step(
+        "classifyRestoredSolmanPrompt",
+        () => classifyPrompt({ query: restoredOriginalQuery, sessionContext: null })
+      );
+
+      const restoredIntent = cleanString(restoredPromptClassification?.intent || pendingIntent) || pendingIntent;
 
       const restoredScope = queryIsLandscapeOnly
-        ? cleanString(effectiveQuery).toUpperCase()
+        ? rawQuery.toUpperCase()
         : cleanString(businessScope || "");
 
       const restoredProcessType = queryIsLandscapeOnly
@@ -536,7 +743,8 @@ export async function handleChatStream(req, res) {
       console.log("[SSE] restoring pending SolMan action:", {
         businessScope: restoredScope,
         processType: restoredProcessType,
-        originalQuery: effectivePendingAction?.query,
+        originalQuery: restoredOriginalQuery,
+        restoredIntent,
         queryIsNextPage,
         queryIsLandscapeOnly,
       });
@@ -545,16 +753,16 @@ export async function handleChatStream(req, res) {
         "resolveTargetSystem (restored SolMan)",
         () =>
           resolveTargetSystem({
-            query: cleanString(effectivePendingAction?.query) || "show cr list",
+            query: restoredOriginalQuery,
             classified: {
               system: "solman",
-              intent: pendingIntent,
+              intent: restoredIntent,
               routing: {
                 system: "solman",
-                intent: pendingIntent,
+                intent: restoredIntent,
               },
             },
-            requestedSystemId: systemId,
+            requestedSystemId: "",
             availableSystems: effectiveAvailableSystems,
           })
       );
@@ -600,53 +808,71 @@ export async function handleChatStream(req, res) {
         return sse.end();
       }
 
-      const restoredQuery = cleanString(
-        queryIsNextPage
-          ? effectivePendingAction?.query || "show cr list"
-          : queryIsLandscapeOnly
-            ? effectivePendingAction?.query || "show cr list"
-            : effectiveQuery || effectivePendingAction?.query
-      );
+      const restoredQuery = resolveRestoredSolmanQuery({
+        queryIsNextPage,
+        queryIsLandscapeOnly,
+        effectivePendingActionQuery: restoredOriginalQuery,
+        rawQuery,
+        effectiveQuery,
+      });
+
+      const crNumber =
+        cleanString(restoredPromptClassification?.entities?.objectId) ||
+        cleanString(restoredPromptClassification?.entities?.OBJECT_ID) ||
+        extractCrNumber(restoredOriginalQuery);
+
+      const restoredEntities =
+        restoredIntent === "get_change_request_details"
+          ? {
+              objectId: crNumber,
+              processType:
+                cleanString(restoredPromptClassification?.entities?.processType) ||
+                cleanString(restoredPromptClassification?.entities?.PROCESS_TYPE) ||
+                cleanString(pendingFilters.processType) ||
+                scopeToProcessType(restoredScope),
+              businessScope: cleanString(restoredPromptClassification?.entities?.businessScope) || cleanString(restoredScope),
+            }
+          : {
+              businessScope:
+                restoredScope ||
+                cleanString(pendingFilters.businessScope),
+              processType:
+                restoredProcessType ||
+                cleanString(pendingFilters.processType),
+              status: cleanString(pendingFilters.status),
+              dateText: cleanString(restoredQuery),
+              triggerAll: cleanString(pendingFilters.triggerAll || "X") || "X",
+              createdBy: cleanString(pendingFilters.createdBy),
+              createdByMode: cleanString(pendingFilters.createdByMode),
+              top: queryIsNextPage ? null : null,
+              skip: queryIsNextPage
+                ? pendingFilters.nextSkip ?? pendingFilters.skip ?? 0
+                : pendingFilters.skip ?? 0,
+              nextSkip: pendingFilters.nextSkip ?? 0,
+              displayOffset: queryIsNextPage
+                ? pendingFilters.nextDisplayOffset ?? pendingFilters.displayOffset ?? 0
+                : pendingFilters.displayOffset ?? 0,
+              nextDisplayOffset: pendingFilters.nextDisplayOffset ?? pendingFilters.displayOffset ?? 0,
+              orderBy:
+                cleanString(pendingFilters.orderBy || "CREATED_ON desc") ||
+                "CREATED_ON desc",
+              fromDate: "",
+              toDate: "",
+              statusMode: cleanString(pendingFilters.statusMode),
+              excludeStatuses: Array.isArray(pendingFilters.excludeStatuses)
+                ? pendingFilters.excludeStatuses
+                : [],
+            };
+
+      if (queryIsLandscapeOnly && restoredIntent !== "get_change_request_details" && !restoredEntities.processType) {
+        restoredEntities.processType = scopeToProcessType(restoredScope);
+      }
 
       const restoredClassified = {
-        intent: pendingIntent,
+        intent: restoredIntent,
         system: "solman",
-        entities: {
-          businessScope:
-            restoredScope ||
-            cleanString(pendingFilters.businessScope),
-          processType:
-            restoredProcessType ||
-            cleanString(pendingFilters.processType),
-          status: cleanString(pendingFilters.status),
-          dateText: cleanString(pendingFilters.dateText || effectivePendingAction?.query),
-          triggerAll: cleanString(pendingFilters.triggerAll || "X") || "X",
-          createdBy: cleanString(pendingFilters.createdBy),
-          createdByMode: cleanString(pendingFilters.createdByMode),
-          top: queryIsNextPage ? null : pendingFilters.top ?? null,
-          skip: queryIsNextPage
-            ? pendingFilters.nextSkip ?? pendingFilters.skip ?? 0
-            : pendingFilters.skip ?? 0,
-          nextSkip: pendingFilters.nextSkip ?? 0,
-          displayOffset: queryIsNextPage
-            ? pendingFilters.nextDisplayOffset ?? pendingFilters.displayOffset ?? 0
-            : pendingFilters.displayOffset ?? 0,
-          nextDisplayOffset: pendingFilters.nextDisplayOffset ?? pendingFilters.displayOffset ?? 0,
-          orderBy:
-            cleanString(pendingFilters.orderBy || "CREATED_ON desc") ||
-            "CREATED_ON desc",
-          fromDate: cleanString(pendingFilters.fromDate),
-          toDate: cleanString(pendingFilters.toDate),
-          statusMode: cleanString(pendingFilters.statusMode),
-          excludeStatuses: Array.isArray(pendingFilters.excludeStatuses)
-            ? pendingFilters.excludeStatuses
-            : [],
-        },
+        entities: restoredEntities,
       };
-
-      if (queryIsLandscapeOnly && !restoredClassified.entities.processType) {
-        restoredClassified.entities.processType = scopeToProcessType(restoredScope);
-      }
 
       console.log("[SSE] dispatching restored pending action to SolMan stream handler");
 
@@ -654,6 +880,7 @@ export async function handleChatStream(req, res) {
         sse,
         owner,
         query: restoredQuery,
+        displayQuery: rawQuery,
         sessionId,
         systemId: resolvedSystemId,
         sapUser: resolvedSapUser,
@@ -676,32 +903,83 @@ export async function handleChatStream(req, res) {
 
     const queryLooksLikePoContinuation =
       queryIsNextPage && /\bpo\b|purchase\s+orders?/i.test(effectiveQuery);
+    const queryLooksLikeSolman = isSolmanRelatedQuery(effectiveQuery, classified);
 
-    const forcedSolman =
-      !queryLooksLikePoContinuation &&
-      (isSolmanCrQuery(effectiveQuery) ||
-        cleanString(classified?.system).toLowerCase() === "solman");
+    const routingMode = queryLooksLikePo
+      ? "po"
+      : queryLooksLikeSolman || queryLooksLikePoContinuation
+        ? "solman"
+        : "fallback";
 
-    if (forcedSolman) {
-      console.log("[SSE] forcing SolMan routing based on CR query pattern");
+    if (queryLooksLikePo) {
+      preclassifiedRouting.solman = false;
+      preclassifiedRouting.fallback = false;
+      preclassifiedRouting.systemId = normalizeSystemId(systemId) || null;
+      preclassifiedRouting.reason = "purchase_order_query";
+    } else if (queryLooksLikeSolman || queryLooksLikePoContinuation) {
+      preclassifiedRouting.solman = true;
+      preclassifiedRouting.systemId = normalizeSystemId(systemId) || null;
+      preclassifiedRouting.reason = queryLooksLikePoContinuation
+        ? "po_continuation_kept_out_of_solman"
+        : "solman_related_query";
+    } else {
+      preclassifiedRouting.fallback = true;
+      preclassifiedRouting.reason = "fallback_system_resolution";
     }
 
-    const systemResolution = await step("resolveTargetSystem", () =>
+    let systemResolution = null;
+    let useSolman = false;
+    let resolvedSystemId = normalizeSystemId(systemId || "");
+    let resolvedSapUser = cleanString(sapUser);
+
+    const routingRequestSystemId = normalizeSystemId(systemId || "");
+
+    systemResolution = await step("resolveTargetSystem", () =>
       resolveTargetSystem({
         query: effectiveQuery,
-        classified,
-        requestedSystemId: systemId,
+        classified:
+          routingMode === "solman"
+            ? { ...classified, system: "solman", module: "charm", intent: classified?.intent || "list_change_requests" }
+            : routingMode === "po"
+              ? { ...classified, system: "s4hana", module: "mm", intent: classified?.intent || "list_purchase_orders" }
+              : classified,
+        requestedSystemId: "",
         availableSystems: effectiveAvailableSystems,
       })
     );
 
-    const useSolman = !queryLooksLikePoContinuation && (forcedSolman || classified?.system === "solman");
+    if (routingMode === "po") {
+      useSolman = false;
+      resolvedSystemId = normalizeSystemId(systemResolution.targetSystemId || systemId || "");
+    } else if (routingMode === "solman") {
+      useSolman = true;
+      resolvedSystemId = normalizeSystemId(systemResolution.targetSystemId || systemId || "");
+    } else {
+      resolvedSystemId = normalizeSystemId(systemResolution.targetSystemId || systemId || "");
+      useSolman = cleanString(systemResolution?.targetSystemId || "") !== "" && cleanString(classified?.system).toLowerCase() === "solman";
+    }
 
-    if (systemResolution.status === "disconnected") {
+    const finalDecision = {
+      query: rawQuery,
+      detectedIntent: cleanString(conversationIntent?.intent || classified?.intent || ""),
+      selectedSystemId: resolvedSystemId || null,
+      reason: routingMode === "po"
+        ? "purchase_order_query"
+        : routingMode === "solman"
+          ? "solman_related_query"
+          : "fallback_system_resolution",
+    };
+
+    console.log("[SSE] FINAL_DECISION:", finalDecision);
+
+    const resolvedTargetSystem = findResolvedSystem(
+      effectiveAvailableSystems,
+      systemResolution?.targetSystemId || resolvedSystemId
+    );
+
+    if (systemResolution?.targetSystemId && resolvedTargetSystem && !isSystemOnline(resolvedTargetSystem)) {
       sse.send("error", {
-        message: `The system ${
-          systemResolution.targetSystemId || "target"
-        } is disconnected. Please connect it and try again.`,
+        message: `The selected system ${systemResolution.targetSystemId} is disconnected. Please connect it and try again.`,
         status: "disconnected_system",
         action: {
           type: "reconnect_system",
@@ -715,7 +993,7 @@ export async function handleChatStream(req, res) {
       return sse.end();
     }
 
-    if (systemResolution.status === "ambiguous" && !useSolman) {
+    if (systemResolution?.status === "ambiguous" && !useSolman) {
       sse.send("error", {
         message:
           systemResolution.candidates.length > 0
@@ -730,25 +1008,63 @@ export async function handleChatStream(req, res) {
       return sse.end();
     }
 
-    let resolvedSystemId = normalizeSystemId(
-      systemResolution.targetSystemId || systemId
-    );
-
-    let resolvedSapUser = cleanString(sapUser);
-
     if (useSolman) {
-      resolvedSystemId = resolveSolmanSystemId({
-        systemResolution,
-        systemId,
-      });
-
       console.log("[SSE] resolved system for SolMan:", resolvedSystemId || "(none)");
       console.log("[SSE] SolMan system resolution detail:", systemResolution);
 
-      if (!resolvedSystemId) {
-        sse.send("error", buildSolmanSystemError(systemResolution));
-        return sse.end();
+      const requestedFeatureName = cleanString(classified?.intent || classified?.system || "solman");
+      const selectedSystemId = normalizeSystemId(systemResolution?.targetSystemId || resolvedSystemId || systemId || "");
+      console.log("[SSE] SolMan routing inputs:", {
+        requestedSystemId: routingRequestSystemId || null,
+        featureName: requestedFeatureName,
+        requestedSystemIdFromResolver: systemResolution?.targetSystemId || null,
+        selectedSystemId: selectedSystemId || null,
+      });
+
+      const solmanSystemQuery = {
+        owner: { $in: [owner, "local"] },
+        systemId: selectedSystemId,
+      };
+
+      console.log("[SSE] Searching serverdb.sapsystems...");
+      console.log("[SSE] MongoDB query for SolMan system:", solmanSystemQuery);
+
+      const dbSolmanSystem = await step("load SolMan DB system", () =>
+        SapSystem.findOne(solmanSystemQuery).lean()
+      );
+
+      console.log("[SSE] MongoDB result for SolMan system:", dbSolmanSystem || null);
+
+      if (dbSolmanSystem?.systemId) {
+        systemResolution = {
+          ...(systemResolution || {}),
+          targetSystemId: normalizeSystemId(dbSolmanSystem.systemId),
+          targetEndpoint: {
+            host: String(dbSolmanSystem.host || "").trim().toLowerCase(),
+            port: String(dbSolmanSystem.port || "").trim(),
+          },
+          databaseSystemId: normalizeSystemId(dbSolmanSystem.systemId),
+          databaseHost: String(dbSolmanSystem.host || "").trim().toLowerCase(),
+          databasePort: String(dbSolmanSystem.port || "").trim(),
+          reason: "solman_db_system_resolved",
+        };
+        resolvedSystemId = normalizeSystemId(dbSolmanSystem.systemId);
+      } else {
+        console.log("[SSE] No MongoDB system document found for SolMan selection:", {
+          query: solmanSystemQuery,
+          selectedSystemId: selectedSystemId || null,
+          availableCandidates: Array.isArray(systemResolution?.candidates) ? systemResolution.candidates : [],
+        });
       }
+
+      console.log("[SSE] SolMan final endpoint selection:", {
+        resolvedSystemId,
+        targetSystemId: systemResolution?.targetSystemId || null,
+        targetEndpoint: systemResolution?.targetEndpoint || null,
+        databaseSystemId: systemResolution?.databaseSystemId || null,
+        databaseHost: systemResolution?.databaseHost || null,
+        databasePort: systemResolution?.databasePort || null,
+      });
 
       resolvedSapUser = await step("resolveSolmanSapUser", () =>
         resolveSolmanSapUser({
@@ -771,6 +1087,7 @@ export async function handleChatStream(req, res) {
     }
 
     const context = {
+      req,
       sse,
       owner,
       query: effectiveQuery,
@@ -780,7 +1097,7 @@ export async function handleChatStream(req, res) {
       classified: useSolman
         ? { ...classified, system: "solman" }
         : classified,
-      systemResolution,
+      systemResolution: systemResolution || { status: "resolved", targetSystemId: resolvedSystemId },
     };
 
     if (useSolman) {

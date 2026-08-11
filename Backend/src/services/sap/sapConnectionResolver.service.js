@@ -23,12 +23,6 @@ export async function resolveSapConnection({ owner, systemId, sapUser }) {
     throw err;
   }
 
-  if (!normalizedSapUser) {
-    const err = new Error("sapUser is required");
-    err.status = 400;
-    throw err;
-  }
-
   const system = await SapSystem.findOne({
     owner: { $in: [normalizedOwner, "local"] },
     systemId: normalizedSystemId,
@@ -40,19 +34,37 @@ export async function resolveSapConnection({ owner, systemId, sapUser }) {
     throw err;
   }
 
-  const credential = await SapCredential.findOne({
+  const baseQuery = {
     owner: normalizedOwner,
     systemId: normalizedSystemId,
-    sapUser: normalizedSapUser,
-  }).lean();
+  };
+
+  let credential = null;
+
+  if (normalizedSapUser) {
+    credential = await SapCredential.findOne({
+      ...baseQuery,
+      sapUser: normalizedSapUser,
+    }).lean();
+  }
+
+  if (!credential) {
+    credential = await SapCredential.findOne(baseQuery)
+      .sort({ lastUsedAt: -1, updatedAt: -1 })
+      .lean();
+  }
 
   if (!credential) {
     const err = new Error(
-      `SAP credential not found for systemId ${normalizedSystemId} and sapUser ${normalizedSapUser}`
+      normalizedSapUser
+        ? `SAP credential not found for systemId ${normalizedSystemId} and sapUser ${normalizedSapUser}`
+        : `SAP credential not found for systemId ${normalizedSystemId}`
     );
     err.status = 404;
     throw err;
   }
+
+  const resolvedSapUser = cleanString(credential.sapUser).toUpperCase();
 
   const password = decryptString({
     enc: credential.encPassword,
@@ -81,9 +93,10 @@ export async function resolveSapConnection({ owner, systemId, sapUser }) {
     meta: {
       owner: normalizedOwner,
       systemId: normalizedSystemId,
-      sapUser: normalizedSapUser,
+      sapUser: resolvedSapUser,
       systemName: system.name || "",
       resolvedSystemOwner: system.owner || null,
+      resolvedViaSapUserFallback: !normalizedSapUser || resolvedSapUser !== normalizedSapUser,
     },
   };
 }

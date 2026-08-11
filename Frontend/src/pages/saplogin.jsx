@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import logoFull from "../assets/ImplevistaLogo.png";
 import { authFetch } from "../api/authFetch";
+import { API_BASE } from "../api/client";
 
 function normalizeSystemId(sid) {
   return String(sid || "").trim().toUpperCase();
@@ -32,9 +33,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
     setFadeIn(true);
   }, []);
 
-  const apiBase =
-    (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE_URL) ||
-    "http://localhost:3000";
+  const apiBase = API_BASE;
 
   // ----------------------------
   // System fields (generic)
@@ -96,7 +95,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
     setError("");
 
     const sid = normalizeSystemId(systemId);
-    const sysName = String(name || "").trim();
+    const sysName = String(name || "").trim() || sid;
     const proto = String(protocol || "https").trim().toLowerCase() === "http" ? "http" : "https";
     const h = String(host || "").trim();
     const p = Number(String(port || "").trim());
@@ -104,7 +103,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
     const u = String(sapUser || "").trim();
     const pw = String(sapPassword || "").trim();
 
-    if (!sysName || !sid || !h || !port || !u || !pw) {
+    if (!sid || !h || !port || !u || !pw) {
       setError("Please fill all required fields.");
       submitLockRef.current = false;
       return;
@@ -157,7 +156,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
       });
 
       const credPayload = await credRes.json().catch(() => ({}));
-      if (!credRes.ok || credPayload?.ok !== true) {
+      if (!credRes.ok || credPayload?.ok !== true || credPayload?.validated !== true) {
         bumpInvalidAttempt();
         throw new Error(credPayload?.error || `Invalid SAP credentials (${credRes.status})`);
       }
@@ -169,7 +168,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
       });
 
       const connPayload = await connRes.json().catch(() => ({}));
-      if (!connRes.ok || connPayload?.ok !== true) {
+      if (!connRes.ok || connPayload?.ok !== true || connPayload?.validated !== true) {
         bumpInvalidAttempt();
         throw new Error(connPayload?.error || `Connect failed (${connRes.status})`);
       }
@@ -293,7 +292,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
             </div>
 
             <h1 className="mt-1.5 sm:mt-2 text-center text-sm sm:text-lg font-bold text-zinc-900">
-              {selectedSystem ? `Configure ${selectedSystem.name}` : "Configure SAP System"}
+              Configure System
             </h1>
             <p className="mt-0.5 text-center text-[10px] sm:text-xs text-zinc-500 font-medium">
               Add or connect to any SAP system
@@ -335,7 +334,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                     </label>
                     <input
                       className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
-                      placeholder="e.g., HIMALAYA SOLMAN PRD / S4 DEV / ECC QA"
+                      placeholder=" "
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                     />
@@ -347,14 +346,14 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                     </label>
                     <input
                       className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
-                      placeholder="e.g., HSM"
+                      placeholder=" "
                       value={systemId}
                       onChange={(e) => setSystemId(e.target.value.toUpperCase())}
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
                   <div className="animate-slideUp input-delay-3 flex flex-col">
                     <label className="text-[10px] sm:text-xs font-semibold text-zinc-700 mb-1">
                       Protocol *
@@ -369,13 +368,13 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                     </select>
                   </div>
 
-                  <div className="animate-slideUp input-delay-4 flex flex-col sm:col-span-2">
+                  <div className="animate-slideUp input-delay-4 flex flex-col">
                     <label className="text-[10px] sm:text-xs font-semibold text-zinc-700 mb-1">
                       Host *
                     </label>
                     <input
                       className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
-                      placeholder="e.g., 192.168.5.139 or sap.company.com"
+                      placeholder=" "
                       value={host}
                       onChange={(e) => setHost(e.target.value)}
                     />
@@ -389,7 +388,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                     </label>
                     <input
                       className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
-                      placeholder="e.g., 5243 or 44300"
+                      placeholder=" "
                       value={port}
                       onChange={(e) => setPort(e.target.value)}
                     />
@@ -401,7 +400,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                     </label>
                     <input
                       className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
-                      placeholder="e.g., /H/sap.company.com"
+                      placeholder=" "
                       value={sapRouter}
                       onChange={(e) => setSapRouter(e.target.value)}
                     />
@@ -415,7 +414,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                     </label>
                     <input
                       className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
-                      placeholder="SAP User"
+                      placeholder=" "
                       value={sapUser}
                       onChange={(e) => setSapUser(e.target.value)}
                       autoComplete="username"
@@ -431,7 +430,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                       <input
                         type={showPassword ? "text" : "password"}
                         className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 pr-10 text-[10px] sm:text-xs text-zinc-900 outline-none transition-all duration-300 focus:border-green-600 focus:ring-2 focus:ring-green-600/20 hover:border-gray-400"
-                        placeholder="••••••••"
+                        placeholder=" "
                         value={sapPassword}
                         onChange={(e) => setSapPassword(e.target.value)}
                         autoComplete="current-password"
@@ -514,7 +513,7 @@ export default function SapLogin({ onConnected, onBack, selectedSystem = null })
                       <span className="hidden sm:inline">Connecting...</span>
                     </span>
                   ) : (
-                    `Configure ${selectedSystem?.name || "System"}`
+                    `Okay`
                   )}
                 </button>
               </div>

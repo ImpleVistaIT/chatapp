@@ -275,7 +275,16 @@ export async function listChatMessages(req, res) {
     const items = await ChatMessage.find(q)
       .sort({ createdAt: -1 })
       .limit(limit + 1)
-      .select({ role: 1, text: 1, summary: 1, data: 1, suggestions: 1, createdAt: 1 })
+      .select({
+        role: 1,
+        text: 1,
+        summary: 1,
+        data: 1,
+        suggestions: 1,
+        extracted: 1,
+        responseMeta: 1,
+        createdAt: 1,
+      })
       .lean();
 
     const hasMore = items.length > limit;
@@ -291,6 +300,8 @@ export async function listChatMessages(req, res) {
         summary: m.summary || null,
         data: m.data || null,
         suggestions: Array.isArray(m.suggestions) ? m.suggestions : [],
+        extracted: m.extracted || null,
+        responseMeta: m.responseMeta || null,
         createdAt: m.createdAt || null,
       })),
     });
@@ -361,7 +372,7 @@ export async function handleDocChat({ req, res, defaultDocType, docTypeFast }) {
       systemResolution = await resolveTargetSystem({
         query,
         classified,
-        requestedSystemId: systemId,
+        requestedSystemId: "",
         availableSystems: Array.isArray(availableSystems) ? availableSystems : [],
       });
 
@@ -402,7 +413,7 @@ export async function handleDocChat({ req, res, defaultDocType, docTypeFast }) {
     }
 
     const serviceIntent = await resolveServiceIntent({
-      owner: "local",
+      owner,
       query,
       systemIds: sid ? [sid] : [],
       limitServices: 12,
@@ -506,6 +517,51 @@ export async function handleDocChat({ req, res, defaultDocType, docTypeFast }) {
     const explicitLimit = Number(explicitLimitRaw);
     if (Number.isFinite(explicitLimit) && explicitLimit > 0) {
       extracted.limit = Math.min(200, Math.max(1, explicitLimit));
+    }
+
+    const explicitFromDate = String(req.body?.fromDate || req.query?.fromDate || "").trim();
+    const explicitToDate = String(req.body?.toDate || req.query?.toDate || "").trim();
+
+    if (explicitFromDate && explicitToDate) {
+      extracted.filters = Array.isArray(extracted.filters) ? extracted.filters : [];
+
+      const toNextDayYmd = (value) => {
+        const raw = String(value || "").trim();
+        if (!raw) return raw;
+
+        const normalized = raw.length === 8
+          ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
+          : raw;
+
+        const dt = new Date(normalized);
+        if (Number.isNaN(dt.getTime())) return normalized;
+
+        dt.setDate(dt.getDate() + 1);
+        const year = dt.getFullYear();
+        const month = String(dt.getMonth() + 1).padStart(2, "0");
+        const day = String(dt.getDate()).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+      };
+
+      const fromDateFilter = {
+        field: "CrtDate",
+        op: "ge",
+        type: "datetime",
+        value: explicitFromDate.length === 8 ? `${explicitFromDate.slice(0, 4)}-${explicitFromDate.slice(4, 6)}-${explicitFromDate.slice(6, 8)}` : explicitFromDate,
+      };
+      const toDateFilter = {
+        field: "CrtDate",
+        op: "lt",
+        type: "datetime",
+        value: toNextDayYmd(explicitToDate),
+      };
+
+      extracted.filters = extracted.filters.filter((filter) => String(filter?.field || "").toLowerCase() !== "crtdate");
+      extracted.filters.push(fromDateFilter, toDateFilter);
+      extracted.limit = Math.min(200, Number.isFinite(explicitLimit) && explicitLimit > 0 ? explicitLimit : 200);
+      if (!Array.isArray(extracted.orderBy) || extracted.orderBy.length === 0) {
+        extracted.orderBy = [{ field: "CrtDate", dir: "desc" }];
+      }
     }
 
     const userFilter = extractUserCreatedFilter(query, allowedFields);

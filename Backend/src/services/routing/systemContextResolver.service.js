@@ -57,72 +57,15 @@ function findSystemByEndpoint(availableSystems, endpoint) {
   return matches[0] || null;
 }
 
-function inferPreferredEndpoint({ query, classified }) {
-  const system = String(classified?.routing?.system || classified?.system || "").toLowerCase();
-  const module = String(classified?.routing?.module || classified?.module || "").toLowerCase();
-  const intent = String(classified?.routing?.intent || classified?.intent || "").toLowerCase();
-  const q = String(query || "").toLowerCase();
-
-  // S/4 endpoint
-  const s4Endpoint = {
-    host: "192.168.1.5",
-    port: "44300",
-  };
-
-  // SolMan endpoint
-  const solmanEndpoint = {
-    host: "192.168.1.219",
-    port: "50101",
-  };
-
-  if (system === "s4hana" || system === "s4") return s4Endpoint;
-  if (system === "solman") return solmanEndpoint;
-
-  if (module === "mm" || module === "sd") return s4Endpoint;
-  if (module === "charm" || module === "transport") return solmanEndpoint;
-
-  if (intent.includes("purchase_order") || intent.includes("sales_order")) return s4Endpoint;
-  if (intent.includes("change_request") || intent.includes("transport")) return solmanEndpoint;
-
-  if (/\b(po|purchase order|purchase orders|sales order|sales orders|invoice|delivery)\b/i.test(q)) {
-    return s4Endpoint;
-  }
-
-  if (/\b(change request|charm|transport|solman|task list|cr)\b/i.test(q)) {
-    return solmanEndpoint;
-  }
-
-  return null;
-}
-
-function isSolmanLikeQuery({ query, classified }) {
-  const system = String(classified?.routing?.system || classified?.system || "").toLowerCase();
-  const module = String(classified?.routing?.module || classified?.module || "").toLowerCase();
-  const intent = String(classified?.routing?.intent || classified?.intent || "").toLowerCase();
-  const q = String(query || "").toLowerCase();
-
-  if (system === "solman") return true;
-  if (module === "charm" || module === "transport") return true;
-  if (intent.includes("change_request") || intent.includes("transport")) return true;
-
-  return /\b(change request|change requests|cr|charm|transport|task list)\b/i.test(q);
-}
-
-function findPreferredSolmanSystem(connectedSystems) {
-  const list = Array.isArray(connectedSystems) ? connectedSystems : [];
-
-  // First preference: known SolMan SID in your environment
-  const hsd = list.find(
-    (s) => normalizeSystemId(s?.systemId || s?.id || s?.code) === "HSD"
-  );
+function findPreferredSolmanSystem(availableSystems) {
+  const systems = toSystemList(availableSystems);
+  const hsd = systems.find((system) => normalizeSystemId(system?.systemId || system?.id || system?.code) === "HSD");
   if (hsd) return hsd;
 
-  // Fallback: known SolMan endpoint
-  const solmanEndpoint = { host: "192.168.1.219", port: "50101" };
-  const endpointMatch = findSystemByEndpoint(list, solmanEndpoint);
-  if (endpointMatch) return endpointMatch;
-
-  return null;
+  return systems.find((system) => {
+    const label = normalizeSystemId(system?.name || "");
+    return label.includes("SOLMAN");
+  }) || null;
 }
 
 export async function resolveTargetSystem({
@@ -134,15 +77,72 @@ export async function resolveTargetSystem({
   const systems = toSystemList(availableSystems);
   const ids = extractIds(systems);
   const requestedId = normalizeSystemId(requestedSystemId);
+  const systemLabel = normalizeSystemId(classified?.system || classified?.routing?.system || "");
+  const intentLabel = normalizeSystemId(classified?.intent || classified?.routing?.intent || "");
+  const isSolmanRequest =
+    systemLabel === "SOLMAN" ||
+    intentLabel.includes("CHANGE_REQUEST") ||
+    intentLabel.includes("TRANSPORT") ||
+    /\b(change request|change requests|cr|charm|transport|solman)\b/i.test(String(query || ""));
 
-  const preferredEndpoint = inferPreferredEndpoint({ query, classified });
-  const solmanLike = isSolmanLikeQuery({ query, classified });
-  const connectedSystems = systems.filter(isConnectedSystem);
+  console.log("[SYSTEM_RESOLVER] incoming request:", {
+    requestSystemId: requestedId || null,
+    feature: systemLabel || null,
+    serviceName: classified?.serviceName || classified?.routing?.serviceName || null,
+    query: String(query || "").slice(0, 250),
+  });
+  console.log("[SYSTEM_RESOLVER] available systems:", ids);
+  console.log("[SYSTEM_RESOLVER] classification context:", {
+    system: systemLabel || null,
+    intent: intentLabel || null,
+    isSolmanRequest,
+  });
+
+  if (isSolmanRequest) {
+    const preferredSolman = findPreferredSolmanSystem(systems);
+    if (preferredSolman) {
+      const targetSystemId = normalizeSystemId(preferredSolman?.systemId || preferredSolman?.id || preferredSolman?.code || "HSD");
+      console.log("[SYSTEM_RESOLVER] solman preferred match:", {
+        selectedSystemId: targetSystemId || null,
+        host: getEndpoint(preferredSolman).host || null,
+        port: getEndpoint(preferredSolman).port || null,
+        connected: isConnectedSystem(preferredSolman),
+      });
+      return {
+        status: isConnectedSystem(preferredSolman) ? "resolved" : "disconnected",
+        targetSystemId,
+        targetEndpoint: getEndpoint(preferredSolman),
+        candidates: ids,
+        reason: isConnectedSystem(preferredSolman) ? "solman_preferred_connected" : "solman_preferred_disconnected",
+      };
+    }
+
+    console.log("[SYSTEM_RESOLVER] solman preferred match missing; no default system will be applied");
+    return {
+      status: "unknown",
+      targetSystemId: null,
+      targetEndpoint: null,
+      candidates: ids,
+      reason: "solman_preferred_missing",
+    };
+  }
 
   if (requestedId) {
     const requestedMatches = systems.filter(
       (s) => normalizeSystemId(s?.systemId || s?.id || s?.code) === requestedId
     );
+
+    console.log("[SYSTEM_RESOLVER] requested system lookup:", {
+      query: { systemId: requestedId },
+      matchCount: requestedMatches.length,
+      matches: requestedMatches.map((system) => ({
+        systemId: normalizeSystemId(system?.systemId || system?.id || system?.code) || null,
+        name: String(system?.name || "").trim() || null,
+        host: String(system?.host || "").trim() || null,
+        port: String(system?.port || "").trim() || null,
+        connected: isConnectedSystem(system),
+      })),
+    });
 
     if (requestedMatches.length > 0) {
       const connectedRequested = requestedMatches.find(isConnectedSystem);
@@ -167,136 +167,43 @@ export async function resolveTargetSystem({
     }
   }
 
-  if (systems.length === 0) {
-    if (!preferredEndpoint) {
-      return {
-        status: "unknown",
-        targetSystemId: null,
-        targetEndpoint: null,
-        candidates: [],
-        reason: "no_available_systems",
-      };
-    }
+  if (requestedId) {
+    const requestedMatches = systems.filter(
+      (s) => normalizeSystemId(s?.systemId || s?.id || s?.code) === requestedId
+    );
 
-    return {
-      status: "resolved",
-      targetSystemId: null,
-      targetEndpoint: preferredEndpoint,
-      candidates: [],
-      reason: "resolved_by_endpoint_without_available_systems",
-    };
-  }
+    console.log("[SYSTEM_RESOLVER] non-solman requested system lookup:", {
+      query: { systemId: requestedId },
+      matchCount: requestedMatches.length,
+      matches: requestedMatches.map((system) => ({
+        systemId: normalizeSystemId(system?.systemId || system?.id || system?.code) || null,
+        name: String(system?.name || "").trim() || null,
+        host: String(system?.host || "").trim() || null,
+        port: String(system?.port || "").trim() || null,
+        connected: isConnectedSystem(system),
+      })),
+    });
 
-  // For S4-like requests with multiple connected systems and no explicit systemId,
-  // prefer the first connected system from availableSystems (UI order/system-1)
-  // instead of forcing the hardcoded endpoint match.
-  if (!requestedId && !solmanLike && connectedSystems.length > 1) {
-    const firstConnected = systems.find(isConnectedSystem);
-    if (firstConnected) {
-      return {
-        status: "resolved",
-        targetSystemId: normalizeSystemId(
-          firstConnected.systemId || firstConnected.id || firstConnected.code
-        ),
-        targetEndpoint: getEndpoint(firstConnected),
-        candidates: connectedSystems.map((s) =>
-          normalizeSystemId(s.systemId || s.id || s.code)
-        ),
-        reason: "s4_first_connected_default",
-      };
-    }
-  }
-
-  if (preferredEndpoint) {
-    const matched = findSystemByEndpoint(systems, preferredEndpoint);
-
-    if (!matched) {
-      const connectedSystems = systems.filter(isConnectedSystem);
-
-      if (solmanLike) {
-        const solmanFallback = findPreferredSolmanSystem(connectedSystems);
-        if (solmanFallback) {
-          return {
-            status: "resolved",
-            targetSystemId: normalizeSystemId(
-              solmanFallback.systemId || solmanFallback.id || solmanFallback.code
-            ),
-            targetEndpoint: getEndpoint(solmanFallback),
-            candidates: ids,
-            reason: "solman_default_hsd_fallback",
-          };
-        }
-      }
-
-      return {
-        status: "unknown",
-        targetSystemId: null,
-        targetEndpoint: preferredEndpoint,
-        candidates: ids,
-        reason: "preferred_endpoint_not_in_available_systems",
-      };
-    }
-
-    if (!isConnectedSystem(matched)) {
-      return {
-        status: "disconnected",
-        targetSystemId: normalizeSystemId(matched?.systemId || matched?.id || matched?.code),
-        targetEndpoint: preferredEndpoint,
-        candidates: ids,
-        reason: "preferred_endpoint_disconnected",
-      };
-    }
-
-    return {
-      status: "resolved",
-      targetSystemId: normalizeSystemId(
-        matched.systemId || matched.id || matched.code
-      ),
-      targetEndpoint: preferredEndpoint,
-      candidates: ids,
-      reason: "resolved_by_endpoint",
-    };
-  }
-
-  if (connectedSystems.length === 1) {
-    return {
-      status: "resolved",
-      targetSystemId: normalizeSystemId(
-        connectedSystems[0].systemId || connectedSystems[0].id || connectedSystems[0].code
-      ),
-      targetEndpoint: getEndpoint(connectedSystems[0]),
-      candidates: ids,
-      reason: "single_connected_system",
-    };
-  }
-
-  if (connectedSystems.length > 1) {
-    if (solmanLike) {
-      const solmanFallback = findPreferredSolmanSystem(connectedSystems);
-      if (solmanFallback) {
+    if (requestedMatches.length > 0) {
+      const connectedRequested = requestedMatches.find(isConnectedSystem);
+      if (connectedRequested) {
         return {
           status: "resolved",
-          targetSystemId: normalizeSystemId(
-            solmanFallback.systemId || solmanFallback.id || solmanFallback.code
-          ),
-          targetEndpoint: getEndpoint(solmanFallback),
-          candidates: connectedSystems.map((s) =>
-            normalizeSystemId(s.systemId || s.id || s.code)
-          ),
-          reason: "solman_default_hsd_fallback",
+          targetSystemId: requestedId,
+          targetEndpoint: getEndpoint(connectedRequested),
+          candidates: ids,
+          reason: "explicit_requested_system_connected",
         };
       }
-    }
 
-    return {
-      status: "ambiguous",
-      targetSystemId: null,
-      targetEndpoint: null,
-      candidates: connectedSystems.map((s) =>
-        normalizeSystemId(s.systemId || s.id || s.code)
-      ),
-      reason: "multiple_connected_systems",
-    };
+      return {
+        status: "disconnected",
+        targetSystemId: requestedId,
+        targetEndpoint: getEndpoint(requestedMatches[0]),
+        candidates: ids,
+        reason: "explicit_requested_system_disconnected",
+      };
+    }
   }
 
   return {

@@ -72,7 +72,7 @@ function formatTransportDependencyReply(result = {}) {
 
   if (dependencies.length === 0) {
     lines.push("");
-    lines.push(`No dependent transports were found for Change Request ${crLabel}.`);
+    lines.push(`No dependent check were found for Change Request ${crLabel}.`);
     return lines.join("\n");
   }
 
@@ -104,6 +104,24 @@ function formatTransportDependencyReply(result = {}) {
   return lines.join("\n");
 }
 
+function buildTransportDependencyTableRows(result = {}) {
+  const sourceTransports = Array.isArray(result?.sourceTransports)
+    ? result.sourceTransports.filter(Boolean)
+    : [];
+  const dependencies = Array.isArray(result?.dependencies)
+    ? result.dependencies.filter(Boolean)
+    : [];
+
+  return dependencies.map((item) => ({
+    originalTransport: sourceTransports[0] || cleanString(item?.transportEntered) || "-",
+    dependentTransport: cleanString(item?.dependentTransport) || "-",
+    description: cleanString(item?.description) || "-",
+    owner: cleanString(item?.owner) || "-",
+    exportedOn: `${cleanString(item?.exportDate) || "-"} ${cleanString(item?.exportTime) || ""}`.trim() || "-",
+    importedOn: `${cleanString(item?.importDate) || "-"} ${cleanString(item?.importTime) || ""}`.trim() || "-",
+  }));
+}
+
 export async function handleTransportDependency(context) {
   const {
     sse,
@@ -119,7 +137,7 @@ export async function handleTransportDependency(context) {
 
   const input = pickTransportDependencyEntities(classified?.entities || {}, query);
   const objectId = cleanString(input.objectId);
-  const processType = cleanString(input.processType) || "YMHF";
+  const processType = cleanString(input.processType);
 
   if (!objectId) {
     const message =
@@ -211,6 +229,7 @@ export async function handleTransportDependency(context) {
   }
 
   const reply = formatTransportDependencyReply(result.result);
+  const tableRows = buildTransportDependencyTableRows(result.result);
 
   await persistAssistantAndTouchSession({
     owner,
@@ -225,7 +244,21 @@ export async function handleTransportDependency(context) {
       processType,
       transports: result?.result?.sourceTransports || [],
     },
-    data: result?.result || {},
+    data: {
+      ...(result?.result || {}),
+      systemId: effectiveSystemId,
+      sapUser: effectiveSapUser,
+      viewType: "transport_dependency_table",
+      columns: [
+        "Original Transport",
+        "Dependent Transport",
+        "Description",
+        "Owner",
+        "Exported On",
+        "Imported On",
+      ],
+      tableRows,
+    },
     responseMeta: {
       ok: true,
       kind: "stream",
@@ -242,10 +275,26 @@ export async function handleTransportDependency(context) {
     sapUser: effectiveSapUser,
     reply,
     summary: result?.message || `Checked dependent transports for CR ${objectId}.`,
-    data: result?.result || {},
+    data: {
+      ...(result?.result || {}),
+      systemId: effectiveSystemId,
+      sapUser: effectiveSapUser,
+      changeRequestId: objectId,
+      processType,
+      viewType: "transport_dependency_table",
+      columns: [
+        "Original Transport",
+        "Dependent Transport",
+        "Description",
+        "Owner",
+        "Exported On",
+        "Imported On",
+      ],
+      tableRows,
+    },
     suggestions: [
       `Show status of CR ${objectId}`,
-      `Check dependency transport for CR ${objectId}`,
+      `Check dependency analysis for CR ${objectId}`,
     ],
   });
 

@@ -45,6 +45,10 @@ export const ROUTING_INTENT_REGISTRY = {
           "Tester",
           "WorkItemReference",
           "Landscape",
+          "ChangeType",
+          "Category",
+          "Purpose",
+          "Workflow",
           "REQ_URL_NAV",
         ],
         formId: "solman_create_cr",
@@ -67,6 +71,14 @@ export const ROUTING_INTENT_REGISTRY = {
         executor: "solman.charm.listChangeRequests",
       },
 
+      list_change_requests_by_created_by: {
+        label: "List change requests by created by",
+        action: "execute_api",
+        requiredInputs: ["fromDate", "toDate"],
+        entityHints: ["fromDate", "toDate", "processType", "triggerAll", "createdBy", "createdByMode"],
+        executor: "solman.charm.listChangeRequestsByCreatedBy",
+      },
+
       cr_status_distribution: {
         label: "CR status distribution",
         action: "execute_api",
@@ -86,15 +98,76 @@ export const ROUTING_INTENT_REGISTRY = {
         ],
         executor: "solman.charm.crStatusDistribution",
       },
+
+      dependency_check: {
+        label: "Dependency check",
+        action: "execute_api",
+        requiredInputs: ["objectId"],
+        entityHints: ["objectId", "processType", "dependencyType"],
+        executor: "solman.dependency.check",
+      },
     },
 
     transport: {
+      import_transport_to_production: {
+        label: "Import transport to production",
+        action: "open_form",
+        requiredInputs: ["transportNumber"],
+        entityHints: ["transportNumber", "transportId", "importTarget", "productionTarget"],
+        formId: "solman_import_transport_to_production",
+        executor: "solman.transport.importTransportToProduction",
+      },
+
+      create_transport_request: {
+        label: "Create transport request",
+        action: "open_form",
+        requiredInputs: ["SolmanChangeReq", "TrOwner", "Client", "WorkbenchReq", "CustomizingReq", "DeveloperSet"],
+        entityHints: ["SolmanChangeReq", "TrOwner", "Client", "WorkbenchReq", "CustomizingReq", "DeveloperSet", "Developer", "Developers", "CR", "Change Request"],
+        formId: "solman_create_transport_request",
+        executor: "solman.transport.createTransportRequest",
+      },
+
+      create_transport_task: {
+        label: "Create transport task",
+        action: "open_form",
+        requiredInputs: ["transportNo", "changeRequest", "developers"],
+        entityHints: ["transportNo", "changeRequest", "developers"],
+        formId: "solman_create_transport_task",
+        executor: "solman.transport.createTransportTask",
+      },
+
+      release_transport_task: {
+        label: "Release transport task",
+        action: "open_form",
+        requiredInputs: ["taskId"],
+        entityHints: ["taskId"],
+        formId: "solman_release_transport_task",
+        executor: "solman.transport.releaseTransportTask",
+      },
+
+      release_transport_request: {
+        label: "Release transport request",
+        action: "open_form",
+        requiredInputs: ["transportNumber", "quality"],
+        entityHints: ["transportNumber", "quality", "IvObjectId", "IvQuality"],
+        formId: "solman_release_transport",
+        executor: "solman.transport.releaseTransport",
+      },
+
       create_transport: {
         label: "Create transport",
         action: "execute_api",
         requiredInputs: ["changeRequestId"],
         entityHints: ["changeRequestId", "description"],
         executor: "solman.transport.createTransport",
+      },
+
+      transport_list: {
+        label: "List transports for CR",
+        action: "execute_api",
+        requiredInputs: ["changeRequestId"],
+        entityHints: ["changeRequestId", "objectId", "processType"],
+        executor: "solman.transport.listTransports",
       },
     },
   },

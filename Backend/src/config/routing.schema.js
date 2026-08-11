@@ -18,8 +18,16 @@ export const ROUTING_INTENTS = [
   "create_change_request",
   "get_change_request_details",
   "list_change_requests",
+  "list_change_requests_by_created_by",
   "cr_status_distribution",
+  "dependency_check",
+  "create_transport_task",
+  "import_transport_to_production",
+  "release_transport_task",
+  "create_transport_request",
+  "release_transport_request",
   "create_transport",
+  "transport_list",
   "unknown",
 ];
 

@@ -6,11 +6,16 @@ import cookieParser from "cookie-parser";
 import { chatRoutes } from "./routes/chat.routes.js";
 import { sapRoutes } from "./routes/sap.routes.js";
 import { poExtractRoutes } from "./routes/poextract.routes.js";
+import { s4dPoRoutes } from "./routes/s4d.po.routes.js";
+import solmanReleaseTransportRoutes from "./routes/solman.release-transport.routes.js";
 import solmanRoutes from "./routes/solman.routes.js";
+import { procurementQueryController } from "./controllers/procurement.query.controller.js";
 import { handleChatStream } from "./controllers/chat.stream.controller.js";
 
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requireAuth } from "./middleware/requireAuth.js";
+import { signAccessToken, signRefreshToken } from "./services/auth/jwt.service.js";
+import { validateRefreshCookie } from "./services/auth/auth.service.js";
 
 export const app = express();
 
@@ -24,8 +29,14 @@ app.use(
       "http://127.0.0.1:5173",
       "http://localhost:5174",
       "http://127.0.0.1:5174",
+      "http://localhost:5175",
+      "http://127.0.0.1:5175",
+      "http://localhost:5176",
+      "http://127.0.0.1:5176",
+      "http://192.168.1.110:5173",
     ],
     credentials: true,
+    exposedHeaders: ["x-access-token", "x-auth-refreshed"],
   })
 );
 
@@ -51,26 +62,16 @@ app.get("/health", (req, res) => {
 // --------------------
 if (process.env.NODE_ENV !== "production") {
   app.post("/auth/dev-login", (req, res) => {
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      return res.status(500).json({ ok: false, error: "JWT_SECRET is not configured" });
-    }
-
     const username = String(req.body?.username || "dev").trim() || "dev";
 
-    const accessToken = jwt.sign({ id: username, username }, secret, {
-      expiresIn: "15m",
-    });
-
-    const refreshToken = jwt.sign({ id: username, type: "refresh" }, secret, {
-      expiresIn: "30d",
-    });
+    const accessToken = signAccessToken({ id: username, username });
+    const refreshToken = signRefreshToken({ id: username, username, type: "refresh" });
 
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      path: "/auth/refresh",
+      path: "/",
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
@@ -78,29 +79,13 @@ if (process.env.NODE_ENV !== "production") {
   });
 
   app.post("/auth/refresh", (req, res) => {
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      return res.status(500).json({ ok: false, error: "JWT_SECRET is not configured" });
-    }
-
-    const token = req.cookies?.refreshToken;
-    if (!token) {
-      return res.status(401).json({ ok: false, error: "Missing refresh token" });
-    }
-
     try {
-      const payload = jwt.verify(token, secret);
-      if (payload?.type !== "refresh" || !payload?.id) {
-        return res.status(401).json({ ok: false, error: "Invalid refresh token" });
-      }
-
-      const accessToken = jwt.sign({ id: payload.id, username: payload.id }, secret, {
-        expiresIn: "15m",
-      });
+      const payload = validateRefreshCookie(req.cookies?.refreshToken);
+      const accessToken = signAccessToken({ id: payload.id, username: payload.username || payload.id });
 
       return res.json({ ok: true, accessToken });
-    } catch {
-      return res.status(401).json({ ok: false, error: "Invalid refresh token" });
+    } catch (error) {
+      return res.status(error.status || 401).json({ ok: false, error: "Your session has expired. Please login again.", code: error.code || "TOKEN_EXPIRED" });
     }
   });
 }
@@ -109,9 +94,12 @@ if (process.env.NODE_ENV !== "production") {
 // ROUTES
 // --------------------
 app.use("/api/solman", requireAuth, solmanRoutes);
+app.use("/api/solman", solmanReleaseTransportRoutes);
+app.use("/api/s4d", requireAuth, s4dPoRoutes);
 app.use("/sap", requireAuth, sapRoutes);
 
 app.post("/chat/stream", requireAuth, handleChatStream);
+app.post("/api/query", requireAuth, procurementQueryController);
 app.use("/chat", requireAuth, chatRoutes);
 app.use("/po", requireAuth, poExtractRoutes);
 

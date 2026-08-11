@@ -1,6 +1,7 @@
 import { listSolmanChangeRequestsByDateRange } from "../../../services/systems/solman/charm.service.js";
 import {
   buildCrSuggestions,
+  buildSolmanAppliedFiltersSummary,
   cleanString,
   formatCrListReply,
   inferCreatedByFilterFromQuery,
@@ -8,7 +9,6 @@ import {
   pickCrListEntities,
   toCrDetailsArray,
 } from "./solman.shared.js";
-import { generateSummaryLLM } from "../../../services/responseNarrator.service.js";
 import { step } from "../stream.shared.js";
 
 function resolveCurrentSolmanUsername(context) {
@@ -43,6 +43,20 @@ function dedupeRowsByCrNumber(rows = []) {
   });
 }
 
+function getDefaultCrRange(now = new Date()) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const from = new Date(today);
+  from.setDate(from.getDate() - 730 + 1);
+
+  const pad2 = (value) => String(value).padStart(2, "0");
+  const formatYmd = (date) => `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}`;
+
+  return {
+    fromDate: formatYmd(from),
+    toDate: formatYmd(today),
+  };
+}
+
 export async function handleCrCreatedBy(context) {
   const {
     sse,
@@ -66,6 +80,11 @@ export async function handleCrCreatedBy(context) {
     cleanString(classified?.entities?.dateText) ||
     cleanString(listInput.dateText) ||
     cleanString(query);
+
+  const defaultCrRange =
+    !cleanString(listInput.fromDate) || !cleanString(listInput.toDate)
+      ? getDefaultCrRange()
+      : null;
 
   let resolvedCreatedBy = cleanString(
     listInput.createdBy || inferredCreatedBy.createdBy || ""
@@ -258,20 +277,33 @@ export async function handleCrCreatedBy(context) {
         : "Fetching change requests created by the specified user from Solution Manager...",
   });
 
+  const requestFromDate = listInput.fromDate || defaultCrRange?.fromDate || "";
+  const requestToDate = listInput.toDate || defaultCrRange?.toDate || "";
+
+  console.log("[SOLMAN] created-by date filters:", {
+    query: originalQuery,
+    fromDate: cleanString(requestFromDate),
+    toDate: cleanString(requestToDate),
+    status: cleanString(listInput.status || ""),
+    statusMode: cleanString(listInput.statusMode || ""),
+    createdBy: cleanString(resolvedCreatedBy || ""),
+    businessScope: cleanString(listInput.businessScope || ""),
+  });
+
   const result = await step("listSolmanChangeRequestsByDateRange", () =>
     listSolmanChangeRequestsByDateRange({
       system,
       sapAuth,
       processType: listInput.processType,
       triggerAll: listInput.triggerAll || "X",
-      fromDate: listInput.fromDate || "",
-      toDate: listInput.toDate || "",
+      fromDate: requestFromDate,
+      toDate: requestToDate,
       status: listInput.status || "",
       excludeStatuses: listInput.excludeStatuses || [],
       statusMode: listInput.statusMode || "",
       dateText: originalQuery,
       createdBy: resolvedCreatedBy || "",
-      top: listInput.top ?? 10,
+      top: listInput.top ?? null,
       skip: listInput.skip || 0,
       orderBy: listInput.orderBy || "CREATED_ON desc",
     })
@@ -299,7 +331,7 @@ export async function handleCrCreatedBy(context) {
           excludeStatuses: listInput.excludeStatuses || [],
           createdBy: resolvedCreatedBy || "",
           createdByMode,
-          top: listInput.top ?? 10,
+          top: listInput.top ?? null,
           skip: listInput.skip || 0,
           nextSkip: listInput.nextSkip || 0,
           orderBy: listInput.orderBy || "CREATED_ON desc",
@@ -330,31 +362,35 @@ export async function handleCrCreatedBy(context) {
 
   let rows = toCrDetailsArray(result);
   const rawRowCount = Array.isArray(rows) ? rows.length : 0;
-  rows = dedupeRowsByCrNumber(rows);
 
   if (isSelfRequest && rows.length === 0 && Array.isArray(result?.result?.results)) {
-    rows = dedupeRowsByCrNumber(result.result.results);
+    rows = Array.isArray(result.result.results) ? result.result.results : [];
   }
 
-  const responseTop = result?.result?.top ?? listInput.top ?? 10;
+  const responseTop = result?.result?.top ?? listInput.top ?? null;
   const responseSkip = result?.result?.skip ?? listInput.skip ?? 0;
   const responseDisplayOffset = Math.max(
     0,
     Number(listInput.displayOffset ?? responseSkip) || 0
   );
+  const isNextPageRequest = /\b(?:show\s+)?next\s+\d+\b/i.test(cleanString(query));
+  const explicitCountRequest = Number.isFinite(Number(responseTop)) && Number(responseTop) > 0 && !isNextPageRequest;
 
   const responseNextSkip = Number.isFinite(Number(result?.result?.nextSkip))
     ? Number(result.result.nextSkip)
-    : responseSkip + responseTop;
+    : responseSkip + (Number.isFinite(Number(responseTop)) && Number(responseTop) > 0 ? Number(responseTop) : rows.length);
 
-  const hasMoreRows = rawRowCount >= Math.max(1, Number(responseTop) || 10);
+  const hasMoreRows = explicitCountRequest
+    ? false
+    : Number.isFinite(Number(responseTop)) && Number(responseTop) > 0
+    ? rawRowCount >= Number(responseTop)
+    : false;
   const noMoreMessage = "No more change requests found.";
-  const isNextPageRequest = /\b(?:show\s+)?next\s+\d+\b/i.test(cleanString(query));
 
   const reply = formatCrListReply(rows, {
     businessScope: listInput.businessScope,
-    fromDate: result?.result?.fromDate || listInput.fromDate,
-    toDate: result?.result?.toDate || listInput.toDate,
+    fromDate: result?.result?.fromDate || listInput.fromDate || defaultCrRange?.fromDate || "",
+    toDate: result?.result?.toDate || listInput.toDate || defaultCrRange?.toDate || "",
     status: result?.result?.status || listInput.status,
     statusMode: result?.result?.statusMode || listInput.statusMode,
     createdBy: resolvedCreatedBy || "",
@@ -365,23 +401,16 @@ export async function handleCrCreatedBy(context) {
 
   const summaryMessage =
     rows.length > 0
-      ? await step("generateSummaryLLM", () =>
-          generateSummaryLLM({
-            entityLabel: "change requests",
-            count: rows.length,
-            extracted: {
-              businessScope: listInput.businessScope,
-              processType: result?.result?.processType || listInput.processType,
-              createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
-              status: result?.result?.status || listInput.status,
-              dateFrom: result?.result?.fromDate || listInput.fromDate,
-              dateTo: result?.result?.toDate || listInput.toDate,
-            },
-            sample: rows.slice(0, 5),
-            columns: Object.keys(rows[0] || {}).slice(0, 8),
-          })
-        )
-      : "No change requests found.";
+      ? buildSolmanAppliedFiltersSummary({
+          status: result?.result?.status || listInput.status,
+          statusMode: result?.result?.statusMode || listInput.statusMode,
+          excludeStatuses: result?.result?.excludeStatuses || listInput.excludeStatuses || [],
+          fromDate: result?.result?.fromDate || listInput.fromDate || defaultCrRange?.fromDate || "",
+          toDate: result?.result?.toDate || listInput.toDate || defaultCrRange?.toDate || "",
+          createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+          businessScope: listInput.businessScope,
+        }) || "No records found for the given criteria."
+      : "No records found for the given criteria.";
 
   const persistedPendingAction = {
     system: "solman",
@@ -399,8 +428,8 @@ export async function handleCrCreatedBy(context) {
       displayOffset: responseDisplayOffset,
       nextDisplayOffset: responseDisplayOffset + rows.length,
       orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
-      fromDate: result?.result?.fromDate || listInput.fromDate,
-      toDate: result?.result?.toDate || listInput.toDate,
+      fromDate: result?.result?.fromDate || listInput.fromDate || defaultCrRange?.fromDate || "",
+      toDate: result?.result?.toDate || listInput.toDate || defaultCrRange?.toDate || "",
       statusMode: result?.result?.statusMode || listInput.statusMode,
       excludeStatuses: result?.result?.excludeStatuses || listInput.excludeStatuses || [],
       createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
@@ -429,8 +458,8 @@ export async function handleCrCreatedBy(context) {
           businessScope: listInput.businessScope,
           processType: result?.result?.processType || listInput.processType,
           triggerAll: result?.result?.triggerAll || listInput.triggerAll,
-          fromDate: result?.result?.fromDate || listInput.fromDate,
-          toDate: result?.result?.toDate || listInput.toDate,
+          fromDate: result?.result?.fromDate || listInput.fromDate || defaultCrRange?.fromDate || "",
+          toDate: result?.result?.toDate || listInput.toDate || defaultCrRange?.toDate || "",
           status: result?.result?.status || listInput.status,
           statusMode: result?.result?.statusMode || listInput.statusMode,
           excludeStatuses:
@@ -463,7 +492,14 @@ export async function handleCrCreatedBy(context) {
       sapUser: effectiveSapUser,
       reply: noMoreMessage,
       summary: noMoreMessage,
-      data: [],
+      data: {
+        viewType: "solman_cr_list",
+        rows: [],
+        tableRecords: [],
+        allCRRecords: [],
+        pagination: emptyPagination,
+        limit: responseTop,
+      },
       pagination: emptyPagination,
       suggestions: buildCrSuggestions(originalQuery || query, listInput.businessScope, []),
     });
@@ -484,8 +520,8 @@ export async function handleCrCreatedBy(context) {
         businessScope: listInput.businessScope,
         processType: result?.result?.processType || listInput.processType,
         triggerAll: result?.result?.triggerAll || listInput.triggerAll,
-        fromDate: result?.result?.fromDate || listInput.fromDate,
-        toDate: result?.result?.toDate || listInput.toDate,
+        fromDate: result?.result?.fromDate || listInput.fromDate || defaultCrRange?.fromDate || "",
+        toDate: result?.result?.toDate || listInput.toDate || defaultCrRange?.toDate || "",
         status: result?.result?.status || listInput.status,
         statusMode: result?.result?.statusMode || listInput.statusMode,
         excludeStatuses:
@@ -528,7 +564,46 @@ export async function handleCrCreatedBy(context) {
     sapUser: effectiveSapUser,
     reply,
     summary: summaryMessage,
-    data: rows,
+    extracted: {
+      system: "solman",
+      intent: "list_change_requests_by_created_by",
+      filters: {
+        businessScope: listInput.businessScope,
+        processType: result?.result?.processType || listInput.processType,
+        triggerAll: result?.result?.triggerAll || listInput.triggerAll,
+        fromDate: result?.result?.fromDate || listInput.fromDate,
+        toDate: result?.result?.toDate || listInput.toDate,
+        status: result?.result?.status || listInput.status,
+        statusMode: result?.result?.statusMode || listInput.statusMode,
+        excludeStatuses:
+          result?.result?.excludeStatuses || listInput.excludeStatuses || [],
+        createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+        createdByMode,
+        top: responseTop,
+        skip: responseSkip,
+        nextSkip: responseNextSkip,
+        displayOffset: responseDisplayOffset,
+        nextDisplayOffset: responseDisplayOffset + rows.length,
+        orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
+        dateText: originalQuery,
+      },
+    },
+    data: {
+      viewType: "solman_cr_list",
+      rows,
+      tableRecords: rows,
+      allCRRecords: rows,
+      pagination: {
+        top: responseTop,
+        skip: responseSkip,
+        nextSkip: responseNextSkip,
+        displayOffset: responseDisplayOffset,
+        nextDisplayOffset: responseDisplayOffset + rows.length,
+        orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
+        hasMoreRows,
+      },
+      limit: responseTop,
+    },
     pagination: {
       top: responseTop,
       skip: responseSkip,

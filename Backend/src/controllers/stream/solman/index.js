@@ -21,10 +21,26 @@ import { handleCrStatusDistribution } from "./solman.cr-status.handler.js";
 import { handleDependencyCheck } from "./solman.dependency-check.handler.js";
 import { handleTransportDependency } from "./solman.transport-dependency.handler.js";
 import { handleTransportList } from "./solman.transport-list.handler.js";
+import { handleCreateTransportRequest, isCreateTransportRequestIntent } from "./transport-request.handler.js";
+import { handleImportTransportToProduction } from "./importTransportToProduction.handler.js";
+import { isImportTransportToProductionIntent } from "../../../services/systems/solman/importTransportToProduction.service.js";
+import { handleCreateTransportTask, isCreateTransportTaskRequest } from "./createTask.js";
+import { handleReleaseTransportTask, isReleaseTransportTaskRequest, isReleaseTransportRequest } from "./releaseTask.js";
+import { handleReleaseTransport, isReleaseTransportIntent } from "./releaseTransport.js";
+
+function pickSolmanSystem(system = {}) {
+  const systemId = cleanString(system?.systemId || system?.id || system?.code).toUpperCase();
+  if (systemId === "HSD") return system;
+
+  return system;
+}
 
 function normalizeIntentQuery(query = "") {
   return cleanString(query)
     .toLowerCase()
+    .replace(/\bc\.?r\.?['’]?s?\b/g, "cr")
+    .replace(/\bchange requests?\b/g, "cr")
+    .replace(/\brejected\b/g, "withdrawn")
     .replace(/\btr['’]s\b/g, "tr")
     .replace(/\btrs\b/g, "tr")
     .replace(/\btransport requests\b/g, "transport")
@@ -47,6 +63,10 @@ function isTransportDependencyIntent(classified, query = "") {
   const intent = cleanString(classified?.intent).toLowerCase();
   const q = normalizeIntentQuery(query);
 
+  if (intent === "dependency_check") {
+    return false;
+  }
+
   if (
     intent === "transport_dependency_check" ||
     intent === "check_dependency_transport" ||
@@ -62,6 +82,10 @@ function isTransportDependencyIntent(classified, query = "") {
 function isTransportListIntent(classified, query = "") {
   const intent = cleanString(classified?.intent).toLowerCase();
   const q = normalizeIntentQuery(query);
+
+  if (isCreateTransportTaskRequest(query)) {
+    return false;
+  }
 
   if (
     intent === "transport_list" ||
@@ -139,12 +163,16 @@ export async function handleSolmanChatStream({
   sse,
   owner,
   query,
+  displayQuery = null,
   sessionId,
   systemId,
   sapUser,
   classified,
+  systemResolution = null,
 }) {
-  const effectiveSystemId = normalizeSystemId(systemId);
+  const effectiveSystemId = normalizeSystemId(
+    systemResolution?.targetSystemId || systemId
+  );
 
   if (!effectiveSystemId) {
     sse.send("error", { message: "systemId is required" });
@@ -174,7 +202,7 @@ export async function handleSolmanChatStream({
     saveUserMessage({
       owner,
       sessionId: session._id,
-      text: query,
+      text: cleanString(displayQuery || query),
     })
   );
 
@@ -193,6 +221,8 @@ export async function handleSolmanChatStream({
       systemId: effectiveSystemId,
     }).lean()
   );
+
+  const solmanSystem = pickSolmanSystem(system);
 
   if (!system) {
     const message = `SAP system profile not found for systemId=${effectiveSystemId}`;
@@ -229,7 +259,7 @@ export async function handleSolmanChatStream({
     owner,
     query,
     session,
-    system,
+    system: solmanSystem,
     sapAuth,
     effectiveSystemId,
     effectiveSapUser,
@@ -238,6 +268,50 @@ export async function handleSolmanChatStream({
 
   if (classified?.intent === "create_change_request") {
     return handleCreateCr(context);
+  }
+
+  if (classified?.intent === "create_transport_request") {
+    return handleCreateTransportRequest(context);
+  }
+
+  if (classified?.intent === "import_transport_to_production") {
+    return handleImportTransportToProduction(context);
+  }
+
+  if (isImportTransportToProductionIntent(query)) {
+    return handleImportTransportToProduction(context);
+  }
+
+  if (isCreateTransportRequestIntent(query)) {
+    return handleCreateTransportRequest(context);
+  }
+
+  if (classified?.intent === "create_transport_task") {
+    return handleCreateTransportTask(context);
+  }
+
+  if (classified?.intent === "release_transport_task") {
+    return handleReleaseTransportTask(context);
+  }
+
+  if (isCreateTransportTaskRequest(query)) {
+    return handleCreateTransportTask(context);
+  }
+
+  if (isReleaseTransportIntent(query)) {
+    return handleReleaseTransport(context);
+  }
+
+  if (isReleaseTransportTaskRequest(query)) {
+    return handleReleaseTransportTask(context);
+  }
+
+  if (isReleaseTransportRequest(query)) {
+    return handleTransportList(context);
+  }
+
+  if (classified?.intent === "dependency_check") {
+    return handleDependencyCheck(context);
   }
 
   if (isTransportDependencyIntent(classified, query)) {
@@ -261,7 +335,6 @@ export async function handleSolmanChatStream({
   }
 
   if (
-    classified?.intent === "dependency_check" ||
     classified?.intent === "check_dependency_transport" ||
     classified?.intent === "dependency_transport_check"
   ) {

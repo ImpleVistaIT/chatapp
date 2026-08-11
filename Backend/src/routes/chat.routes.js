@@ -3,9 +3,16 @@ import express from "express";
 import { handleChatEntry } from "../controllers/chat.entry.controller.js";
 import {
   submitSolmanCreateChangeRequest,
+  submitSolmanCreateTransportRequest,
+  submitSolmanCreateTransportTask,
+  submitSolmanReleaseTransportTask,
   getSolmanChangeRequestDetails,
   listSolmanChangeRequests,
+  listSolmanTransports,
+  checkSolmanTransportDependencies,
+  getPurchaseOrderDetailsAction,
 } from "../controllers/chat.actions.controller.js";
+import { sendChatReportEmail } from "../controllers/chat.email.controller.js";
 
 import {
   listChatSessions,
@@ -26,6 +33,21 @@ chatRoutes.post(
 );
 
 chatRoutes.post(
+  "/actions/solman/create-transport-task",
+  submitSolmanCreateTransportTask
+);
+
+chatRoutes.post(
+  "/actions/solman/create-transport-request",
+  submitSolmanCreateTransportRequest
+);
+
+chatRoutes.post(
+  "/actions/solman/release-transport-task",
+  submitSolmanReleaseTransportTask
+);
+
+chatRoutes.post(
   "/actions/solman/get-change-request-details",
   getSolmanChangeRequestDetails
 );
@@ -34,6 +56,23 @@ chatRoutes.post(
   "/actions/solman/list-change-requests",
   listSolmanChangeRequests
 );
+
+chatRoutes.post(
+  "/actions/solman/list-transports",
+  listSolmanTransports
+);
+
+chatRoutes.post(
+  "/actions/solman/check-transport-dependencies",
+  checkSolmanTransportDependencies
+);
+
+chatRoutes.post(
+  "/actions/s4hana/get-purchase-order-details",
+  getPurchaseOrderDetailsAction
+);
+
+chatRoutes.post("/email", sendChatReportEmail);
 
 // sidebar sessions
 chatRoutes.get("/sessions", listChatSessions);

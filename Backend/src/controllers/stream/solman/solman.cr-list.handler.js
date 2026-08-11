@@ -2,18 +2,22 @@ import { listSolmanChangeRequestsByDateRange } from "../../../services/systems/s
 import {
   buildCrSuggestions,
   buildStatusDistributionChart,
+  buildSolmanAppliedFiltersSummary,
   cleanString,
   formatCrListReply,
   isNextPageQuery,
+  getSolmanCrStatusMaxRows,
   persistAssistantAndTouchSession,
   pickCrListEntities,
   toCrDetailsArray,
 } from "./solman.shared.js";
-import { generateSummaryLLM } from "../../../services/responseNarrator.service.js";
 import { step } from "../stream.shared.js";
+import { SapSystem } from "../../../models/SapSystem.model.js";
 
 const LIST_CHART_PAGE_SIZE = 200;
 const LIST_CHART_MAX_PAGES = 500;
+const CR_STATUS_LOOKBACK_DAYS = 730;
+const CR_STATUS_MAX_ROWS = getSolmanCrStatusMaxRows();
 
 function resolveCurrentSolmanUsername(context) {
   return cleanString(
@@ -45,13 +49,54 @@ function dedupeByCrNumber(rows = []) {
   return deduped;
 }
 
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function formatYmd(date) {
+  return `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}`;
+}
+
+function buildStatusDistributionSummary(chart) {
+  if (!chart || !Array.isArray(chart.data) || chart.data.length === 0) {
+    return "No records found for the given criteria.";
+  }
+
+  const parts = chart.data.map((item) => {
+    const status = item.status || "unknown";
+    return `${item.percentage}% are ${status}`;
+  });
+
+  return `Out of ${chart.totalCRs} Change Requests, ${parts.join(", ")}.`;
+}
+
+function getLastYearCrRange(now = new Date()) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const from = new Date(today);
+  from.setDate(from.getDate() - CR_STATUS_LOOKBACK_DAYS + 1);
+
+  return {
+    fromDate: formatYmd(from),
+    toDate: formatYmd(today),
+  };
+}
+
+function shouldUseInteractiveCrStatusCard(query = "") {
+  const q = cleanString(query).toLowerCase();
+
+  return (
+    q.includes("show cr status") ||
+    q.includes("cr status distribution") ||
+    q.includes("cr status analytics")
+  );
+}
+
 function shouldIncludeChartForCrList(query = "") {
   const q = cleanString(query).toLowerCase();
 
   if (!q) return false;
 
   const explicitAnalyticsTerms = [
-    "status distribution",
     "status breakdown",
     "status analytics",
     "status chart",
@@ -93,6 +138,47 @@ export async function handleCrList(context) {
   } = context;
 
   const listInput = pickCrListEntities(classified?.entities || {}, query);
+  if (listInput.dateValidationError) {
+    const message = listInput.dateValidationError;
+
+    await persistAssistantAndTouchSession({
+      owner,
+      sessionId: session._id,
+      text: message,
+      summary: "Invalid week number provided for CR list query.",
+      extracted: {
+        system: "solman",
+        intent: "list_change_requests",
+        validationError: message,
+      },
+      data: {
+        validationError: message,
+      },
+      responseMeta: {
+        ok: false,
+        kind: "stream",
+        executor: "solman.list_change_requests",
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
+        status: "validation_failed",
+      },
+    });
+
+    sse.send("error", {
+      ok: false,
+      status: "validation_failed",
+      message,
+    });
+    return sse.end();
+  }
+
+  const useInteractiveCrStatusCard =
+    shouldUseInteractiveCrStatusCard(query) ||
+    shouldUseInteractiveCrStatusCard(listInput.dateText);
+  const defaultCrRange =
+    !cleanString(listInput.fromDate) || !cleanString(listInput.toDate)
+      ? getLastYearCrRange()
+      : null;
 
   let resolvedCreatedBy = cleanString(listInput.createdBy || "");
 
@@ -237,6 +323,10 @@ export async function handleCrList(context) {
       pendingAction: {
         system: "solman",
         intent: "list_change_requests",
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
         query,
         filters: {
           businessScope: listInput.businessScope,
@@ -265,20 +355,33 @@ export async function handleCrList(context) {
     message: "Fetching change requests from Solution Manager...",
   });
 
+  const requestFromDate = listInput.fromDate || defaultCrRange?.fromDate || "";
+  const requestToDate = listInput.toDate || defaultCrRange?.toDate || "";
+
+  console.log("[SOLMAN] list date filters:", {
+    query,
+    fromDate: cleanString(requestFromDate),
+    toDate: cleanString(requestToDate),
+    status: cleanString(listInput.status || ""),
+    statusMode: cleanString(listInput.statusMode || ""),
+    createdBy: cleanString(resolvedCreatedBy || ""),
+    businessScope: cleanString(listInput.businessScope || ""),
+  });
+
   const result = await step("listSolmanChangeRequestsByDateRange", () =>
     listSolmanChangeRequestsByDateRange({
       system,
       sapAuth,
       processType: listInput.processType,
       triggerAll: listInput.triggerAll || "X",
-      fromDate: listInput.fromDate || "",
-      toDate: listInput.toDate || "",
+      fromDate: requestFromDate,
+      toDate: requestToDate,
       status: listInput.status || "",
       excludeStatuses: listInput.excludeStatuses || [],
       statusMode: listInput.statusMode || "",
       dateText: listInput.dateText || query,
       createdBy: resolvedCreatedBy || "",
-      top: listInput.top ?? 10,
+      top: listInput.top ?? null,
       skip: listInput.skip || 0,
       orderBy: listInput.orderBy || "CREATED_ON desc",
     })
@@ -306,7 +409,7 @@ export async function handleCrList(context) {
           excludeStatuses: listInput.excludeStatuses || [],
           createdBy: resolvedCreatedBy || "",
           createdByMode: listInput.createdByMode || "",
-          top: listInput.top ?? 10,
+          top: listInput.top ?? null,
           skip: listInput.skip || 0,
           nextSkip: listInput.nextSkip || 0,
           orderBy: listInput.orderBy || "CREATED_ON desc",
@@ -335,71 +438,194 @@ export async function handleCrList(context) {
   }
 
   const rawRows = toCrDetailsArray(result);
-  const rows = dedupeByCrNumber(rawRows);
-  const responseTop = result?.result?.top ?? listInput.top ?? 10;
+  const rows = Array.isArray(rawRows) ? rawRows : [];
+  const responseTop = result?.result?.top ?? listInput.top ?? null;
   const responseSkip = result?.result?.skip ?? listInput.skip ?? 0;
   const rawRowCount = Array.isArray(rawRows) ? rawRows.length : 0;
   const normalizedTop = Math.max(0, Number(responseTop) || 0);
   const responseNextSkip =
     result?.result?.nextSkip ??
     responseSkip + (normalizedTop > 0 ? normalizedTop : rows.length);
-  const hasMore = normalizedTop > 0 ? rawRowCount >= normalizedTop : rawRowCount > 0;
   const noMoreMessage = "No more change requests found.";
   const isNextPageRequest = isNextPageQuery(query);
+  const explicitCountRequest = normalizedTop > 0 && !isNextPageRequest;
+  const hasMore = explicitCountRequest ? false : normalizedTop > 0 ? rawRowCount >= normalizedTop : false;
   const responseDisplayOffset = Math.max(
     0,
     Number(listInput.displayOffset ?? responseSkip) || 0
   );
-  const shouldBuildChart = rows.length > 0 && shouldIncludeChartForCrList(query);
+  const shouldBuildChart = rows.length > 0;
   let chart = null;
+  let totalRows = rows.length;
+  let chartRows = [];
 
-  if (shouldBuildChart) {
-    const chartFromDate = result?.result?.fromDate || listInput.fromDate || "";
-    const chartToDate = result?.result?.toDate || listInput.toDate || "";
+  if (shouldBuildChart && !explicitCountRequest) {
+    const chartFromDate =
+      result?.result?.fromDate || listInput.fromDate || defaultCrRange?.fromDate || "";
+    const chartToDate =
+      result?.result?.toDate || listInput.toDate || defaultCrRange?.toDate || "";
 
-    const fullChartFetch = await step("fetchAllCrRowsForListChart", () =>
+    if (useInteractiveCrStatusCard) {
+      const fullChartFetch = await step("fetchAllCrRowsForListChart", () =>
+        fetchAllCrRowsForListChart({
+          system,
+          sapAuth,
+          listInput,
+          resolvedCreatedBy,
+          query,
+          fromDate: chartFromDate,
+          toDate: chartToDate,
+        })
+      );
+
+      if (fullChartFetch?.ok !== false) {
+        chartRows = dedupeByCrNumber(fullChartFetch?.rows || []);
+        totalRows = Math.max(totalRows, chartRows.length);
+        chart = buildStatusDistributionChart(chartRows, {
+          title: "CR Status Distribution",
+          filters: {
+            businessScope: listInput.businessScope,
+            processType: result?.result?.processType || listInput.processType,
+            triggerAll: result?.result?.triggerAll || listInput.triggerAll || "X",
+            fromDate: chartFromDate,
+            toDate: chartToDate,
+            status: result?.result?.status || listInput.status,
+            statusMode: result?.result?.statusMode || listInput.statusMode,
+            createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+          },
+        });
+
+        chart.pagesFetched = Number(fullChartFetch?.pages || 0);
+        if (fullChartFetch?.truncated) {
+          chart.truncated = true;
+        }
+      } else {
+        chart = buildStatusDistributionChart(rows, {
+          title: "CR Status Distribution",
+          filters: {
+            businessScope: listInput.businessScope,
+            processType: result?.result?.processType || listInput.processType,
+            triggerAll: result?.result?.triggerAll || listInput.triggerAll || "X",
+            fromDate: chartFromDate,
+            toDate: chartToDate,
+            status: result?.result?.status || listInput.status,
+            statusMode: result?.result?.statusMode || listInput.statusMode,
+            createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+          },
+        });
+
+        chart.pagesFetched = 1;
+        chart.totalRows = rows.length;
+      }
+    } else {
+      const fullChartFetch = await step("fetchAllCrRowsForListChart", () =>
+        fetchAllCrRowsForListChart({
+          system,
+          sapAuth,
+          listInput,
+          resolvedCreatedBy,
+          query,
+          fromDate: chartFromDate,
+          toDate: chartToDate,
+        })
+      );
+
+      if (fullChartFetch?.ok !== false) {
+        chartRows = dedupeByCrNumber(fullChartFetch?.rows || []);
+        totalRows = Math.max(totalRows, chartRows.length);
+
+        chart = buildStatusDistributionChart(chartRows, {
+          title: "CR Status Distribution",
+          filters: {
+            businessScope: listInput.businessScope,
+            processType: result?.result?.processType || listInput.processType,
+            triggerAll: result?.result?.triggerAll || listInput.triggerAll || "X",
+            fromDate: chartFromDate,
+            toDate: chartToDate,
+            status: result?.result?.status || listInput.status,
+            statusMode: result?.result?.statusMode || listInput.statusMode,
+            createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+          },
+        });
+
+        chart.pagesFetched = Number(fullChartFetch?.pages || 0);
+        if (fullChartFetch?.truncated) {
+          chart.truncated = true;
+        }
+      }
+    }
+  }
+
+  if (!explicitCountRequest && !useInteractiveCrStatusCard && rows.length > 0 && totalRows === rows.length) {
+    const fullRowsFetch = await step("fetchAllCrRowsForListSummary", () =>
       fetchAllCrRowsForListChart({
         system,
         sapAuth,
         listInput,
         resolvedCreatedBy,
         query,
-        fromDate: chartFromDate,
-        toDate: chartToDate,
+        fromDate: result?.result?.fromDate || listInput.fromDate,
+        toDate: result?.result?.toDate || listInput.toDate,
       })
     );
 
-    if (fullChartFetch?.ok !== false) {
-      const chartRows = dedupeByCrNumber(fullChartFetch?.rows || []);
-
-      chart = buildStatusDistributionChart(chartRows, {
-        title: "CR Status Distribution",
-        filters: {
-          businessScope: listInput.businessScope,
-          processType: result?.result?.processType || listInput.processType,
-          triggerAll: result?.result?.triggerAll || listInput.triggerAll || "X",
-          fromDate: chartFromDate,
-          toDate: chartToDate,
-          status: result?.result?.status || listInput.status,
-          statusMode: result?.result?.statusMode || listInput.statusMode,
-          createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
-        },
-      });
-
-      chart.pagesFetched = Number(fullChartFetch?.pages || 0);
-      if (fullChartFetch?.truncated) {
-        chart.truncated = true;
-      }
+    if (fullRowsFetch?.ok !== false) {
+      totalRows = Math.max(totalRows, dedupeByCrNumber(fullRowsFetch?.rows || []).length);
     }
   }
 
   const responseData = {
+    viewType: useInteractiveCrStatusCard ? "solman_cr_status" : "solman_cr_list",
     rows,
+    systemId: effectiveSystemId,
+    sapUser: effectiveSapUser,
     ...(chart ? { chart } : {}),
+    ...(chart && Array.isArray(chartRows) && chartRows.length > 0
+      ? {
+          allCRRecords: chartRows,
+          statusDistribution: chart,
+        }
+      : {}),
+    ...(useInteractiveCrStatusCard
+      ? {
+          allCRRecords: Array.isArray(chartRows) && chartRows.length > 0 ? chartRows : rows,
+          tableRecords: rows,
+          statusDistribution: chart,
+          dateRange: {
+            fromDate:
+              result?.result?.fromDate || listInput.fromDate || defaultCrRange?.fromDate || "",
+            toDate:
+              result?.result?.toDate || listInput.toDate || defaultCrRange?.toDate || "",
+          },
+          limit: responseTop,
+        }
+      : {}),
   };
 
+  const solmanSystem = await SapSystem.findOne({
+    owner: { $in: [owner, "local"] },
+    systemId: "HSD",
+  })
+    .select({ systemId: 1 })
+    .lean();
+
+  const solmanSystemId = String(solmanSystem?.systemId || "HSD").trim().toUpperCase();
+  const rowsWithContext = rows.map((row) => ({ ...row, systemId: solmanSystemId, sapUser: effectiveSapUser }));
+  const chartRowsWithContext = Array.isArray(chartRows) ? chartRows.map((row) => ({ ...row, systemId: solmanSystemId, sapUser: effectiveSapUser })) : chartRows;
+
+  responseData.rows = rowsWithContext;
+  responseData.systemId = solmanSystemId;
+  responseData.sapUser = effectiveSapUser;
+  if (Array.isArray(chartRowsWithContext) && chartRowsWithContext.length > 0) {
+    responseData.allCRRecords = chartRowsWithContext;
+  }
+  if (useInteractiveCrStatusCard) {
+    responseData.tableRecords = rowsWithContext;
+    responseData.allCRRecords = Array.isArray(chartRowsWithContext) && chartRowsWithContext.length > 0 ? chartRowsWithContext : rowsWithContext;
+  }
+
   if (rows.length === 0 && !isNextPageRequest) {
-    const noResultsMessage = "No change requests found.";
+    const noResultsMessage = "No records found for the given criteria.";
 
     await persistAssistantAndTouchSession({
       owner,
@@ -429,6 +655,7 @@ export async function handleCrList(context) {
         },
       },
       data: responseData,
+      suggestions: buildCrSuggestions(query, listInput.businessScope, useInteractiveCrStatusCard ? chartRows : rows),
       responseMeta: {
         ok: true,
         kind: "stream",
@@ -460,7 +687,7 @@ export async function handleCrList(context) {
         orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
         hasMore: false,
       },
-      suggestions: buildCrSuggestions(query, listInput.businessScope, rows),
+      suggestions: buildCrSuggestions(query, listInput.businessScope, useInteractiveCrStatusCard ? chartRows : rows),
       ...(chart ? { chart } : {}),
     });
 
@@ -505,6 +732,11 @@ export async function handleCrList(context) {
         },
       },
       data: responseData,
+      suggestions: [
+        `Show ${listInput.businessScope ? `${listInput.businessScope} ` : ""}CR list this week`
+          .replace(/\s+/g, " ")
+          .trim(),
+      ],
       responseMeta: {
         ok: true,
         kind: "stream",
@@ -562,8 +794,8 @@ export async function handleCrList(context) {
 
   let reply = formatCrListReply(rows, {
     businessScope: listInput.businessScope,
-    fromDate: result?.result?.fromDate || listInput.fromDate,
-    toDate: result?.result?.toDate || listInput.toDate,
+    fromDate: result?.result?.fromDate || requestFromDate,
+    toDate: result?.result?.toDate || requestToDate,
     status: result?.result?.status || listInput.status,
     statusMode: result?.result?.statusMode || listInput.statusMode,
     createdBy: resolvedCreatedBy || "",
@@ -578,27 +810,22 @@ export async function handleCrList(context) {
 
   const summary =
     rows.length > 0
-      ? await step("generateSummaryLLM", () =>
-          generateSummaryLLM({
-            entityLabel: "change requests",
-            count: rows.length,
-            extracted: {
-              businessScope: listInput.businessScope,
-              processType: result?.result?.processType || listInput.processType,
-              createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
-              status: result?.result?.status || listInput.status,
-              dateFrom: result?.result?.fromDate || listInput.fromDate,
-              dateTo: result?.result?.toDate || listInput.toDate,
-            },
-            sample: rows.slice(0, 5),
-            columns: Object.keys(rows[0] || {}).slice(0, 8),
-          })
-        )
-      : "No change requests found.";
+      ? buildSolmanAppliedFiltersSummary({
+          status: result?.result?.status || listInput.status,
+          statusMode: result?.result?.statusMode || listInput.statusMode,
+          excludeStatuses: result?.result?.excludeStatuses || listInput.excludeStatuses || [],
+          fromDate: result?.result?.fromDate || requestFromDate,
+          toDate: result?.result?.toDate || requestToDate,
+          createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+          businessScope: listInput.businessScope,
+        }) || "No records found for the given criteria."
+      : "No records found for the given criteria.";
 
   const persistedPendingAction = {
     system: "solman",
     intent: "list_change_requests",
+    systemId: effectiveSystemId,
+    sapUser: effectiveSapUser,
     query: listInput.dateText || query,
     filters: {
       businessScope: listInput.businessScope,
@@ -612,8 +839,8 @@ export async function handleCrList(context) {
       displayOffset: responseDisplayOffset,
       nextDisplayOffset: responseDisplayOffset + rows.length,
       orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
-      fromDate: result?.result?.fromDate || listInput.fromDate,
-      toDate: result?.result?.toDate || listInput.toDate,
+      fromDate: result?.result?.fromDate || requestFromDate,
+      toDate: result?.result?.toDate || requestToDate,
       statusMode: result?.result?.statusMode || listInput.statusMode,
       excludeStatuses: result?.result?.excludeStatuses || listInput.excludeStatuses || [],
       createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
@@ -651,6 +878,7 @@ export async function handleCrList(context) {
       },
     },
     data: responseData,
+    suggestions: buildCrSuggestions(query, listInput.businessScope, useInteractiveCrStatusCard ? chartRows : rows),
     responseMeta: {
       ok: true,
       kind: "stream",
@@ -675,6 +903,30 @@ export async function handleCrList(context) {
     sapUser: effectiveSapUser,
     reply,
     summary,
+    extracted: {
+      system: "solman",
+      intent: "list_change_requests",
+      filters: {
+        businessScope: listInput.businessScope,
+        processType: result?.result?.processType || listInput.processType,
+        triggerAll: result?.result?.triggerAll || listInput.triggerAll,
+        fromDate: result?.result?.fromDate || listInput.fromDate,
+        toDate: result?.result?.toDate || listInput.toDate,
+        status: result?.result?.status || listInput.status,
+        statusMode: result?.result?.statusMode || listInput.statusMode,
+        excludeStatuses:
+          result?.result?.excludeStatuses || listInput.excludeStatuses || [],
+        createdBy: result?.result?.createdBy || resolvedCreatedBy || "",
+        createdByMode: listInput.createdByMode || "",
+        top: responseTop,
+        skip: responseSkip,
+        nextSkip: responseNextSkip,
+        displayOffset: responseDisplayOffset,
+        nextDisplayOffset: responseDisplayOffset + rows.length,
+        orderBy: result?.result?.orderBy || listInput.orderBy || "CREATED_ON desc",
+        dateText: listInput.dateText || query,
+      },
+    },
     data: responseData,
     pagination: {
       top: responseTop,

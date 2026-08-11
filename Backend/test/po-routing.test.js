@@ -11,6 +11,9 @@ import { isLikelyGibberishQuery } from "../src/controllers/chat.stream.controlle
 import {
   enforceLatestOrderBy,
   applyPoNextContinuationState,
+  isSingleLatestPoRequest,
+  sortRowsByLatestDate,
+  isExplicitLatestPoQuery,
 } from "../src/controllers/stream/s4po.stream.controller.js";
 import { buildGenericTableReply } from "../src/controllers/stream/stream.shared.js";
 import { handleChatStream } from "../src/controllers/chat.stream.controller.js";
@@ -74,6 +77,56 @@ test("extracts year + created-by username filter", async () => {
   delete process.env.FIXED_TODAY;
 });
 
+test("extracts quoted created-by username with filler words", async () => {
+  const allowedFields = ["CrtDate", "UserCreated", "PoNo", "NetPrice"];
+
+  const extracted = await extractDocQuery({
+    query: 'show po created by the user "ISLM"',
+    allowedFields,
+    fieldLabels: {},
+  });
+
+  const userFilter = (extracted.filters || []).find(
+    (f) => f?.field === "UserCreated" && f?.op === "eq"
+  );
+
+  assert.equal(userFilter?.value, "ISLM");
+});
+
+test("my PO phrasing resolves to self-user creator filter", async () => {
+  const allowedFields = ["CrtDate", "UserCreated", "PoNo", "NetPrice"];
+
+  const extracted = await extractDocQuery({
+    query: "Show my POs",
+    allowedFields,
+    fieldLabels: {},
+  });
+
+  const userFilter = (extracted.filters || []).find(
+    (f) => f?.field === "UserCreated" && f?.op === "eq"
+  );
+
+  assert.equal(userFilter?.value, "ME");
+});
+
+test("extracts explicit ISO date ranges as inclusive PoDocDate filters", async () => {
+  const allowedFields = ["PoDocDate", "CrtDate", "UserCreated", "PoNo"];
+
+  const extracted = await extractDocQuery({
+    query: "how many POs are there from 2017-10-10 to 2017-10-31",
+    allowedFields,
+    fieldLabels: {},
+  });
+
+  const poDocDateFilters = (extracted.filters || []).filter((filter) => filter?.field === "PoDocDate");
+  const ge = poDocDateFilters.find((filter) => filter?.op === "ge");
+  const le = poDocDateFilters.find((filter) => filter?.op === "le");
+
+  assert.equal(poDocDateFilters.length >= 2, true);
+  assert.equal(ge?.value, "2017-10-10T00:00:00");
+  assert.equal(le?.value, "2017-10-31T23:59:59");
+});
+
 test("gibberish query has no PO signal and no structured request", () => {
   const gibberish = "asdf qwer zxcv blabla";
 
@@ -118,6 +171,35 @@ test("routing guard flags random gibberish prompt", () => {
   assert.equal(isLikelyGibberishQuery("show latest purchase orders"), false);
 });
 
+test("PO next-page continuation advances by the actual previous result count", () => {
+  const state = applyPoNextContinuationState({
+    query: "show next 10 po",
+    extracted: {
+      docType: "PO",
+      limit: 10,
+      skip: 0,
+      listMode: "latest_po",
+      fields: ["PoNo"],
+      filters: [],
+      orderBy: [{ field: "CrtDate", dir: "desc" }],
+    },
+    previousMemory: {
+      extracted: {
+        docType: "PO",
+        limit: 10,
+        skip: 0,
+        listMode: "latest_po",
+      },
+      data: [{ PoNo: "4500001935" }],
+    },
+  });
+
+  assert.equal(state.error, null);
+  assert.equal(state.nextIntent, true);
+  assert.equal(state.extracted.skip, 1);
+  assert.equal(state.extracted.limit, 10);
+});
+
 test("latest PO query enforces descending order on available date field", () => {
   const extracted = {
     listMode: "latest_po",
@@ -152,6 +234,27 @@ test("latest PO query keeps all dates and only enforces descending sort", () => 
 
   assert.equal(extracted.filters.length, 0);
   assert.deepEqual(extracted.orderBy, [{ field: "CrtDate", dir: "desc" }]);
+});
+
+test("latest PO sorting prefers CrtDate over PoNo", () => {
+  const rows = sortRowsByLatestDate([
+    { PoNo: "4500000066", CrtDate: "2017-01-01T00:00:00" },
+    { PoNo: "4500001935", CrtDate: "2026-01-01T00:00:00" },
+  ]);
+
+  assert.equal(rows[0]?.PoNo, "4500001935");
+});
+
+test("singular latest PO prompts are collapsed to one row", () => {
+  assert.equal(isSingleLatestPoRequest("show latest purchase order"), true);
+  assert.equal(isSingleLatestPoRequest("latest PO"), true);
+  assert.equal(isSingleLatestPoRequest("show latest purchase orders"), false);
+});
+
+test("generic show po does not trigger explicit latest-only date filtering", () => {
+  assert.equal(isExplicitLatestPoQuery("show po"), false);
+  assert.equal(isExplicitLatestPoQuery("show latest po"), true);
+  assert.equal(isExplicitLatestPoQuery("most recent purchase orders"), true);
 });
 
 test("chat stream returns invalid_prompt for gibberish before ambiguous routing", async () => {

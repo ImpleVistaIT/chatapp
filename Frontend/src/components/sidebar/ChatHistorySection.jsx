@@ -1,7 +1,6 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { FiEdit3, FiTrash2, FiMoreVertical } from "react-icons/fi";
-import chatIcon from "../../assets/new-chat.png";
+import { FiClock, FiEdit3, FiMessageSquare, FiMoreVertical, FiPlus, FiTrash2 } from "react-icons/fi";
 import { toast } from "react-hot-toast";
 
 /**
@@ -48,6 +47,28 @@ export default function ChatHistorySection({
   //---------------------------------------------//
   const menuButtonRefs = useRef({});
   const menuRefs = useRef({});
+
+  const groupedSessions = useMemo(() => {
+    const items = Array.isArray(sessions) ? sessions : [];
+    const today = new Date();
+    const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const groups = [
+      { key: "Today", items: [] },
+      { key: "Yesterday", items: [] },
+      { key: "Earlier", items: [] },
+    ];
+
+    for (const session of items) {
+      const createdAt = session?.createdAt ? new Date(session.createdAt) : null;
+      const deltaDays = createdAt ? Math.floor((startOfDay(today) - startOfDay(createdAt)) / dayMs) : 999;
+      if (deltaDays <= 0) groups[0].items.push(session);
+      else if (deltaDays === 1) groups[1].items.push(session);
+      else groups[2].items.push(session);
+    }
+
+    return groups.filter((group) => group.items.length > 0);
+  }, [sessions]);
 
   //---------------------------------------------//
   // Rename logic
@@ -179,16 +200,20 @@ export default function ChatHistorySection({
       <div
         key={id}
         className={classNames(
-          "relative group flex items-center justify-between rounded-xl px-3 py-2 mb-1 transition-all duration-150",
+          "relative group flex items-center justify-between rounded-2xl px-3 py-2.5 mb-2 transition-all duration-200 border",
           isActive
-            ? "bg-blue-100 text-blue-700"
-            : "hover:bg-blue-50 text-zinc-800"
+            ? "bg-blue-50 text-blue-700 border-blue-200 shadow-sm"
+            : "bg-white/90 hover:bg-blue-50 text-slate-700 border-slate-200/80 hover:border-blue-200"
         )}
       >
         {/* Active indicator line */}
         {isActive && (
           <div className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r-full bg-blue-600" />
         )}
+
+        <div className="mr-2 flex h-8 w-8 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
+          <FiMessageSquare className="h-4 w-4" />
+        </div>
 
         {/* Edit mode */}
         {isRenaming ? (
@@ -216,7 +241,7 @@ export default function ChatHistorySection({
                 setMenuOpenId(null);
               }
             }}
-            className="ml-2 flex-1 text-xs px-2 py-1 rounded border border-blue-400 outline-none focus:border-blue-500 bg-white"
+            className="ml-2 flex-1 text-xs px-3 py-2 rounded-xl border border-blue-300 outline-none focus:border-blue-500 bg-white"
             aria-label="Rename chat session"
           />
         ) : (
@@ -233,7 +258,7 @@ export default function ChatHistorySection({
             }}
             type="button"
             className={classNames(
-              "w-full flex-1 text-left text-xs truncate px-1 py-1",
+              "w-full flex-1 text-left text-sm truncate px-1 py-1 font-medium",
               isActive ? "ml-2 font-medium" : ""
             )}
             title={c.title || "New chat"}
@@ -256,10 +281,10 @@ export default function ChatHistorySection({
             }}
             ref={(el) => (menuButtonRefs.current[id] = el)}
             className={classNames(
-              "p-1.5 rounded-lg transition-all duration-150 flex-shrink-0",
+              "p-2 rounded-xl transition-all duration-150 flex-shrink-0",
               isMenuOpen
-                ? "opacity-100 bg-gray-200 text-zinc-700"
-                : "opacity-75 group-hover:opacity-100 text-zinc-500 hover:bg-gray-200"
+                ? "opacity-100 bg-slate-200 text-slate-700"
+                : "opacity-75 group-hover:opacity-100 text-slate-500 hover:bg-slate-100"
             )}
             aria-haspopup="menu"
             aria-expanded={isMenuOpen}
@@ -292,7 +317,7 @@ export default function ChatHistorySection({
             data-menu-for={menuOpenId}
             tabIndex={-1}
             onBlur={(e) => handleMenuBlur(e, menuOpenId)}
-            className="fixed w-44 bg-white border border-gray-200 rounded-xl shadow-xl z-[999999] overflow-hidden"
+            className="fixed w-44 bg-white border border-slate-200 rounded-2xl shadow-[0_20px_50px_rgba(15,23,42,0.14)] z-[999999] overflow-hidden"
             style={{
               top: `${menuPosition.top}px`,
               left: `${menuPosition.left}px`,
@@ -305,17 +330,17 @@ export default function ChatHistorySection({
                 setEditingTitle(openSession.title || "New chat");
                 setMenuOpenId(null);
               }}
-              className="w-full flex items-center gap-3 text-left px-4 py-3 text-xs text-zinc-700 hover:bg-gray-50 transition-colors"
+              className="w-full flex items-center gap-3 text-left px-4 py-3 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
               type="button"
               aria-label="Start renaming chat"
               tabIndex={0}
             >
-              <FiEdit3 className="h-4 w-4 text-zinc-500" />
+              <FiEdit3 className="h-4 w-4 text-slate-500" />
               <span>Rename</span>
             </button>
 
             {/* SPLIT LINE */}
-            <div className="border-t border-gray-200" />
+            <div className="border-t border-slate-200" />
 
             {/* DELETE */}
             <button
@@ -347,10 +372,10 @@ export default function ChatHistorySection({
         <button
           onClick={onNewChatWithToast}
           type="button"
-          className="mx-2 mt-3 flex items-center gap-2 rounded-xl px-3 py-2 text-zinc-800 hover:bg-blue-50 hover:text-blue-700 transition-all duration-150 active:scale-[0.98] flex-shrink-0"
+          className="mx-2 mt-2 flex items-center gap-2 rounded-xl px-3 py-2 text-slate-800 hover:bg-blue-50 hover:text-blue-700 transition-all duration-150 active:scale-[0.98] flex-shrink-0"
           aria-label="Start a new chat"
         >
-          <img src={chatIcon} className="w-5 h-5" alt="New chat" />
+          <FiPlus className="h-6 w-5" />
           <span className="text-xs font-medium">New chat</span>
         </button>
 
@@ -367,15 +392,23 @@ export default function ChatHistorySection({
         >
           <div className="px-2 pb-3 relative">
             {sessions.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-zinc-400 text-xs">
+              <div className="flex items-center justify-center h-full text-slate-400 text-xs">
                 {sessionsLoading ? "Loading..." : "No chats yet"}
               </div>
             ) : (
-              sessions.map(renderChatItem)
+                  groupedSessions.map((group) => (
+                    <div key={group.key} className="mb-3">
+                      <div className="mb-2 flex items-center gap-2 px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                        <FiClock className="h-3.5 w-3.5" />
+                        <span>{group.key}</span>
+                      </div>
+                      <div className="space-y-1">{group.items.map(renderChatItem)}</div>
+                    </div>
+                  ))
             )}
 
             {sessionsLoading && sessions.length > 0 && (
-              <div className="text-[11px] text-zinc-400 px-3 py-2">
+                  <div className="text-[11px] text-slate-400 px-3 py-2">
                 Loading more…
               </div>
             )}

@@ -2,21 +2,24 @@ function classNames(...x) {
   return x.filter(Boolean).join(" ");
 }
 
+import { FiCheckCircle, FiPower, FiServer } from "react-icons/fi";
+
 export default function SystemsGrid({
   displaySystems,
   connectingSid,
   normalizeSid,
   setActiveSystemLocal,
+  onRenameSystem = () => {},
   onDisconnectSystem = () => {},
 }) {
   const systemsArr = Array.isArray(displaySystems) ? displaySystems : [];
 
   return (
-    <div className="px-2 pb-3 flex-shrink-0 mt-auto">
+    <div className="px-3 pb-4 flex-shrink-0 mt-auto">
       <div
         className={classNames(
-          "grid grid-cols-2 gap-2",
-          "max-h-[220px] overflow-y-auto pr-1",
+          "grid grid-cols-2 gap-3",
+          "max-h-[240px] overflow-y-auto pr-1",
           "[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
         )}
       >
@@ -40,15 +43,15 @@ export default function SystemsGrid({
             <div
               key={sys?._id || sys?.id || sid || i}
               className={classNames(
-                "group relative rounded-lg border-2 transition-all duration-150 overflow-hidden",
+                "group relative overflow-hidden rounded-[18px] border transition-all duration-200 ai-smooth shadow-sm",
                 isConnected
-                  ? "border-green-400 bg-white text-zinc-800 hover:bg-green-50 shadow-sm"
-                  : "border-red-400 bg-red-50 text-red-700 hover:bg-red-100"
+                  ? "border-emerald-200 bg-white text-slate-800 hover:-translate-y-0.5 hover:shadow-[0_12px_30px_rgba(15,23,42,0.10)]"
+                  : "border-rose-200 bg-rose-50/80 text-rose-700 hover:-translate-y-0.5 hover:bg-rose-50"
               )}
             >
               <div
                 className={classNames(
-                  "w-full px-3 py-3 text-center font-medium rounded-lg transition",
+                  "w-full px-3 py-3 text-left font-medium rounded-[18px] transition",
                   isConnecting ? "cursor-wait opacity-70" : "cursor-default"
                 )}
                 title={
@@ -57,61 +60,63 @@ export default function SystemsGrid({
                     : `${label} is disconnected`
                 }
               >
-                <span
-                  className={classNames(
-                    "absolute top-1 right-1 text-[9px] px-1.5 py-0.5 rounded text-white",
-                    isConnected ? "bg-green-600" : "bg-red-600"
-                  )}
-                >
-                  {isConnected ? "Live" : "Disconnected"}
-                </span>
-
-                <span className="text-[11px] block truncate font-semibold">
-                  {isConnecting ? "Connecting…" : label}
-                </span>
-              </div>
-
-              {!isConnecting && (
-                <div className="absolute inset-x-2 bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  {isConnected ? (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDisconnectSystem({
-                          ...sys,
-                          systemId: sid,
-                          name: label,
-                        });
-                      }}
-                      className="w-full rounded-md bg-red-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-red-700"
-                      title={`Disconnect ${label}`}
-                    >
-                      Disconnect
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActiveSystemLocal({
-                          ...sys,
-                          systemId: sid,
-                          name: label,
-                          connected: false,
-                          isConnected: false,
-                          status: "disconnected",
-                          active: false,
-                        });
-                      }}
-                      className="w-full rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-emerald-700"
-                      title={`Connect ${label}`}
-                    >
-                      Connect
-                    </button>
-                  )}
+                <div className="flex items-start gap-2">
+                  <div className={classNames("mt-0.5 flex h-8 w-8 items-center justify-center rounded-xl", isConnected ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700")}>
+                    <FiServer className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="text-[11px] block truncate font-semibold text-inherit">
+                      {isConnecting ? "Connecting…" : label}
+                    </span>
+                    <span className="mt-0.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em]">
+                      {isConnected ? <FiCheckCircle className="h-3 w-3" /> : <FiPower className="h-3 w-3" />}
+                      {isConnected ? "Online" : "Offline"}
+                    </span>
+                  </div>
                 </div>
-              )}
+
+                {!isConnecting && (
+                  <div className="absolute inset-x-2 bottom-2 opacity-0 transition-opacity group-hover:opacity-100">
+                    {isConnected ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDisconnectSystem({
+                            ...sys,
+                            systemId: sid,
+                            name: label,
+                          });
+                        }}
+                        className="w-full rounded-xl bg-slate-900 px-2 py-1.5 text-[10px] font-semibold text-white hover:bg-slate-800"
+                        title={`Disconnect ${label}`}
+                      >
+                        Disconnect
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveSystemLocal({
+                            ...sys,
+                            systemId: sid,
+                            name: label,
+                            connected: false,
+                            isConnected: false,
+                            status: "disconnected",
+                            active: false,
+                          });
+                        }}
+                        className="w-full rounded-xl bg-blue-600 px-2 py-1.5 text-[10px] font-semibold text-white hover:bg-blue-700"
+                        title={`Connect ${label}`}
+                      >
+                        Connect
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           );
         })}

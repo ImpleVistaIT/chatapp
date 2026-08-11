@@ -1,0 +1,24 @@
+services:
+  ai-service:
+    build: .
+    ports:
+      - "9000:9000"
+    environment:
+      API_KEY: ""
+      LLM_BASE_URL: http://vllm:8000/v1
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+    depends_on:
+      - qdrant
+      - vllm
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.4
+    ports:
+      - "6333:6333"
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8000:8000"
+    command: ["--model", "Qwen/Qwen3-8B-Instruct", "--host", "0.0.0.0", "--port", "8000"]

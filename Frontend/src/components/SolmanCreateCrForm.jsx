@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "../api/authFetch";
+import { API_BASE } from "../api/client";
 
 function clean(v) {
   return String(v || "").trim();
@@ -8,6 +9,7 @@ function clean(v) {
 export default function SolmanCreateCrForm({
   systemId = "",
   sapUser = "",
+  sessionId = "",
   initialValues = {},
   pendingAction = null,
   onSuccess,
@@ -26,8 +28,7 @@ export default function SolmanCreateCrForm({
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
 
-  const apiBase =
-    import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+  const apiBase = API_BASE;
 
   useEffect(() => {
     const values =
@@ -75,12 +76,40 @@ export default function SolmanCreateCrForm({
     setError("");
     setFieldErrors({});
 
+    const debugPayload = {
+      systemId: clean(systemId),
+      sapUser: clean(sapUser),
+      sessionId: clean(sessionId),
+      payload: {
+        ShortDesc: clean(shortDesc),
+        DeliveryResponsible: clean(deliveryResponsible),
+        Developer: clean(developer),
+        Tester: clean(tester),
+        WorkItemReference: clean(workItemReference),
+        Landscape: clean(landscape),
+        ...(clean(url) && clean(urlName)
+          ? {
+              REQ_URL_NAV: [
+                {
+                  URL: clean(url),
+                  URL_NAME: clean(urlName),
+                },
+              ],
+            }
+          : {}),
+      },
+    };
+
+    console.log("[SolMan Create CR] submit clicked", debugPayload);
+
     if (!clean(systemId)) {
+      console.warn("[SolMan Create CR] blocked: missing active SAP system", debugPayload);
       setError("No active SAP system selected.");
       return;
     }
 
     if (!clean(sapUser)) {
+      console.warn("[SolMan Create CR] blocked: missing active SAP user", debugPayload);
       setError("No active SAP user found.");
       return;
     }
@@ -111,23 +140,7 @@ export default function SolmanCreateCrForm({
       return;
     }
 
-    const payload = {
-      ShortDesc: clean(shortDesc),
-      DeliveryResponsible: clean(deliveryResponsible),
-      Developer: clean(developer),
-      Tester: clean(tester),
-      WorkItemReference: clean(workItemReference),
-      Landscape: clean(landscape),
-    };
-
-    if (clean(url) && clean(urlName)) {
-      payload.REQ_URL_NAV = [
-        {
-          URL: clean(url),
-          URL_NAME: clean(urlName),
-        },
-      ];
-    }
+    const payload = debugPayload.payload;
 
     console.log("Submitting create change request", {
       systemId: clean(systemId),
@@ -148,12 +161,19 @@ export default function SolmanCreateCrForm({
           body: JSON.stringify({
             systemId: clean(systemId),
             sapUser: clean(sapUser),
+              sessionId: clean(sessionId),
             payload,
           }),
         }
       );
 
       const data = await res.json().catch(() => ({}));
+
+      console.log("[SolMan Create CR] action response", {
+        ok: res.ok,
+        statusCode: res.status,
+        data,
+      });
 
       if (
         !res.ok ||
@@ -173,9 +193,25 @@ export default function SolmanCreateCrForm({
       }
 
       const result = data?.result || data;
+      const summary = result?.summary || {};
+      const derivedCrNumber =
+        result?.changeRequestId ||
+        data?.changeRequestId ||
+        data?.result?.changeRequestId ||
+        "";
+
+      console.log("[SolMan Create CR] success derived values", {
+        derivedCrNumber,
+        status: result?.status || result?.EMsgType || result?.msgType || data?.status || data?.EMsgType || "",
+        summary,
+        result,
+      });
 
       onSuccess?.({
         ...result,
+        summary,
+        changeRequestId: derivedCrNumber,
+        status: result?.status || data?.status || "",
         executor: data?.executor || null,
         message: data?.message || "Change request created successfully.",
       });

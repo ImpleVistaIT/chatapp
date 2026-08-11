@@ -2,6 +2,11 @@ import { ingestServiceMetadata } from "../services/metadata/serviceCatalogIngest
 import { SapCredential } from "../models/SapCredential.model.js";
 import { decryptString } from "../utils/crypto.js";
 
+function getDeploymentOwner(baseOwner = "local") {
+  const scope = String(process.env.MONGODB_DB_NAME || process.env.APP_NAMESPACE || "").trim();
+  return scope ? `${baseOwner}:${scope}` : baseOwner;
+}
+
 function normalizeSystemId(v) {
   return String(v || "").trim().toUpperCase();
 }
@@ -73,7 +78,7 @@ export async function ingestSapCatalog(req, res, next) {
     });
 
     const result = await ingestServiceMetadata({
-      owner: "local",
+      owner: getDeploymentOwner("local"),
       systemId: sid,
       serviceType,
       authOverride,

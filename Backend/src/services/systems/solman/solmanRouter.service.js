@@ -3,20 +3,33 @@ function isCreateChangeRequestIntent(query) {
 
   if (!q) return false;
 
-  const phrases = [
-    "create change request",
-    "raise change request",
-    "create solman cr",
-    "create cr",
-    "create charm",
-    "raise charm",
-    "open charm",
-    "open charm request",
-    "create change",
-    "new change request",
+  const actionWords = [
+    "create",
+    "raise",
+    "submit",
+    "open",
+    "initiate",
+    "start",
+    "generate",
+    "make",
+    "add",
+    "request",
   ];
 
-  return phrases.some((p) => q.includes(p));
+  const entityWords = [
+    "change request",
+    "change requests",
+    "cr",
+    "crs",
+    "cr's",
+    "transport change request",
+    "transport request",
+  ];
+
+  const hasAction = actionWords.some((word) => q.includes(word));
+  const hasEntity = entityWords.some((word) => q.includes(word));
+
+  return hasAction && hasEntity;
 }
 
 export async function handleSolmanRoutedChat({ req, res }) {

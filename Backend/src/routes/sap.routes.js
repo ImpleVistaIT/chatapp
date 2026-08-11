@@ -7,11 +7,17 @@ import { SapConnection } from "../models/SapConnection.model.js";
 import { ingestSapCatalog } from "../controllers/sap.catalog.controller.js";
 
 import { encryptString, decryptString } from "../utils/crypto.js";
-import { getAllowedFieldsWithLabels } from "../services/allowlist.service.js";
 import { fetchFromSap } from "../services/sap.service.js";
+import { testSapCredentials } from "../services/sapAuth.service.js";
 import { loginToSolman } from "../services/systems/solman/login.service.js";
+import { buildSapLoginRequest } from "../config/sap.config.js";
 
 export const sapRoutes = express.Router();
+
+function getDeploymentOwner(baseOwner = "local") {
+  const scope = String(process.env.MONGODB_DB_NAME || process.env.APP_NAMESPACE || "").trim();
+  return scope ? `${baseOwner}:${scope}` : baseOwner;
+}
 
 function getOwner(req) {
   const owner = String(req.user?.id || "").trim();
@@ -36,6 +42,20 @@ function clampString(value, max = 200) {
   return s.length > max ? s.slice(0, max) : s;
 }
 
+function buildBasicAuthHeader(username, password) {
+  return `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
+}
+
+async function parseJsonResponse(response) {
+  const responseText = await response.text();
+
+  try {
+    return { data: JSON.parse(responseText), raw: responseText };
+  } catch {
+    return { data: null, raw: responseText };
+  }
+}
+
 function toInt(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
@@ -52,9 +72,14 @@ function parseBool(value, defaultValue = true) {
   return defaultValue;
 }
 
-function inferSystemKind(system = {}) {
+export function inferSystemKind(system = {}) {
   const name = String(system?.name || "").toLowerCase();
   const host = String(system?.host || "").toLowerCase();
+  const systemId = normalizeSystemId(system?.systemId || system?.id || system?.code);
+
+  if (systemId === "HSD") {
+    return "solman";
+  }
 
   if (
     name.includes("solman") ||
@@ -79,6 +104,29 @@ function sanitizeResponseData(value) {
   return s.length > 4000 ? `${s.slice(0, 4000)}...` : s;
 }
 
+function extractProfileEmail(row = {}) {
+  const candidateKeys = [
+    "Email",
+    "EMail",
+    "EMAIL",
+    "E_MAIL",
+    "EmailAddress",
+    "EMAILADDRESS",
+    "Mail",
+    "MAIL",
+    "SMTP_ADDR",
+    "SmtpAddr",
+    "smtpAddr",
+  ];
+
+  for (const key of candidateKeys) {
+    const value = String(row?.[key] || "").trim();
+    if (value) return value;
+  }
+
+  return "";
+}
+
 function buildClientError(err, { exposeRequestUrl = false } = {}) {
   return {
     ok: false,
@@ -93,6 +141,78 @@ function buildValidationWarning(err, fallback = "Validation failed") {
     validated: false,
     warning: sanitizeErrorMessage(err, fallback),
   };
+}
+
+function mapSapErrorResponse(err, fallbackError = "SAP validation failed") {
+  const status = Number(err?.status || err?.response?.status || 500);
+  const mappedStatus = Number.isFinite(status) && status >= 400 ? status : 500;
+  const error =
+    mappedStatus === 401 ? "Invalid SAP username or password." :
+    mappedStatus === 403 ? "SAP user is not authorized." :
+    mappedStatus === 500 ? "SAP OData service encountered an internal runtime error." :
+    mappedStatus === 503 ? "SAP system is temporarily unavailable." :
+    fallbackError;
+
+  return {
+    status: mappedStatus,
+    body: {
+      ok: false,
+      type:
+        err?.type ||
+        (mappedStatus === 401 ? "AUTHENTICATION_FAILED" :
+          mappedStatus === 403 ? "AUTHORIZATION_FAILED" :
+          mappedStatus === 404 ? "SERVICE_NOT_FOUND" :
+          mappedStatus === 408 ? "REQUEST_TIMEOUT" :
+          mappedStatus === 503 ? "SAP_UNAVAILABLE" :
+          mappedStatus === 504 ? "SAP_TIMEOUT" :
+          mappedStatus === 500 ? "SAP_RUNTIME_ERROR" :
+          "SAP_ERROR"),
+      status: mappedStatus,
+      sapCode: err?.sapCode || null,
+      sapMessage: err?.sapMessage || null,
+      error,
+    },
+  };
+}
+
+async function probeSystemEndpoint({ protocol = "https", host, port }) {
+  const cleanHost = String(host || "").trim();
+  const cleanPort = String(port || "").trim();
+  const cleanProtocol = String(protocol || "https").trim().toLowerCase() === "http" ? "http" : "https";
+
+  if (!cleanHost || !cleanPort) {
+    const err = new Error("host and port are required");
+    err.status = 400;
+    throw err;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${cleanProtocol}://${cleanHost}:${cleanPort}`, {
+      method: "GET",
+      signal: controller.signal,
+      redirect: "manual",
+    });
+
+    if (!response) {
+      const err = new Error("No response received from SAP host");
+      err.status = 502;
+      throw err;
+    }
+
+    return response;
+  } catch (e) {
+    const message = String(e?.name || "").toLowerCase() === "aborterror"
+      ? `SAP host probe timed out for ${cleanHost}:${cleanPort}`
+      : `SAP host probe failed for ${cleanHost}:${cleanPort}: ${e?.message || String(e)}`;
+    const err = new Error(message);
+    err.status = 502;
+    err.cause = e;
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function pickCredential({ owner, systemId, sapUser }) {
@@ -114,8 +234,8 @@ function getDefaultServiceMaps({ owner, systemId }) {
       owner,
       systemId,
       serviceType: "PO",
-      serviceName: process.env.DEFAULT_PO_SERVICE_NAME || "ZMM_PO_DETAILS_SRV",
-      entitySet: process.env.DEFAULT_PO_ENTITYSET || "Po_detailsSet",
+      serviceName: process.env.DEFAULT_PO_SERVICE_NAME || "",
+      entitySet: process.env.DEFAULT_PO_ENTITYSET || "",
       entityTypeName: "Po_details",
       idField: "PoNo",
       itemField: "PoItem",
@@ -331,6 +451,15 @@ sapRoutes.post("/systems", async (req, res, next) => {
       return res.status(400).json({ ok: false, error: "port must be 1..65535" });
     }
 
+    try {
+      await probeSystemEndpoint({ protocol, host, port });
+    } catch (e) {
+      return res.status(e.status || 502).json({
+        ok: false,
+        error: e?.message || "Unable to reach SAP host using the provided host and port",
+      });
+    }
+
     const doc = await SapSystem.findOneAndUpdate(
       { owner, systemId },
       {
@@ -363,6 +492,55 @@ sapRoutes.post("/systems", async (req, res, next) => {
     return res.json({
       ok: true,
       created,
+      item: {
+        _id: String(doc._id),
+        name: doc.name || "",
+        systemId: doc.systemId,
+        protocol: doc.protocol || "https",
+        host: doc.host,
+        port: doc.port,
+        sapRouter: doc.sapRouter || "",
+        createdAt: doc.createdAt,
+        updatedAt: doc.updatedAt,
+      },
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// PATCH /sap/systems/:systemId
+sapRoutes.patch("/systems/:systemId", async (req, res, next) => {
+  try {
+    const owner = getOwner(req);
+    const systemId = normalizeSystemId(req.params.systemId);
+    const name = clampString(req.body?.name || req.body?.description || "", 80);
+
+    if (!systemId) {
+      return res.status(400).json({ ok: false, error: "systemId is required" });
+    }
+
+    if (!name) {
+      return res.status(400).json({ ok: false, error: "name is required" });
+    }
+
+    const doc = await SapSystem.findOneAndUpdate(
+      { owner: { $in: [owner, "local"] }, systemId },
+      {
+        $set: {
+          name,
+          updatedAt: new Date(),
+        },
+      },
+      { returnDocument: "after" }
+    ).lean();
+
+    if (!doc) {
+      return res.status(404).json({ ok: false, error: `System not found for systemId=${systemId}` });
+    }
+
+    return res.json({
+      ok: true,
       item: {
         _id: String(doc._id),
         name: doc.name || "",
@@ -584,11 +762,13 @@ sapRoutes.post("/credentials", async (req, res, next) => {
       if (systemKind === "solman") {
         try {
           const loginResult = await loginToSolman({
+            systemId,
             protocol: system.protocol || "https",
             host: system.host,
             port: system.port,
             sapUser,
             sapPassword,
+            requireMappedSystem: false,
           });
 
           if (!loginResult?.ok) {
@@ -611,7 +791,7 @@ sapRoutes.post("/credentials", async (req, res, next) => {
         }
       } else {
         const authOverride = { username: sapUser, password: sapPassword };
-        const maps = await SapServiceMap.find({ owner: "local", systemId }).lean();
+        const maps = await SapServiceMap.find({ owner: { $in: [getDeploymentOwner("local"), "local"] }, systemId }).lean();
 
         if (!maps || maps.length === 0) {
           return res.status(400).json({
@@ -620,23 +800,39 @@ sapRoutes.post("/credentials", async (req, res, next) => {
           });
         }
 
-        for (const m of maps) {
-          try {
-            await getAllowedFieldsWithLabels({
-              system,
-              service: m,
-              entityTypeName: m.entityTypeName,
-              authOverride,
-              validateAuth: true,
-            });
-          } catch (err) {
-            const msg = String(err?.message || err);
-            return res.status(401).json({ ok: false, error: msg });
-          }
+        const authService = maps.find((m) => String(m?.serviceType || "").trim().toUpperCase() === "PO") || maps[0];
+
+        try {
+          await testSapCredentials({
+            system,
+            service: authService,
+            username: sapUser,
+            password: sapPassword,
+          });
+        } catch (err) {
+          const mapped = mapSapErrorResponse(err, "SAP credential validation failed");
+          console.error("[POST /sap/credentials] SAP login failed", {
+            ts: new Date().toISOString(),
+            status: mapped.status,
+            sapCode: mapped.body.sapCode,
+            sapMessage: mapped.body.sapMessage,
+            requestUrl: err?.requestUrl || null,
+            systemId,
+            sapUser,
+            stack: err?.stack || null,
+          });
+          return res.status(mapped.status).json(mapped.body);
         }
 
         validationInfo = { validated: true };
       }
+    }
+
+    if (validate && validationInfo?.validated !== true) {
+      return res.status(401).json({
+        ok: false,
+        error: validationInfo?.warning || "SAP credential validation failed",
+      });
     }
 
     const enc = encryptString(sapPassword);
@@ -744,7 +940,7 @@ sapRoutes.post("/connect", async (req, res, next) => {
 
     const sys = await SapSystem.findOne({
       systemId,
-      owner: { $in: [owner, "local"] },
+      owner: { $in: [owner, "local", getDeploymentOwner("local")] },
     }).lean();
 
     if (!sys) {
@@ -761,6 +957,19 @@ sapRoutes.post("/connect", async (req, res, next) => {
     let validationInfo = { validated: !validate };
 
     if (validate) {
+      try {
+        await probeSystemEndpoint({
+          protocol: sys.protocol || "https",
+          host: sys.host,
+          port: sys.port,
+        });
+      } catch (e) {
+        return res.status(e.status || 502).json({
+          ok: false,
+          error: e?.message || "Unable to reach the configured SAP host and port",
+        });
+      }
+
       const systemKind = inferSystemKind(sys);
 
       let plainPassword = "";
@@ -780,11 +989,13 @@ sapRoutes.post("/connect", async (req, res, next) => {
       if (systemKind === "solman") {
         try {
           const loginResult = await loginToSolman({
+            systemId,
             protocol: sys.protocol || "https",
             host: sys.host,
             port: sys.port,
             sapUser: cred.sapUser,
             sapPassword: plainPassword,
+            requireMappedSystem: false,
           });
 
           if (!loginResult?.ok) {
@@ -807,8 +1018,8 @@ sapRoutes.post("/connect", async (req, res, next) => {
         }
       } else {
         const svc =
-          (await SapServiceMap.findOne({ owner: "local", systemId, serviceType: "PO" }).lean()) ||
-          (await SapServiceMap.findOne({ owner: "local", systemId, serviceType: "SO" }).lean());
+          (await SapServiceMap.findOne({ owner: { $in: [getDeploymentOwner("local"), "local"] }, systemId, serviceType: "PO" }).lean()) ||
+          (await SapServiceMap.findOne({ owner: { $in: [getDeploymentOwner("local"), "local"] }, systemId, serviceType: "SO" }).lean());
 
         if (!svc) {
           return res.status(400).json({
@@ -818,20 +1029,36 @@ sapRoutes.post("/connect", async (req, res, next) => {
         }
 
         try {
-          await getAllowedFieldsWithLabels({
+          await testSapCredentials({
             system: sys,
             service: svc,
-            entityTypeName: svc.entityTypeName,
-            authOverride: { username: cred.sapUser, password: plainPassword },
-            validateAuth: true,
+            username: cred.sapUser,
+            password: plainPassword,
           });
 
           validationInfo = { validated: true };
         } catch (e) {
-          const msg = String(e?.message || e);
-          return res.status(401).json({ ok: false, error: msg });
+          const mapped = mapSapErrorResponse(e, "SAP connection validation failed");
+          console.error("[POST /sap/connect] SAP validation failed", {
+            ts: new Date().toISOString(),
+            status: mapped.status,
+            sapCode: mapped.body.sapCode,
+            sapMessage: mapped.body.sapMessage,
+            requestUrl: e?.requestUrl || null,
+            systemId,
+            sapUser: cred.sapUser,
+            stack: e?.stack || null,
+          });
+          return res.status(mapped.status).json(mapped.body);
         }
       }
+    }
+
+    if (validate && validationInfo?.validated !== true) {
+      return res.status(401).json({
+        ok: false,
+        error: validationInfo?.warning || "SAP connection validation failed",
+      });
     }
 
     const now = new Date();
@@ -950,8 +1177,9 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
     const cachedFullName = String(cred?.profileFullName || "").trim();
     const cachedFirstName = String(cred?.profileFirstName || "").trim();
     const cachedLastName = String(cred?.profileLastName || "").trim();
+    const cachedEmail = String(cred?.profileEmail || "").trim();
 
-    if (cachedFullName || cachedFirstName || cachedLastName) {
+    if (cachedEmail) {
       return res.json({
         ok: true,
         profile: {
@@ -959,51 +1187,28 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
           firstName: cachedFirstName,
           lastName: cachedLastName,
           fullName: cachedFullName,
+          email: cachedEmail,
           cached: true,
           profileUpdatedAt: cred?.profileUpdatedAt || null,
         },
       });
     }
 
-    let plainPassword = "";
-    try {
-      plainPassword = decryptString({
-        enc: cred.encPassword,
-        iv: cred.encIv,
-        tag: cred.encTag,
-      });
-    } catch {
-      return res.status(500).json({ ok: false, error: "Failed to decrypt stored SAP credentials." });
-    }
-
-    const service = { serviceName: "ZSAP_USER_LOGIN_SRV" };
-    const filter = `UserName eq '${String(sapUser).replace(/'/g, "''")}' and Password eq '${String(
-      plainPassword
-    ).replace(/'/g, "''")}'`;
-
-    const relativePath = `user_dataSet?$filter=${encodeURIComponent(filter)}&$format=json`;
-
-    const sapData = await fetchFromSap(
-      {
-        system: sys,
-        service,
-        relativePath,
-      },
-      { username: cred.sapUser, password: plainPassword }
-    );
-
-    const results = sapData?.d?.results;
-    const row = Array.isArray(results) ? results[0] : sapData?.d;
-
-    const profile = row
-      ? {
-          sapUser,
-          firstName: String(row?.Firstname || "").trim(),
-          lastName: String(row?.Lastname || "").trim(),
-          fullName: String(row?.Fullname || "").trim(),
-          cached: false,
-        }
-      : { sapUser, firstName: "", lastName: "", fullName: "", cached: false };
+    const profile = {
+      sapUser,
+      firstName: String(cred?.profileFirstName || "").trim(),
+      lastName: String(cred?.profileLastName || "").trim(),
+      fullName: String(cred?.profileFullName || "").trim() || String(sys?.name || "").trim(),
+      email: String(cred?.profileEmail || "").trim(),
+      cached: true,
+      source: "db",
+      systemId,
+      systemName: String(sys?.name || "").trim(),
+      protocol: String(sys?.protocol || "https").trim(),
+      host: String(sys?.host || "").trim(),
+      port: sys?.port ?? null,
+      sapRouter: String(sys?.sapRouter || "").trim(),
+    };
 
     const now = new Date();
 
@@ -1014,6 +1219,7 @@ sapRoutes.post("/user-profile", async (req, res, next) => {
           profileFirstName: profile.firstName,
           profileLastName: profile.lastName,
           profileFullName: profile.fullName,
+          profileEmail: profile.email,
           profileUpdatedAt: now,
         },
       }

@@ -10,7 +10,7 @@ export async function authFetch(url, options = {}) {
 
   // keep your old error logging behavior
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
+    const text = await res.clone().text().catch(() => "");
     console.error("API ERROR:", res.status, url, text);
   }
 

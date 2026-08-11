@@ -1,7 +1,10 @@
 import { listSolmanChangeRequestsByDateRange } from "../../../services/systems/solman/charm.service.js";
 import {
+  buildCrSuggestions,
   buildStatusDistributionChart,
+  buildSolmanAppliedFiltersSummary,
   cleanString,
+  getSolmanCrStatusMaxRows,
   inferCreatedByFilterFromQuery,
   inferDateRangeFromQuery,
   persistAssistantAndTouchSession,
@@ -10,8 +13,8 @@ import {
 } from "./solman.shared.js";
 import { step } from "../stream.shared.js";
 
-const ANALYTICS_PAGE_SIZE = 200;
-const ANALYTICS_MAX_PAGES = 500;
+const CR_STATUS_LOOKBACK_DAYS = 730;
+const CR_STATUS_MAX_ROWS = getSolmanCrStatusMaxRows();
 
 function resolveCurrentSolmanUsername(context) {
   return cleanString(
@@ -36,17 +39,12 @@ function dedupeRowsByCrNumber(rows = []) {
   });
 }
 
-function buildStatusDistributionSummary(chart) {
-  if (!chart || !Array.isArray(chart.data) || chart.data.length === 0) {
-    return "No change requests found for the selected filters.";
-  }
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
 
-  const parts = chart.data.map((item) => {
-    const status = item.status || "unknown";
-    return `${item.percentage}% are ${status}`;
-  });
-
-  return `Out of ${chart.totalCRs} Change Requests, ${parts.join(", ")}.`;
+function formatYmd(date) {
+  return `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}`;
 }
 
 function toSapPageCount(result) {
@@ -63,6 +61,17 @@ function normalizeOrderByForStablePaging(orderBy = "") {
   return `${value},OBJECT_ID desc`;
 }
 
+function getDefaultCrStatusRange(now = new Date()) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const from = new Date(today);
+  from.setDate(from.getDate() - CR_STATUS_LOOKBACK_DAYS + 1);
+
+  return {
+    fromDate: formatYmd(from),
+    toDate: formatYmd(today),
+  };
+}
+
 async function fetchAllMatchingCrRows({
   system,
   sapAuth,
@@ -72,26 +81,72 @@ async function fetchAllMatchingCrRows({
   requestToDate,
   query,
 }) {
+  const defaultRange = getDefaultCrStatusRange();
+  const fromDate = cleanString(requestFromDate) || defaultRange.fromDate;
+  const toDate = cleanString(requestToDate) || defaultRange.toDate;
+
+  const pageResult = await listSolmanChangeRequestsByDateRange({
+    system,
+    sapAuth,
+    processType: listInput.processType,
+    triggerAll: listInput.triggerAll || "X",
+    fromDate,
+    toDate,
+    status: listInput.status || "",
+    excludeStatuses: listInput.excludeStatuses || [],
+    statusMode: listInput.statusMode || "",
+    dateText: listInput.dateText || query,
+    createdBy: resolvedCreatedBy || "",
+    top: CR_STATUS_MAX_ROWS,
+    skip: 0,
+    orderBy: normalizeOrderByForStablePaging(listInput.orderBy),
+  });
+
+  if (pageResult?.ok === false) {
+    return pageResult;
+  }
+
+  const aggregated = dedupeRowsByCrNumber(toCrDetailsArray(pageResult));
+
+  return {
+    ok: true,
+    rows: aggregated,
+    pages: 1,
+    fromDate,
+    toDate,
+    truncated: false,
+  };
+}
+
+async function fetchAllCrRowsForStatusChart({
+  system,
+  sapAuth,
+  listInput,
+  resolvedCreatedBy,
+  query,
+  fromDate,
+  toDate,
+}) {
   const aggregated = [];
   let currentSkip = 0;
-  let effectiveFromDate = requestFromDate;
-  let effectiveToDate = requestToDate;
   let pages = 0;
+  const pageSize = 200;
+  const maxPages = 500;
 
-  while (pages < ANALYTICS_MAX_PAGES) {
+  while (pages < maxPages) {
     const pageResult = await listSolmanChangeRequestsByDateRange({
       system,
       sapAuth,
       processType: listInput.processType,
       triggerAll: listInput.triggerAll || "X",
-      fromDate: effectiveFromDate,
-      toDate: effectiveToDate,
+      fromDate: fromDate || "",
+      toDate: toDate || "",
       status: listInput.status || "",
       excludeStatuses: listInput.excludeStatuses || [],
       statusMode: listInput.statusMode || "",
       dateText: listInput.dateText || query,
       createdBy: resolvedCreatedBy || "",
-      top: ANALYTICS_PAGE_SIZE,
+      top: pageSize,
       skip: currentSkip,
       orderBy: normalizeOrderByForStablePaging(listInput.orderBy),
     });
@@ -100,36 +155,25 @@ async function fetchAllMatchingCrRows({
       return pageResult;
     }
 
-    if (!effectiveFromDate) {
-      effectiveFromDate = cleanString(pageResult?.result?.fromDate || "");
-    }
-
-    if (!effectiveToDate) {
-      effectiveToDate = cleanString(pageResult?.result?.toDate || "");
-    }
-
     const pageRows = toCrDetailsArray(pageResult);
     if (Array.isArray(pageRows) && pageRows.length > 0) {
       aggregated.push(...pageRows);
     }
 
-    const sapPageCount = toSapPageCount(pageResult);
     pages += 1;
 
-    if (sapPageCount < ANALYTICS_PAGE_SIZE) {
+    if (toSapPageCount(pageResult) < pageSize) {
       break;
     }
 
-    currentSkip += ANALYTICS_PAGE_SIZE;
+    currentSkip += pageSize;
   }
 
   return {
     ok: true,
     rows: aggregated,
     pages,
-    fromDate: effectiveFromDate,
-    toDate: effectiveToDate,
-    truncated: pages >= ANALYTICS_MAX_PAGES,
+    truncated: pages >= maxPages,
   };
 }
 
@@ -246,6 +290,16 @@ export async function handleCrStatusDistribution(context) {
   const requestFromDate = listInput.fromDate || inferredDateRange.fromDate || "";
   const requestToDate = listInput.toDate || inferredDateRange.toDate || "";
 
+  console.log("[SOLMAN] status date filters:", {
+    query,
+    fromDate: cleanString(requestFromDate),
+    toDate: cleanString(requestToDate),
+    status: cleanString(listInput.status || ""),
+    statusMode: cleanString(listInput.statusMode || ""),
+    createdBy: cleanString(resolvedCreatedBy || ""),
+    businessScope: cleanString(listInput.businessScope || ""),
+  });
+
   const fullFetch = await step("fetchAllMatchingCrRows", () =>
     fetchAllMatchingCrRows({
       system,
@@ -305,7 +359,60 @@ export async function handleCrStatusDistribution(context) {
   const effectiveToDate =
     cleanString(fullFetch?.toDate || requestToDate) || "";
 
-  const chart = buildStatusDistributionChart(rows, {
+  const chartFetch = await step("fetchAllCrRowsForStatusChart", () =>
+    fetchAllCrRowsForStatusChart({
+      system,
+      sapAuth,
+      listInput,
+      resolvedCreatedBy,
+      query,
+      fromDate: effectiveFromDate,
+      toDate: effectiveToDate,
+    })
+  );
+
+  if (chartFetch?.ok === false) {
+    const message = chartFetch?.message || "Failed to fetch change requests";
+
+    await persistAssistantAndTouchSession({
+      owner,
+      sessionId: session._id,
+      text: message,
+      summary: "CR status distribution failed.",
+      extracted: {
+        system: "solman",
+        intent: "cr_status_distribution",
+        filters: {
+          ...listInput,
+          createdBy: resolvedCreatedBy || "",
+        },
+      },
+      data: {
+        raw: chartFetch?.result?.raw || null,
+      },
+      responseMeta: {
+        ok: false,
+        kind: "stream",
+        executor: "solman.cr_status_distribution",
+        systemId: effectiveSystemId,
+        sapUser: effectiveSapUser,
+        status: "execution_failed",
+      },
+    });
+
+    sse.send("error", {
+      ok: false,
+      status: "execution_failed",
+      message,
+      raw: chartFetch?.result?.raw || null,
+    });
+
+    return sse.end();
+  }
+
+  const chartRows = dedupeRowsByCrNumber(Array.isArray(chartFetch?.rows) ? chartFetch.rows : rows);
+
+  const chart = buildStatusDistributionChart(chartRows, {
     title: "CR Status Distribution",
     filters: {
       businessScope: listInput.businessScope,
@@ -324,7 +431,30 @@ export async function handleCrStatusDistribution(context) {
     data: chart.data,
   };
 
-  const summary = buildStatusDistributionSummary(chart);
+  const responseData = {
+    viewType: "solman_cr_status",
+    rows: rows.slice(0, CR_STATUS_MAX_ROWS),
+    tableRecords: rows.slice(0, CR_STATUS_MAX_ROWS),
+    allCRRecords: chartRows,
+    chart: reply,
+    statusDistribution: chart,
+    dateRange: {
+      fromDate: effectiveFromDate,
+      toDate: effectiveToDate,
+    },
+    limit: CR_STATUS_MAX_ROWS,
+  };
+
+  const summary =
+    buildSolmanAppliedFiltersSummary({
+      status: result?.result?.status || listInput.status,
+      statusMode: result?.result?.statusMode || listInput.statusMode,
+      excludeStatuses: result?.result?.excludeStatuses || listInput.excludeStatuses || [],
+      fromDate: effectiveFromDate,
+      toDate: effectiveToDate,
+      createdBy: resolvedCreatedBy || "",
+      businessScope: listInput.businessScope,
+    }) || "No records found for the given criteria.";
 
   await persistAssistantAndTouchSession({
     owner,
@@ -345,15 +475,16 @@ export async function handleCrStatusDistribution(context) {
         dateText: listInput.dateText || query,
       },
     },
-    data: reply,
+    data: responseData,
+    suggestions: buildCrSuggestions(query, listInput.businessScope, chartRows),
     responseMeta: {
       ok: true,
       kind: "chart",
       executor: "solman.cr_status_distribution",
       systemId: effectiveSystemId,
       sapUser: effectiveSapUser,
-      pagesFetched: Number(fullFetch?.pages || 0),
-      ...(fullFetch?.truncated ? { truncated: true } : {}),
+      pagesFetched: Number(chartFetch?.pages || 1),
+      truncated: Boolean(chartFetch?.truncated),
       chart,
     },
   });
@@ -364,7 +495,9 @@ export async function handleCrStatusDistribution(context) {
     systemId: effectiveSystemId,
     sapUser: effectiveSapUser,
     ...reply,
+    suggestions: buildCrSuggestions(query, listInput.businessScope, chartRows),
     summary,
+    data: responseData,
   });
 
   sse.send("done", { ok: true });

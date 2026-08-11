@@ -1,0 +1,12 @@
+{
+  "purchase_order": [
+    { "prefix": "6", "backend": "S4HANA" },
+    { "prefix": "4", "backend": "ECC" }
+  ],
+  "invoice": [
+    { "prefix": "51", "backend": "SAP_FI" }
+  ],
+  "delivery": [
+    { "prefix": "80", "backend": "EWM" }
+  ]
+}

@@ -1,8 +1,65 @@
 import { postToSap } from "../../sap/sapWrite.service.js";
 import { fetchFromSap } from "../../sap.service.js";
+import { SapServiceMap } from "../../../models/SapServiceMap.model.js";
+import { SapServiceCatalog } from "../../../models/SapServiceCatalog.model.js";
+import { verifyEntitySetInMetadata } from "../../allowlist.service.js";
+import { inferDateRangeFromQuery as inferSolmanDateRangeFromQuery } from "../../../controllers/stream/solman/solman.shared.js";
 
 function cleanString(v) {
   return String(v || "").trim();
+}
+
+function getDeploymentOwner(baseOwner = "local") {
+  const scope = String(process.env.MONGODB_DB_NAME || process.env.APP_NAMESPACE || "").trim();
+  return scope ? `${baseOwner}:${scope}` : baseOwner;
+}
+
+function escapeODataString(value) {
+  return cleanString(value).replace(/'/g, "''");
+}
+
+function findFirstNonEmptyValue(source, keys) {
+  if (!source || typeof source !== "object") return "";
+
+  for (const key of keys) {
+    const value = cleanString(source?.[key]);
+    if (value) return value;
+  }
+
+  for (const value of Object.values(source)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const nested = findFirstNonEmptyValue(item, keys);
+        if (nested) return nested;
+      }
+      continue;
+    }
+
+    if (value && typeof value === "object") {
+      const nested = findFirstNonEmptyValue(value, keys);
+      if (nested) return nested;
+    }
+  }
+
+  return "";
+}
+
+function extractCrNumberFromText(value) {
+  const text = cleanString(value);
+  if (!text) return "";
+
+  const patterns = [
+    /\bCR\s*[:#-]?\s*(\d{6,})\b/i,
+    /\bChange\s*Request\s*[:#-]?\s*(\d{6,})\b/i,
+    /\bCR(?:\s+Number)?\s*[:#-]?\s*(\d{6,})\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return cleanString(match[1]);
+  }
+
+  return "";
 }
 
 function normalizeUrlNav(items) {
@@ -16,6 +73,129 @@ function normalizeUrlNav(items) {
     .filter((x) => x.URL && x.URL_NAME);
 }
 
+function buildCreatePayload(payload = {}) {
+  const urlNav = normalizeUrlNav(
+    Array.isArray(payload?.REQ_URL_NAV)
+      ? payload.REQ_URL_NAV
+      : Array.isArray(payload?.reqUrlNav)
+        ? payload.reqUrlNav
+        : []
+  );
+
+  return {
+    ShortDesc: cleanString(payload?.ShortDesc || payload?.shortDesc),
+    DeliveryResponsible: cleanString(payload?.DeliveryResponsible || payload?.deliveryResponsible),
+    Developer: cleanString(payload?.Developer || payload?.developer),
+    Tester: cleanString(payload?.Tester || payload?.tester),
+    WorkItemReference: cleanString(payload?.WorkItemReference || payload?.workItemReference),
+    Landscape: cleanString(payload?.Landscape || payload?.landscape),
+    REQ_URL_NAV: urlNav,
+  };
+}
+
+function normalizeCreateResponse(raw) {
+  const rows = Array.isArray(raw?.d?.results) ? raw.d.results : [];
+  const first = rows[0] || raw?.d || raw?.result || raw || {};
+  const messageText =
+    cleanString(first?.EMsgDesc || first?.EMSGDESC || first?.MESSAGE || first?.Message || first?.EV_MESSAGE || first?.EvMessage) ||
+    cleanString(first?.message || first?.msg || first?.MSG) ||
+    "Change request created successfully.";
+  const changeRequestId =
+    findFirstNonEmptyValue(raw, [
+      "ESolmanCr",
+      "ESOLMANCR",
+      "ESOLMAN_CR",
+      "ESOLMAN_CR_NO",
+      "CHANGE_REQUEST_ID",
+      "ChangeRequestId",
+      "CR_NUMBER",
+      "CR_NO",
+      "CR_NUMBER_NEW",
+      "CR_NO_NEW",
+      "CR",
+      "OBJECT_ID",
+      "OBJ_ID",
+      "changeRequestId",
+      "change_request_id",
+      "crNumber",
+      "cr_number",
+      "crNo",
+      "cr_no",
+    ]) ||
+    findFirstNonEmptyValue(first, [
+      "ESolmanCr",
+      "ESOLMANCR",
+      "ESOLMAN_CR",
+      "ESOLMAN_CR_NO",
+      "CHANGE_REQUEST_ID",
+      "ChangeRequestId",
+      "CR_NUMBER",
+      "CR_NO",
+      "CR",
+      "OBJECT_ID",
+      "OBJ_ID",
+      "changeRequestId",
+      "change_request_id",
+      "crNumber",
+      "cr_number",
+      "crNo",
+      "cr_no",
+    ]) ||
+    extractCrNumberFromText(first?.EMsgDesc || first?.EMSGDESC || messageText) ||
+    extractCrNumberFromText(messageText);
+  const msgType = cleanString(first?.MSG_TYPE || first?.MsgType || first?.TYPE || first?.EMsgType || first?.EMSGTYPE);
+  const eMsgType = cleanString(first?.EMsgType || first?.EMSGTYPE || first?.MSG_TYPE || first?.MsgType || first?.TYPE);
+  const eSolmanCr = cleanString(first?.ESolmanCr || first?.ESOLMANCR || first?.ESOLMAN_CR || changeRequestId);
+
+  return {
+    ok: true,
+    message: messageText,
+    result: {
+      changeRequestId,
+      status: cleanString(first?.STATUS || first?.Status || first?.STATE),
+      msgType,
+      EMsgType: eMsgType,
+      EMsgDesc: cleanString(first?.EMsgDesc || first?.EMSGDESC || messageText),
+      ESolmanCr: eSolmanCr,
+      raw,
+    },
+  };
+}
+
+function mapSapCreateError(error) {
+  const status = Number(error?.status || error?.response?.status || 0);
+  const message = cleanString(
+    error?.message ||
+      error?.response?.data?.error?.message?.value ||
+      error?.response?.data?.error?.message ||
+      error?.response?.data?.message
+  );
+
+  if (status === 400 && /missing required fields/i.test(message)) {
+    const e = new Error(message || "Missing required fields.");
+    e.status = 400;
+    e.code = "VALIDATION_FAILED";
+    e.userMessage = e.message;
+    throw e;
+  }
+
+  if (status === 401 || status === 403) {
+    const e = new Error(message || "Not authorized to create the change request.");
+    e.status = status;
+    e.code = "SAP_AUTH_FAILED";
+    e.userMessage = e.message;
+    throw e;
+  }
+
+  throw error;
+}
+
+
+function normalizeCrDetailsResponse(raw) {
+  const results = Array.isArray(raw?.d?.results) ? raw.d.results : [];
+  return results;
+}
+
 function validatePayload(payload) {
   const required = [
     "ShortDesc",
@@ -26,7 +206,17 @@ function validatePayload(payload) {
     "Landscape",
   ];
 
-  const missing = required.filter((k) => !cleanString(payload?.[k]));
+  const missing = required.filter((key) => !cleanString(payload?.[key]));
+
+  const urlNav = Array.isArray(payload?.REQ_URL_NAV) ? payload.REQ_URL_NAV : [];
+  const hasAnyUrlInput = urlNav.some((item) => cleanString(item?.URL) || cleanString(item?.URL_NAME));
+
+  if (hasAnyUrlInput) {
+    const firstUrl = urlNav[0] || {};
+    if (!cleanString(firstUrl?.URL)) missing.push("REQ_URL_NAV.URL");
+    if (!cleanString(firstUrl?.URL_NAME)) missing.push("REQ_URL_NAV.URL_NAME");
+  }
+
   if (missing.length > 0) {
     const err = new Error(`Missing required fields: ${missing.join(", ")}`);
     err.status = 400;
@@ -35,111 +225,8 @@ function validatePayload(payload) {
   }
 }
 
-function buildCreatePayload(payload) {
-  const out = {
-    ShortDesc: cleanString(payload.ShortDesc),
-    DeliveryResponsible: cleanString(payload.DeliveryResponsible),
-    Developer: cleanString(payload.Developer),
-    Tester: cleanString(payload.Tester),
-    WorkItemReference: cleanString(payload.WorkItemReference),
-    Landscape: cleanString(payload.Landscape),
-  };
-
-  const reqUrlNav = normalizeUrlNav(payload.REQ_URL_NAV);
-  if (reqUrlNav.length > 0) {
-    out.REQ_URL_NAV = reqUrlNav;
-  }
-
-  return out;
-}
-
-function normalizeCreateResponse(raw) {
-  const d = raw?.d || {};
-
-  const msgType = cleanString(d.EMsgType);
-  const message = cleanString(d.EMsgDesc);
-  const changeRequestId = cleanString(d.ESolmanCr);
-  const status = cleanString(d.EStatus);
-
-  return {
-    ok: msgType !== "E" && Boolean(changeRequestId || msgType === "S"),
-    message: message || "Change request created successfully.",
-    result: {
-      msgType,
-      changeRequestId,
-      status,
-      raw,
-    },
-  };
-}
-
-function mapSapCreateError(err) {
-  const message = cleanString(err?.message);
-  const lower = message.toLowerCase();
-
-  if (
-    err?.status === 501 ||
-    lower.includes("create_entity") ||
-    lower.includes("not implemented in data provider class")
-  ) {
-    const e = new Error(
-      "The connected SAP service does not support creating change requests through this API."
-    );
-    e.status = 501;
-    e.code = "SAP_CREATE_NOT_IMPLEMENTED";
-    e.details = {
-      sapMessage: message,
-      httpStatus: err?.status || 501,
-    };
-    throw e;
-  }
-
-  if (
-    err?.status === 504 ||
-    lower.includes("gateway timeout") ||
-    lower.includes("timed out")
-  ) {
-    const e = new Error(
-      "SAP request timed out while creating the change request. Please verify in SAP before retrying."
-    );
-    e.status = 504;
-    e.code = "SAP_TIMEOUT";
-    e.details = {
-      sapMessage: message,
-      httpStatus: err?.status || 504,
-    };
-    throw e;
-  }
-
-  if (lower.includes("work item") && lower.includes("already exists")) {
-    const e = new Error("Work Item reference already exists");
-    e.status = 400;
-    e.code = "VALIDATION_FAILED";
-    e.details = {
-      field: "WorkItemReference",
-      sapMessage: message,
-      httpStatus: err?.status || 400,
-    };
-    throw e;
-  }
-
-  throw err;
-}
-
-function escapeODataString(value) {
-  return cleanString(value).replace(/'/g, "''");
-}
-
-function normalizeCrDetailsResponse(raw) {
-  const results = Array.isArray(raw?.d?.results) ? raw.d.results : [];
-  return results;
-}
-
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
 function formatSapYmd(date) {
+  const pad2 = (n) => String(n).padStart(2, "0");
   return `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}`;
 }
 
@@ -191,31 +278,46 @@ function parseUserDate(input) {
   const s = cleanString(input);
   if (!s) return null;
 
-  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  let m = /^(\d{4})[./-](\d{2})[./-](\d{2})$/.exec(s);
   if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 
-  m = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(s);
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-
-  m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(s);
+  m = /^(\d{2})[./-](\d{2})[./-](\d{4})$/.exec(s);
   if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
 
-  m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
-  if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  m = /^(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+|,\s*)(\d{4})$/i.exec(s);
+  if (m) {
+    const monthIndex = monthNameToIndex(m[2]);
+    if (monthIndex >= 0) {
+      return new Date(Number(m[3]), monthIndex, Number(m[1]));
+    }
+  }
+  m = /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/i.exec(s);
+  if (m) {
+    const monthIndex = monthNameToIndex(m[1]);
+    if (monthIndex >= 0) {
+      return new Date(Number(m[3]), monthIndex, Number(m[2]));
+    }
+  }
 
   const native = new Date(s);
   return Number.isNaN(native.getTime()) ? null : native;
 }
 
-function resolveCrDateRange({
-  fromDate,
-  toDate,
-  dateText,
-  now = new Date(),
-}) {
-  const today = startOfDay(now);
-
+function resolveCrDateRange({ fromDate, toDate, dateText }) {
   if (cleanString(fromDate) && cleanString(toDate)) {
+    const from = parseUserDate(fromDate);
+    const to = parseUserDate(toDate);
+    if (from && to) {
+      const start = startOfDay(from) <= startOfDay(to) ? from : to;
+      const end = startOfDay(from) <= startOfDay(to) ? to : from;
+
+      return {
+        from: formatSapYmd(startOfDay(start)),
+        to: formatSapYmd(startOfDay(end)),
+        source: "explicit",
+      };
+    }
+
     return {
       from: cleanString(fromDate),
       to: cleanString(toDate),
@@ -223,208 +325,19 @@ function resolveCrDateRange({
     };
   }
 
-  const q = cleanString(dateText).toLowerCase();
-
-  if (!q) return null;
-
-  if (q.includes("today")) {
+  const inferred = inferSolmanDateRangeFromQuery(cleanString(dateText));
+  if (inferred?.fromDate && inferred?.toDate) {
     return {
-      from: formatSapYmd(today),
-      to: formatSapYmd(today),
-      source: "today",
-    };
-  }
-
-  if (q.includes("yesterday")) {
-    const y = addDays(today, -1);
-    return {
-      from: formatSapYmd(y),
-      to: formatSapYmd(y),
-      source: "yesterday",
-    };
-  }
-
-  if (q.includes("this week")) {
-    const s = startOfWeek(today);
-    return {
-      from: formatSapYmd(s),
-      to: formatSapYmd(today),
-      source: "this_week",
-    };
-  }
-
-  if (q.includes("this month")) {
-    const s = startOfMonth(today);
-    return {
-      from: formatSapYmd(s),
-      to: formatSapYmd(today),
-      source: "this_month",
-    };
-  }
-
-  if (q.includes("last month")) {
-    const ref = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    return {
-      from: formatSapYmd(startOfMonth(ref)),
-      to: formatSapYmd(endOfMonth(ref)),
-      source: "last_month",
-    };
-  }
-
-  if (q.includes("this year")) {
-    return {
-      from: formatSapYmd(new Date(today.getFullYear(), 0, 1)),
-      to: formatSapYmd(today),
-      source: "this_year",
-    };
-  }
-
-  let m = q.match(/last\s+(\d+)\s+days?/);
-  if (m) {
-    const n = Number(m[1]);
-    const s = addDays(today, -(n - 1));
-    return {
-      from: formatSapYmd(s),
-      to: formatSapYmd(today),
-      source: "last_days",
-    };
-  }
-
-  m = q.match(/last\s+(\d+)\s+cr/);
-  if (m) {
-    return {
-      top: Number(m[1]),
-      source: "last_n",
-    };
-  }
-
-  m = q.match(/(?:from|created from)\s+(.+?)\s+(?:to|-)\s+(.+)/);
-  if (m) {
-    const from = parseUserDate(m[1]);
-    const to = parseUserDate(m[2]);
-    if (from && to) {
-      return {
-        from: formatSapYmd(startOfDay(from)),
-        to: formatSapYmd(startOfDay(to)),
-        source: "from_to",
-      };
-    }
-  }
-
-  m = q.match(/(?:from|created from)\s+(.+?)\s+today/);
-  if (m) {
-    const from = parseUserDate(m[1]);
-    if (from) {
-      return {
-        from: formatSapYmd(startOfDay(from)),
-        to: formatSapYmd(today),
-        source: "from_today",
-      };
-    }
-  }
-
-  m = q.match(/created\s+on\s+(.+)/);
-  if (m) {
-    const d = parseUserDate(m[1]);
-    if (d) {
-      return {
-        from: formatSapYmd(startOfDay(d)),
-        to: formatSapYmd(startOfDay(d)),
-        source: "created_on",
-      };
-    }
-  }
-
-  m = q.match(
-    /\b(?:in\s+the\s+month\s+of|month\s+of|for)?\s*(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b/
-  );
-  if (m) {
-    const monthIndex = monthNameToIndex(m[1]);
-    const year = Number(m[2]);
-
-    if (monthIndex >= 0) {
-      const s = new Date(year, monthIndex, 1);
-      const e = new Date(year, monthIndex + 1, 0);
-      return {
-        from: formatSapYmd(s),
-        to: formatSapYmd(e),
-        source: "month_name_with_year",
-      };
-    }
-  }
-
-  let monthMatch = q.match(
-    /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b(?:\s+(\d{4}))?/
-  );
-  if (monthMatch) {
-    const monthIndex = monthNameToIndex(monthMatch[1]);
-    const year = Number(monthMatch[2] || today.getFullYear());
-
-    if (monthIndex >= 0) {
-      const s = new Date(year, monthIndex, 1);
-      const e = new Date(year, monthIndex + 1, 0);
-      return {
-        from: formatSapYmd(s),
-        to: formatSapYmd(e),
-        source: "month_name",
-      };
-    }
-  }
-
-  let yearMatch = q.match(/\b(?:in\s+the\s+year\s+of|year\s+of|for)\s+(20\d{2})\b/);
-  if (yearMatch) {
-    const year = Number(yearMatch[1]);
-    return {
-      from: formatSapYmd(new Date(year, 0, 1)),
-      to: formatSapYmd(new Date(year, 11, 31)),
-      source: "year_phrase",
-    };
-  }
-
-  yearMatch = q.match(/\bin\s+(20\d{2})\b/);
-  if (
-    yearMatch &&
-    /\b(cr|change request|status)\b/.test(q) &&
-    !q.match(/\d{4}-\d{2}-\d{2}/) &&
-    !q.match(/\d{8}/) &&
-    !monthMatch
-  ) {
-    const year = Number(yearMatch[1]);
-    return {
-      from: formatSapYmd(new Date(year, 0, 1)),
-      to: formatSapYmd(new Date(year, 11, 31)),
-      source: "year_in_phrase",
-    };
-  }
-
-  yearMatch = q.match(/\b(20\d{2})\b/);
-  if (
-    yearMatch &&
-    !q.match(/\d{4}-\d{2}-\d{2}/) &&
-    !q.match(/\d{8}/) &&
-    !monthMatch
-  ) {
-    const year = Number(yearMatch[1]);
-    return {
-      from: formatSapYmd(new Date(year, 0, 1)),
-      to: formatSapYmd(new Date(year, 11, 31)),
-      source: "year_only",
-    };
-  }
-
-  const direct = parseUserDate(q);
-  if (direct) {
-    return {
-      from: formatSapYmd(startOfDay(direct)),
-      to: formatSapYmd(startOfDay(direct)),
-      source: "direct_date",
+      from: inferred.fromDate,
+      to: inferred.toDate,
+      source: inferred.period || inferred.granularity || "inferred",
     };
   }
 
   return null;
 }
 
-function getDefaultCrRange(now = new Date(), days = 7) {
+function getDefaultCrRange(now = new Date(), days = 730) {
   const today = startOfDay(now);
   const from = addDays(today, -(days - 1));
   return {
@@ -434,12 +347,206 @@ function getDefaultCrRange(now = new Date(), days = 7) {
   };
 }
 
+function resolveSolmanCrEntitySet() {
+  return String(process.env.DEFAULT_SOLMAN_CR_ENTITYSET || "ZEX_OutputSet").trim() || "ZEX_OutputSet";
+}
+
+function buildCrDetailLookupFilters({ objectId, processType }) {
+  const cleanObjectId = cleanString(objectId);
+  const cleanProcessType = cleanString(processType);
+  const filters = [];
+  const push = (filter) => {
+    if (filter) filters.push(filter);
+  };
+
+  push(`OBJECT_ID eq '${escapeODataString(cleanObjectId)}'`);
+  push(`OBJ_ID eq '${escapeODataString(cleanObjectId)}'`);
+  push(`ChangeRequestId eq '${escapeODataString(cleanObjectId)}'`);
+  push(`ZchangeRequest eq '${escapeODataString(cleanObjectId)}'`);
+
+  if (cleanProcessType) {
+    push(`OBJECT_ID eq '${escapeODataString(cleanObjectId)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`);
+    push(`OBJ_ID eq '${escapeODataString(cleanObjectId)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`);
+    push(`ChangeRequestId eq '${escapeODataString(cleanObjectId)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`);
+    push(`ZchangeRequest eq '${escapeODataString(cleanObjectId)}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`);
+  }
+
+  return [...new Set(filters)];
+}
+function isTransientSapNetworkError(err) {
+  const code = String(err?.code || err?.cause?.code || "").toUpperCase();
+  return [
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "ECONNABORTED",
+    "ENOTFOUND",
+    "EHOSTUNREACH",
+    "ECONNREFUSED",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+  ].includes(code);
+}
+
+export async function resolveSolmanDataServiceMapping({ owner, systemId }) {
+  const sid = cleanString(systemId).toUpperCase();
+  const deploymentOwner = getDeploymentOwner("local");
+  const ownerCandidates = Array.from(
+    new Set([cleanString(owner), "local", deploymentOwner].map((value) => cleanString(value)).filter(Boolean))
+  );
+  const activeCatalogEntries = await SapServiceCatalog.find({
+    systemId: sid,
+    isActive: true,
+    owner: { $in: ownerCandidates },
+  })
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  const activeCatalogEntry = activeCatalogEntries.find((entry) => {
+    const searchText = [
+      entry?.serviceName,
+      entry?.entitySet,
+      entry?.entityTypeName,
+      entry?.labelsText,
+      Array.isArray(entry?.domainHints) ? entry.domainHints.join(" ") : "",
+      Array.isArray(entry?.keys) ? entry.keys.join(" ") : "",
+      Array.isArray(entry?.fields)
+        ? entry.fields.map((field) => `${field?.name || ""} ${field?.label || ""}`).join(" ")
+        : "",
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .join(" ");
+
+    return /\b(zcr|zchange|charm|change request|change request.*status|cr)\b/i.test(searchText);
+  }) || null;
+
+  const catalogServiceName = cleanString(activeCatalogEntry?.serviceName);
+  if (catalogServiceName) {
+    console.log("[SOLMAN] using active catalog CR service name:", {
+      owner,
+      systemId: sid,
+      serviceName: catalogServiceName,
+      entitySet: cleanString(activeCatalogEntry?.entitySet),
+      entityTypeName: cleanString(activeCatalogEntry?.entityTypeName),
+    });
+    return {
+      serviceName: catalogServiceName,
+      entitySetName: cleanString(activeCatalogEntry?.entitySet) || resolveSolmanCrEntitySet(),
+    };
+  }
+
+  const systemConfigured = cleanString(process.env[`DEFAULT_SOLMAN_CR_SERVICE_NAME_${sid}`] || "");
+  const serviceMaps = await SapServiceMap.find({ owner: { $in: [owner, "local"] }, systemId: sid })
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  const fallbackCandidate =
+    serviceMaps.find((service) => /\b(zcr|zchange|charm|cr)\b/i.test(cleanString(service?.serviceName))) || null;
+
+  const mappedServiceName = cleanString(fallbackCandidate?.serviceName);
+  if (mappedServiceName) {
+    console.log("[SOLMAN] using catalog fallback service name:", {
+      owner,
+      systemId: sid,
+      serviceName: mappedServiceName,
+      entitySet: cleanString(fallbackCandidate?.entitySet),
+      entityTypeName: cleanString(fallbackCandidate?.entityTypeName),
+    });
+    return {
+      serviceName: mappedServiceName,
+      entitySetName: cleanString(fallbackCandidate?.entitySet) || resolveSolmanCrEntitySet(),
+    };
+  }
+
+  if (systemConfigured) {
+    console.log("[SOLMAN] using system-specific configured CR service name:", {
+      owner,
+      systemId: sid,
+      serviceName: systemConfigured,
+    });
+    return {
+      serviceName: systemConfigured,
+      entitySetName: resolveSolmanCrEntitySet(),
+    };
+  }
+
+  const configured = cleanString(process.env.DEFAULT_SOLMAN_CR_SERVICE_NAME || "ZCR_DETAILS_SRV");
+
+  if (configured) {
+    console.log("[SOLMAN] using configured CR service name:", {
+      owner,
+      systemId: sid,
+      serviceName: configured,
+    });
+    return {
+      serviceName: configured,
+      entitySetName: resolveSolmanCrEntitySet(),
+    };
+  }
+
+  console.log("[SOLMAN] using legacy fallback service name:", { owner, systemId: sid, serviceName: "ZCR_DETAILS_SRV" });
+  return {
+    serviceName: "ZCR_DETAILS_SRV",
+    entitySetName: resolveSolmanCrEntitySet(),
+  };
+}
+
+async function preflightSolmanCrMetadata({ system, sapAuth, owner, serviceName, entitySetName }) {
+  try {
+    await verifyEntitySetInMetadata({
+      system,
+      service: { serviceName },
+      entitySetName,
+      authOverride: { username: sapAuth?.username || sapAuth?.sapUser || sapAuth?.user, password: sapAuth?.password },
+      allowEnvFallback: false,
+    });
+    console.log("[SOLMAN] metadata preflight ok:", {
+      owner,
+      systemId: system?.systemId || null,
+      serviceName,
+      entitySetName,
+    });
+  } catch (err) {
+    console.log("[SOLMAN] metadata preflight failed:", {
+      owner,
+      systemId: system?.systemId || null,
+      serviceName,
+      entitySetName,
+      error: err?.message || String(err),
+      code: err?.code || null,
+    });
+
+    const message = cleanString(err?.message || "");
+    const serviceInactiveMessage =
+      message === "OData service not found/active on this SAP system. Check service name and activation.";
+
+    if (isTransientSapNetworkError(err) || serviceInactiveMessage) {
+      console.log("[SOLMAN] metadata preflight skipped due to transient network error:", {
+        owner,
+        systemId: system?.systemId || null,
+        serviceName,
+        entitySetName,
+        error: err?.message || String(err),
+        code: err?.code || null,
+      });
+      return false;
+    }
+
+    throw err;
+  }
+
+  return true;
+}
+
 function normalizeStatusValue(value) {
   return cleanString(value).toLowerCase().replace(/\s+/g, " ");
 }
 
 function normalizeCreatedByValue(value) {
   return cleanString(value).toUpperCase();
+}
+
+function normalizeCreatedByComparable(value) {
+  return normalizeCreatedByValue(value).replace(/[^A-Z0-9]/g, "");
 }
 
 function matchesRequestedStatus(item, requestedStatus) {
@@ -479,26 +586,41 @@ function matchesCreatedBy(item, requestedCreatedBy) {
   const wanted = normalizeCreatedByValue(requestedCreatedBy);
   if (!wanted) return true;
 
-  const actual = normalizeCreatedByValue(
-    item?.CREATED_BY ||
-      item?.ERNAM ||
-      item?.CREATEDBY ||
-      item?.CREATOR ||
-      item?.AUTHOR ||
-      item?.CREATEDBYNAME ||
-      item?.CREATED_BY_NAME ||
-      item?.USER_NAME ||
-      item?.USERNAME ||
-      item?.SAP_USER ||
-      item?.LAST_CHANGED_BY ||
-      ""
-  );
+  const wantedComparable = normalizeCreatedByComparable(wanted);
 
-  if (!actual) {
+  const actualCandidates = [
+    item?.CREATED_BY,
+    item?.ERNAM,
+    item?.CREATEDBY,
+    item?.CREATOR,
+    item?.AUTHOR,
+    item?.CREATEDBYNAME,
+    item?.CREATED_BY_NAME,
+    item?.USER_NAME,
+    item?.USERNAME,
+    item?.SAP_USER,
+    item?.LAST_CHANGED_BY,
+    "",
+  ]
+    .map((value) => normalizeCreatedByValue(value))
+    .filter(Boolean);
+
+  if (actualCandidates.length === 0 || !wantedComparable) {
     return false;
   }
 
-  return actual === wanted;
+  return actualCandidates.some((actual) => {
+    if (actual === wanted) {
+      return true;
+    }
+
+    const actualComparable = normalizeCreatedByComparable(actual);
+    return (
+      actualComparable === wantedComparable ||
+      actualComparable.includes(wantedComparable) ||
+      wantedComparable.includes(actualComparable)
+    );
+  });
 }
 
 function isExcludedStatus(item, excludeStatuses = []) {
@@ -542,12 +664,8 @@ function buildCrListRelativePath({
   let finalTop = Number(top) || null;
   let finalSkip = Math.max(0, Number(skip) || 0);
 
-  if (!resolved && finalTop) {
-    resolved = getDefaultCrRange(new Date(), 30);
-  }
-
   if (!resolved) {
-    resolved = getDefaultCrRange(new Date(), cleanStatus || cleanCreatedBy ? 30 : 7);
+    resolved = getDefaultCrRange(new Date(), 730);
   }
 
   const parts = [
@@ -559,18 +677,13 @@ function buildCrListRelativePath({
     parts.push(`STATUS eq '${escapeODataString(cleanStatus)}'`);
   }
 
-  if (resolved?.top && !finalTop) {
-    finalTop = resolved.top;
-    resolved = {
-      ...getDefaultCrRange(new Date(), 30),
-      top: finalTop,
-      source: "last_n_with_default_30_day_window",
-    };
-  }
-
   if (resolved?.from && resolved?.to) {
     parts.push(`FROM_DATE eq '${escapeODataString(resolved.from)}'`);
     parts.push(`TO_DATE eq '${escapeODataString(resolved.to)}'`);
+  }
+
+  if (cleanCreatedBy) {
+    parts.push(`CREATED_BY eq '${escapeODataString(cleanCreatedBy)}'`);
   }
 
   const params = [`$filter=${encodeURIComponent(parts.join(" and "))}`];
@@ -588,7 +701,7 @@ function buildCrListRelativePath({
   }
 
   return {
-    relativePath: `ZEX_OutputSet?${params.join("&")}`,
+    relativePath: `${resolveSolmanCrEntitySet()}?${params.join("&")}`,
     resolvedRange: resolved || null,
     top: finalTop,
     skip: finalSkip,
@@ -626,7 +739,7 @@ export async function getSolmanChangeRequestDetailsById({
   processType = "",
 }) {
   const cleanObjectId = cleanString(objectId);
-  const cleanProcessType = cleanString(processType) || "YMHF";
+  const requestedProcessType = cleanString(processType);
 
   if (!cleanObjectId) {
     const err = new Error("objectId is required.");
@@ -635,22 +748,67 @@ export async function getSolmanChangeRequestDetailsById({
     throw err;
   }
 
-  const filter = `$filter=OBJECT_ID eq '${escapeODataString(
-    cleanObjectId
-  )}' and PROCESS_TYPE eq '${escapeODataString(cleanProcessType)}'`;
+  const serviceMapping = await resolveSolmanDataServiceMapping({ owner: sapAuth?.owner || "local", systemId: system?.systemId });
+  const serviceName = cleanString(serviceMapping?.serviceName) || "ZCR_DETAILS_SRV";
+  const entitySetName = cleanString(serviceMapping?.entitySetName) || resolveSolmanCrEntitySet();
 
-  const relativePath = `ZEX_OutputSet?${filter}`;
+  await preflightSolmanCrMetadata({
+    system,
+    sapAuth,
+    owner: sapAuth?.owner || "local",
+    serviceName,
+    entitySetName,
+  });
 
-  const raw = await fetchFromSap(
-    {
-      system,
-      service: { serviceName: "ZCR_DETAILS_SRV" },
-      relativePath,
-    },
-    sapAuth
-  );
+  const processTypeCandidates = requestedProcessType
+    ? [requestedProcessType]
+    : ["YMHF", "YMH1"];
 
-  const results = normalizeCrDetailsResponse(raw);
+  let raw = null;
+  let results = [];
+  let usedProcessType = requestedProcessType || "";
+
+  for (const candidateProcessType of processTypeCandidates) {
+    const relativePath = `/sap/opu/odata/sap/ZCR_DETAILS_SRV/ZEX_OutputSet?$filter=${encodeURIComponent(
+      `OBJECT_ID eq '${escapeODataString(cleanObjectId)}' and PROCESS_TYPE eq '${escapeODataString(candidateProcessType)}'`
+    )}`;
+
+    raw = await fetchFromSap(
+      {
+        system,
+        service: { serviceName },
+        relativePath,
+      },
+      sapAuth
+    );
+
+    results = normalizeCrDetailsResponse(raw);
+    usedProcessType = candidateProcessType;
+
+    if (results.length > 0) {
+      break;
+    }
+  }
+
+  if (results.length === 0) {
+    const relativePath = `/sap/opu/odata/sap/ZCR_DETAILS_SRV/ZEX_OutputSet?$filter=${encodeURIComponent(
+      `OBJECT_ID eq '${escapeODataString(cleanObjectId)}'`
+    )}`;
+
+    raw = await fetchFromSap(
+      {
+        system,
+        service: { serviceName },
+        relativePath,
+      },
+      sapAuth
+    );
+
+    results = normalizeCrDetailsResponse(raw);
+    if (results[0]?.PROCESS_TYPE) {
+      usedProcessType = cleanString(results[0].PROCESS_TYPE);
+    }
+  }
 
   return {
     ok: true,
@@ -660,7 +818,7 @@ export async function getSolmanChangeRequestDetailsById({
         : `No details found for CR ${cleanObjectId}.`,
     result: {
       objectId: cleanObjectId,
-      processType: cleanProcessType,
+      processType: usedProcessType,
       count: results.length,
       results,
       raw,
@@ -676,8 +834,8 @@ export async function listSolmanChangeRequestsByDateRange({
   toDate,
   triggerAll = "X",
   status = "",
-  excludeStatuses = [],
   statusMode = "",
+  excludeStatuses = [],
   createdBy = "",
   dateText = "",
   top = null,
@@ -696,14 +854,12 @@ export async function listSolmanChangeRequestsByDateRange({
     throw err;
   }
 
-  const shouldApplyExactStatusInSap = Boolean(cleanStatus && cleanStatusMode !== "pending");
-
   const built = buildCrListRelativePath({
     processType: cleanProcessType,
     triggerAll,
     fromDate,
     toDate,
-    status: shouldApplyExactStatusInSap ? cleanStatus : "",
+    status: cleanStatusMode === "pending" ? "" : cleanStatus,
     createdBy: cleanCreatedBy,
     dateText,
     top,
@@ -711,10 +867,22 @@ export async function listSolmanChangeRequestsByDateRange({
     orderBy,
   });
 
+  const serviceMapping = await resolveSolmanDataServiceMapping({ owner: sapAuth?.owner || "local", systemId: system?.systemId });
+  const serviceName = cleanString(serviceMapping?.serviceName) || "ZCR_DETAILS_SRV";
+  const entitySetName = cleanString(serviceMapping?.entitySetName) || resolveSolmanCrEntitySet();
+
+  await preflightSolmanCrMetadata({
+    system,
+    sapAuth,
+    owner: sapAuth?.owner || "local",
+    serviceName,
+    entitySetName,
+  });
+
   const raw = await fetchFromSap(
     {
       system,
-      service: { serviceName: "ZCR_DETAILS_SRV" },
+      service: { serviceName },
       relativePath: built.relativePath,
     },
     sapAuth
@@ -737,7 +905,7 @@ export async function listSolmanChangeRequestsByDateRange({
     message:
       results.length > 0
         ? `Found ${results.length} change request(s).`
-        : "No change requests found.",
+        : "No records found for the given criteria.",
     result: {
       processType: cleanProcessType,
       triggerAll: cleanString(triggerAll) || "X",

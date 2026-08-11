@@ -8,6 +8,11 @@ import {
 } from "./solman.shared.js";
 import { step } from "../stream.shared.js";
 
+function normalizeProcessTypeForLookup(value = "") {
+  const processType = String(value || "").trim().toUpperCase();
+  return processType || null;
+}
+
 export async function handleCrDetails(context) {
   const {
     sse,
@@ -23,7 +28,7 @@ export async function handleCrDetails(context) {
 
   const detailsInput = pickCrDetailsEntities(classified?.entities || {}, query);
   const objectId = detailsInput.objectId;
-  const processType = detailsInput.processType || "YMHF";
+  const processType = normalizeProcessTypeForLookup(detailsInput.processType);
 
   if (!objectId) {
     const message = "Please provide the change request number.";
@@ -76,8 +81,20 @@ export async function handleCrDetails(context) {
     })
   );
 
-  if (result?.ok === false) {
-    const message = result?.message || "Failed to fetch change request details";
+  const fallbackResult =
+    result?.ok === false && processType
+      ? await step("getSolmanChangeRequestDetailsById (no process type)", () =>
+          getSolmanChangeRequestDetailsById({
+            system,
+            sapAuth,
+            objectId,
+            processType: null,
+          })
+        )
+      : result;
+
+  if (fallbackResult?.ok === false) {
+    const message = fallbackResult?.message || "Failed to fetch change request details";
 
     await persistAssistantAndTouchSession({
       owner,
@@ -91,7 +108,7 @@ export async function handleCrDetails(context) {
         processType,
       },
       data: {
-        raw: result?.result?.raw || null,
+        raw: fallbackResult?.result?.raw || null,
       },
       responseMeta: {
         ok: false,
@@ -107,12 +124,12 @@ export async function handleCrDetails(context) {
       ok: false,
       status: "execution_failed",
       message,
-      raw: result?.result?.raw || null,
+      raw: fallbackResult?.result?.raw || null,
     });
     return sse.end();
   }
 
-  const rows = toCrDetailsArray(result);
+  const rows = toCrDetailsArray(fallbackResult);
   const item = rows[0] || null;
   const crNumber = getCrNumber(item || { OBJECT_ID: objectId });
 
@@ -180,7 +197,13 @@ export async function handleCrDetails(context) {
     sapUser: effectiveSapUser,
     reply,
     summary: `Fetched details for CR Number ${crNumber}.`,
-    data: rows,
+    data: {
+      rows,
+      systemId: effectiveSystemId,
+      sapUser: effectiveSapUser,
+      changeRequestId: objectId,
+      processType,
+    },
     suggestions: [
       `Show status of CR ${crNumber}`,
       "Create another change request",
