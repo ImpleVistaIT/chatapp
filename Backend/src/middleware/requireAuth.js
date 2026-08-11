@@ -5,11 +5,29 @@ export function requireAuth(req, res, next) {
   const authToken = extractBearerToken(req.headers.authorization);
 
   if (!authToken) {
-    return res.status(401).json({
-      ok: false,
-      error: "Authentication failed",
-      code: "AUTH_REQUIRED",
-    });
+    try {
+      const refreshPayload = validateRefreshCookie(req.cookies?.refreshToken);
+      const newAccessToken = issueAccessTokenFromClaims(refreshPayload);
+
+      req.user = {
+        id: String(refreshPayload.id),
+        claims: {
+          id: refreshPayload.id,
+          username: refreshPayload.username || refreshPayload.id,
+        },
+      };
+
+      res.setHeader("x-access-token", newAccessToken);
+      res.setHeader("x-auth-refreshed", "1");
+
+      return next();
+    } catch {
+      return res.status(401).json({
+        ok: false,
+        error: "Authentication failed",
+        code: "AUTH_REQUIRED",
+      });
+    }
   }
 
   try {

@@ -412,6 +412,16 @@ export async function resolveServiceIntent({
     logCatalogSnapshot({ owner, systemIds: [], catalog });
   }
 
+  if (!catalog.length) {
+    console.log("[SERVICE_INTENT] owner-scoped lookup returned 0; falling back to any active catalogs");
+    catalog = await SapServiceCatalog.find({ isActive: true })
+      .sort({ updatedAt: -1 })
+      .limit(cappedLimit)
+      .lean();
+
+    logCatalogSnapshot({ owner: "*", systemIds: [], catalog });
+  }
+
   console.log("[SERVICE_INTENT] catalogCount:", catalog.length);
 
   if (!catalog.length) {

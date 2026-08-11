@@ -1468,6 +1468,17 @@ export default function Chat({ onToast = null } = {}) {
         pagination: data.pagination || null,
       });
 
+      if (String(data?.responseMeta?.serviceName || "").trim() === "PENDING_INVOICE_STATUS") {
+        console.log("[PENDING_INVOICE_DEBUG] assistant placeholder inserted", {
+          sessionId: data.sessionId,
+          hasText: Boolean(data.reply),
+          hasSummary: Boolean(data.summary),
+          textLength: String(data.reply || "").length,
+          summaryLength: String(data.summary || "").length,
+          dataKeys: Object.keys(data?.data || {}),
+        });
+      }
+
       placeholderMessageIdRef.current = null;
 
       cursorRef.current = data?.cursor || null;

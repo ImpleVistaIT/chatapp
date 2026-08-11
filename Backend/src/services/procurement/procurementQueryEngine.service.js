@@ -3,6 +3,8 @@ import { resolveSapConnection } from "../sap/sapConnectionResolver.service.js";
 import { fetchFromSap } from "../sap.service.js";
 import { buildEntitySetQuery } from "../odataQueryBuilder.js";
 import { generateJson } from "../llm/ollama.client.js";
+import { getProcurementCdsRegistry, planProcurementChatQuery } from "./purchaseOrderChatbot.service.js";
+import { executePurchaseOrderFlow } from "./purchaseOrderFlow.service.js";
 
 function cleanString(value) {
   return String(value ?? "").trim();
@@ -396,11 +398,144 @@ function buildAnswer(canonicalQuery, totalCount, aggregated) {
   return `Here are the matching ${label} records.`;
 }
 
+function normalizeStatusLabel(row = {}) {
+  return String(row?.STATUS || row?.status || row?.InvoiceStatus || row?.AccountingStatus || row?.GRStatus || row?.IRStatus || row?.RelSt || row?.RelInd || row?.Status || "Unknown").trim() || "Unknown";
+}
+
+function buildDonutChart(rows = [], title = "Procurement Status Distribution") {
+  const buckets = new Map();
+  for (const row of safeArray(rows)) {
+    const label = normalizeStatusLabel(row);
+    buckets.set(label, (buckets.get(label) || 0) + 1);
+  }
+
+  const total = safeArray(rows).length;
+  if (!total || buckets.size === 0) return null;
+
+  const palette = ["#2E7D32", "#1565C0", "#EF6C00", "#6A1B9A", "#616161", "#C62828", "#00838F", "#5D4037"];
+
+  return {
+    type: "status_distribution",
+    chartType: "donut",
+    title,
+    totalRecords: total,
+    data: [...buckets.entries()].map(([status, count], index) => ({
+      status,
+      count,
+      percentage: Math.round((count / total) * 100),
+      color: palette[index % palette.length],
+    })),
+  };
+}
+
+function normalizeServiceType(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function findCatalogByServiceType(catalogs, serviceType) {
+  const target = normalizeServiceType(serviceType);
+  if (!target) return null;
+  return (Array.isArray(catalogs) ? catalogs : []).find((catalog) => normalizeServiceType(catalog?.serviceType) === target) || null;
+}
+
+function detectDocumentFlowIntent(query) {
+  const text = normalizeText(query);
+
+  if (!text) return null;
+  if (/\b(material document|material documents|material movement|goods movement|movement type|mat doc|material ledger)\b/i.test(text)) return "MATERIAL_DOCUMENT";
+  if (/\b(invoice details|invoice information|invoice document|show invoice for po|show invoice for the po|invoice for the po)\b/i.test(text)) return "INVOICE_DETAILS";
+  if (/\b(accounting document|accounting doc|fi document)\b/i.test(text)) return "ACCOUNTING_DOCUMENT";
+  if (/\b(complete flow|document flow|lifecycle|end to end)\b/i.test(text)) return "COMPLETE_DOCUMENT_FLOW";
+  return null;
+}
+
+function getDocumentFlowExecutionPlan(intent) {
+  const normalized = String(intent || "").trim().toUpperCase();
+  if (normalized === "MATERIAL_DOCUMENT") return ["ZIV_PO_DETAILS_CDS", "ZIV_MAT_LEDGERS_CDS"];
+  if (normalized === "INVOICE_DETAILS") return ["ZIV_PO_DETAILS_CDS", "ZIV_RSEG_DETAILS_CDS", "ZIV_RBKP_DETAILS_CDS"];
+  if (normalized === "ACCOUNTING_DOCUMENT") return ["ZIV_PO_DETAILS_CDS", "ZIV_RSEG_DETAILS_CDS", "ZIV_RBKP_DETAILS_CDS", "ZIV_ACDOCA_DETAILS_CDS"];
+  return ["ZIV_PO_DETAILS_CDS", "ZIV_MAT_LEDGERS_CDS", "ZIV_RSEG_DETAILS_CDS", "ZIV_RBKP_DETAILS_CDS", "ZIV_ACDOCA_DETAILS_CDS"];
+}
+
+function logDocumentFlowIntent({ query, intent, executionPlan }) {
+  console.log("[DOCUMENT_FLOW_INTENT]");
+  console.log(`User query: ${query}`);
+  console.log(`Detected intent: ${intent}`);
+  console.log(`Execution plan: ${JSON.stringify(executionPlan, null, 2)}`);
+}
+
+function extractDocumentFlowContext(query) {
+  const text = cleanString(query);
+  const poMatch = text.match(/\b\d{8,12}\b/);
+  const itemMatch = text.match(/\bitem\s*(\d{1,6})\b/i);
+  const fiscalYearMatch = text.match(/\b(19|20)\d{2}\b/);
+  const invoiceMatch = text.match(/\binvoice(?:\s+document)?\s*(?:no\.?|number|#)?\s*(\d{8,12})\b/i);
+
+  return {
+    poNumber: poMatch?.[0] || "",
+    poItem: itemMatch?.[1] || "",
+    invoiceDocNo: invoiceMatch?.[1] || "",
+    fiscalYear: fiscalYearMatch?.[0] || "",
+  };
+}
+
+export function isPurchaseOrderFlowRequest(query, canonicalQuery) {
+  const q = normalizeText(query);
+  if (!q) return false;
+
+  if (detectDocumentFlowIntent(q) === "INVOICE_DETAILS") return false;
+  if (/\b(invoice details|invoice information|invoice document|show invoice for po|show invoice for the po)\b/i.test(q)) return false;
+
+  if (
+    /\b(show|trace|get|fetch|complete|full|all)\b.*\b(detail|details|lifecycle|flow)\b/i.test(q) &&
+    /\b(po|purchase order|procurement|accounting|goods receipt|gr)\b/i.test(q)
+  ) {
+    return true;
+  }
+  if (/\b(show|trace|get|fetch)\b.*\b(accounting|goods receipt|gr|material movement)\b/i.test(q)) return true;
+  if (/\b(completed details|complete details|full details|lifecycle|trace .* accounting|show accounting details|show goods receipt for po)\b/i.test(q)) return true;
+
+  const poNumberPresent = Boolean(canonicalQuery?.docNumber || /\b\d{8,12}\b/.test(q));
+  const flowWordPresent = /\b(complete|full|lifecycle|trace|accounting|goods receipt|gr)\b/i.test(q);
+  if (/\binvoice\b/i.test(q)) return false;
+  return poNumberPresent && (flowWordPresent || /\bpo\b/.test(q));
+}
+
 async function interpretQuery({ query, catalogs }) {
+  const plan = await planProcurementChatQuery({ query, serviceCatalog: catalogs });
+  const primaryService = findCatalogByServiceType(catalogs, plan?.primary?.serviceType) || null;
+  const chain = Array.isArray(plan?.chain) ? plan.chain : [];
+
+  if (primaryService) {
+    return {
+      ...normalizeCanonicalQuery(
+        {
+          target: {
+            serviceName: primaryService.serviceName,
+            entitySet: primaryService.entitySet,
+            entityTypeName: primaryService.entityTypeName,
+            displayName: primaryService.entityTypeName || primaryService.entitySet || primaryService.serviceName,
+          },
+          metric: metricFromText(query),
+          pagination: { limit: 100, offset: 0 },
+        },
+        primaryService
+      ),
+      plan: {
+        ...plan,
+        primary: {
+          ...(plan?.primary || {}),
+          serviceType: normalizeServiceType(plan?.primary?.serviceType || primaryService.serviceType),
+        },
+        chain,
+      },
+    };
+  }
+
   const candidates = selectTopCatalogs(query, catalogs, 5);
   if (!candidates.length) return null;
   if (candidates.length === 1) {
-    return normalizeCanonicalQuery({ target: candidates[0], metric: metricFromText(query), pagination: { limit: 100, offset: 0 } }, candidates[0]);
+    return { ...normalizeCanonicalQuery({ target: candidates[0], metric: metricFromText(query), pagination: { limit: 100, offset: 0 } }, candidates[0]), plan: { ...plan, primary: { serviceType: candidates[0].serviceType || candidates[0].entitySet || "" } } };
   }
 
   const llm = await generateJson({
@@ -412,7 +547,7 @@ async function interpretQuery({ query, catalogs }) {
   const raw = llm?.ok && llm?.data ? llm.data : { target: candidates[0], metric: metricFromText(query), pagination: { limit: 100, offset: 0 } };
   const selected = candidates.find((candidate) => normalizeText(candidate.serviceName) === normalizeText(raw?.target?.serviceName) || normalizeText(candidate.entitySet) === normalizeText(raw?.target?.entitySet) || normalizeText(candidate.entityTypeName) === normalizeText(raw?.target?.entityTypeName)) || candidates[0];
 
-  return normalizeCanonicalQuery(raw, selected);
+  return { ...normalizeCanonicalQuery(raw, selected), plan: plan || null };
 }
 
 export async function executeProcurementQuery({ owner = "local", query, systemId, sapUser }) {
@@ -433,6 +568,109 @@ export async function executeProcurementQuery({ owner = "local", query, systemId
     return { ok: false, message: "I could not map the question to a known SAP entity.", canonicalQuery, result: null };
   }
 
+  const documentFlowIntent = detectDocumentFlowIntent(cleanQuery);
+  if (documentFlowIntent) {
+    const executionPlan = getDocumentFlowExecutionPlan(documentFlowIntent);
+    logDocumentFlowIntent({ query: cleanQuery, intent: documentFlowIntent, executionPlan });
+    const documentFlowContext = extractDocumentFlowContext(cleanQuery);
+    const flowResult = await executePurchaseOrderFlow({
+      req: {
+        system: connection.system,
+        sapAuth: connection.sapAuth,
+        body: {
+          purchaseOrderId: canonicalQuery.docNumber || documentFlowContext.poNumber || "",
+          poItem: canonicalQuery.docItem || documentFlowContext.poItem || "",
+          invoiceDocNo: documentFlowContext.invoiceDocNo,
+          fiscalYear: documentFlowContext.fiscalYear,
+        },
+      },
+      catalogs,
+      plan: { ...(canonicalQuery.plan || {}), documentFlowIntent },
+      query: cleanQuery,
+      logger: console,
+    });
+
+    const flowRows = flowResult?.consolidated?.rows || flowResult?.rows || {};
+    const mergedRows = Object.values(flowRows).flat();
+    const flowSummary = flowResult?.consolidated?.summary || {};
+    const flowMessage = flowResult?.message || "Purchase order flow completed.";
+    const flowChart = buildDonutChart(mergedRows, `${canonicalQuery.target.displayName || "Procurement"} Status Distribution`);
+
+    return {
+      ok: Boolean(flowResult?.ok),
+      message: flowMessage,
+      summary: flowMessage,
+      canonicalQuery: {
+        ...canonicalQuery,
+        flow: true,
+      },
+      result: {
+        count: mergedRows.length,
+        rows: mergedRows,
+        totalCount: mergedRows.length,
+        serviceName: canonicalQuery.target.serviceName,
+        entitySet: canonicalQuery.target.entitySet,
+        entityTypeName: canonicalQuery.target.entityTypeName,
+        target: canonicalQuery.target,
+        flow: flowResult,
+        flowSummary,
+        chart: flowChart,
+        chartData: flowChart,
+        viewType: "procurement_flow",
+        tableRows: mergedRows,
+        plan: canonicalQuery.plan || null,
+        registry: getProcurementCdsRegistry(),
+      },
+    };
+  }
+
+  if (isPurchaseOrderFlowRequest(cleanQuery, canonicalQuery)) {
+    const flowResult = await executePurchaseOrderFlow({
+      req: {
+        system: connection.system,
+        sapAuth: connection.sapAuth,
+        body: { purchaseOrderId: canonicalQuery.docNumber || cleanQuery.match(/\b\d{8,12}\b/)?.[0] || "" },
+      },
+      catalogs,
+      plan: canonicalQuery.plan || {},
+      query: cleanQuery,
+      logger: console,
+    });
+
+    const flowRows = flowResult?.consolidated?.rows || flowResult?.rows || {};
+    const mergedRows = Object.values(flowRows).flat();
+    const flowSummary = flowResult?.consolidated?.summary || {};
+    const flowMessage = flowResult?.message || "Purchase order flow completed.";
+    const flowChart = buildDonutChart(mergedRows, `${canonicalQuery.target.displayName || "Procurement"} Status Distribution`);
+
+    return {
+      ok: Boolean(flowResult?.ok),
+      message: flowMessage,
+      summary: flowMessage,
+      canonicalQuery: {
+        ...canonicalQuery,
+        flow: true,
+      },
+      result: {
+        count: mergedRows.length,
+        rows: mergedRows,
+        totalCount: mergedRows.length,
+        serviceName: canonicalQuery.target.serviceName,
+        entitySet: canonicalQuery.target.entitySet,
+        entityTypeName: canonicalQuery.target.entityTypeName,
+        target: canonicalQuery.target,
+        flow: flowResult,
+        flowSummary,
+        chart: flowChart,
+        chartData: flowChart,
+        viewType: "procurement_flow",
+        tableRows: mergedRows,
+        plan: canonicalQuery.plan || null,
+        registry: getProcurementCdsRegistry(),
+      },
+    };
+  }
+
   const target = catalogs.find((catalog) => normalizeText(catalog.serviceName) === normalizeText(canonicalQuery.target.serviceName) || normalizeText(catalog.entitySet) === normalizeText(canonicalQuery.target.entitySet) || normalizeText(catalog.entityTypeName) === normalizeText(canonicalQuery.target.entityTypeName)) || catalogs[0];
 
   const isCountOnly = canonicalQuery.metric === "count" && canonicalQuery.groupBy.length === 0;
@@ -445,10 +683,12 @@ export async function executeProcurementQuery({ owner = "local", query, systemId
     ? { rows: [], value: fetched.totalCount }
     : aggregateRows(fetched.rows, effectiveCanonicalQuery);
   const message = buildAnswer(effectiveCanonicalQuery, fetched.totalCount ?? aggregated.value, aggregated);
+  const chart = buildDonutChart(fetched.rows, `${effectiveCanonicalQuery.target.displayName || "Procurement"} Status Distribution`);
 
   return {
     ok: true,
     message,
+    summary: message,
     canonicalQuery: effectiveCanonicalQuery,
     result: {
       count: aggregated.value,
@@ -466,6 +706,12 @@ export async function executeProcurementQuery({ owner = "local", query, systemId
       filters: effectiveCanonicalQuery.filters,
       sortBy: effectiveCanonicalQuery.sortBy,
       pagination: effectiveCanonicalQuery.pagination,
+      plan: canonicalQuery.plan || null,
+      registry: getProcurementCdsRegistry(),
+      chart,
+      chartData: chart,
+      viewType: "procurement_analytics",
+      tableRows: aggregated.rows,
     },
   };
 }
@@ -476,6 +722,8 @@ export {
   buildCountODataQuery,
   compactCatalog,
   compactField,
+  detectDocumentFlowIntent,
+  getDocumentFlowExecutionPlan,
   normalizeCountCanonicalQuery,
   normalizeCanonicalQuery,
   normalizeFilter,

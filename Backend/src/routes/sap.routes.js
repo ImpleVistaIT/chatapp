@@ -7,8 +7,8 @@ import { SapConnection } from "../models/SapConnection.model.js";
 import { ingestSapCatalog } from "../controllers/sap.catalog.controller.js";
 
 import { encryptString, decryptString } from "../utils/crypto.js";
-import { getAllowedFieldsWithLabels } from "../services/allowlist.service.js";
 import { fetchFromSap } from "../services/sap.service.js";
+import { testSapCredentials } from "../services/sapAuth.service.js";
 import { loginToSolman } from "../services/systems/solman/login.service.js";
 import { buildSapLoginRequest } from "../config/sap.config.js";
 
@@ -140,6 +140,38 @@ function buildValidationWarning(err, fallback = "Validation failed") {
   return {
     validated: false,
     warning: sanitizeErrorMessage(err, fallback),
+  };
+}
+
+function mapSapErrorResponse(err, fallbackError = "SAP validation failed") {
+  const status = Number(err?.status || err?.response?.status || 500);
+  const mappedStatus = Number.isFinite(status) && status >= 400 ? status : 500;
+  const error =
+    mappedStatus === 401 ? "Invalid SAP username or password." :
+    mappedStatus === 403 ? "SAP user is not authorized." :
+    mappedStatus === 500 ? "SAP OData service encountered an internal runtime error." :
+    mappedStatus === 503 ? "SAP system is temporarily unavailable." :
+    fallbackError;
+
+  return {
+    status: mappedStatus,
+    body: {
+      ok: false,
+      type:
+        err?.type ||
+        (mappedStatus === 401 ? "AUTHENTICATION_FAILED" :
+          mappedStatus === 403 ? "AUTHORIZATION_FAILED" :
+          mappedStatus === 404 ? "SERVICE_NOT_FOUND" :
+          mappedStatus === 408 ? "REQUEST_TIMEOUT" :
+          mappedStatus === 503 ? "SAP_UNAVAILABLE" :
+          mappedStatus === 504 ? "SAP_TIMEOUT" :
+          mappedStatus === 500 ? "SAP_RUNTIME_ERROR" :
+          "SAP_ERROR"),
+      status: mappedStatus,
+      sapCode: err?.sapCode || null,
+      sapMessage: err?.sapMessage || null,
+      error,
+    },
   };
 }
 
@@ -768,19 +800,28 @@ sapRoutes.post("/credentials", async (req, res, next) => {
           });
         }
 
-        for (const m of maps) {
-          try {
-            await getAllowedFieldsWithLabels({
-              system,
-              service: m,
-              entityTypeName: m.entityTypeName,
-              authOverride,
-              validateAuth: true,
-            });
-          } catch (err) {
-            const msg = String(err?.message || err);
-            return res.status(401).json({ ok: false, error: msg });
-          }
+        const authService = maps.find((m) => String(m?.serviceType || "").trim().toUpperCase() === "PO") || maps[0];
+
+        try {
+          await testSapCredentials({
+            system,
+            service: authService,
+            username: sapUser,
+            password: sapPassword,
+          });
+        } catch (err) {
+          const mapped = mapSapErrorResponse(err, "SAP credential validation failed");
+          console.error("[POST /sap/credentials] SAP login failed", {
+            ts: new Date().toISOString(),
+            status: mapped.status,
+            sapCode: mapped.body.sapCode,
+            sapMessage: mapped.body.sapMessage,
+            requestUrl: err?.requestUrl || null,
+            systemId,
+            sapUser,
+            stack: err?.stack || null,
+          });
+          return res.status(mapped.status).json(mapped.body);
         }
 
         validationInfo = { validated: true };
@@ -988,18 +1029,27 @@ sapRoutes.post("/connect", async (req, res, next) => {
         }
 
         try {
-          await getAllowedFieldsWithLabels({
+          await testSapCredentials({
             system: sys,
             service: svc,
-            entityTypeName: svc.entityTypeName,
-            authOverride: { username: cred.sapUser, password: plainPassword },
-            validateAuth: true,
+            username: cred.sapUser,
+            password: plainPassword,
           });
 
           validationInfo = { validated: true };
         } catch (e) {
-          const msg = String(e?.message || e);
-          return res.status(401).json({ ok: false, error: msg });
+          const mapped = mapSapErrorResponse(e, "SAP connection validation failed");
+          console.error("[POST /sap/connect] SAP validation failed", {
+            ts: new Date().toISOString(),
+            status: mapped.status,
+            sapCode: mapped.body.sapCode,
+            sapMessage: mapped.body.sapMessage,
+            requestUrl: e?.requestUrl || null,
+            systemId,
+            sapUser: cred.sapUser,
+            stack: e?.stack || null,
+          });
+          return res.status(mapped.status).json(mapped.body);
         }
       }
     }

@@ -1052,14 +1052,32 @@ export default function MessageBubble({
   const isSolmanListResponse = Boolean(
     data?.viewType !== "transport_list_table" &&
       data?.viewType !== "transport_dependency_table" &&
-      (data?.viewType === "solman_cr_list" || Array.isArray(data?.rows)) &&
+      data?.viewType === "solman_cr_list" &&
       Array.isArray(data?.rows)
   );
   const isSolmanCollectionResponse = isSolmanStatusResponse || isSolmanListResponse;
   const isSolmanCreateCrSuccess = data?.viewType === "solman_create_cr_success";
   const safeSummary = String(summary || "").trim();
+  const safeText = String(text || "").trim();
+  const suppressDuplicateSummary =
+    data?.viewType === "pending_invoice_status" && safeSummary && safeSummary === safeText;
   const safeSuggestions = Array.isArray(suggestions) ? suggestions : [];
+  const isPendingInvoiceResponse = data?.viewType === "pending_invoice_status";
   const [isSmallScreen, setIsSmallScreen] = useState(false);
+
+  useEffect(() => {
+    if (!isPendingInvoiceResponse) return;
+
+    console.log("[PENDING_INVOICE_DEBUG] MessageBubble render", {
+      viewType: data?.viewType,
+      hasText: Boolean(String(text || "").trim()),
+      hasSummary: Boolean(safeSummary),
+      textLength: String(text || "").length,
+      summaryLength: String(summary || "").length,
+      textPreview: String(text || "").slice(0, 120),
+      summaryPreview: String(summary || "").slice(0, 120),
+    });
+  }, [data?.viewType, safeSummary, summary, text, isPendingInvoiceResponse]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 640px)");
@@ -2134,7 +2152,7 @@ export default function MessageBubble({
       <Avatar role={role} showAvatar={showAvatar} />
 
       <div className="max-w-[95%] sm:max-w-full min-w-0 overflow-hidden space-y-2">
-        {summaryText && (
+        {summaryText && !suppressDuplicateSummary && (
           <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-900">
             {summaryText}
           </div>
